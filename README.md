@@ -9,7 +9,6 @@ Aplicativo mobile-first para descoberta social por localizacao, com privacidade 
 - Motion
 - Supabase Auth por e-mail + Postgres + Realtime
 - Capacitor Android
-- Google Maps via `@vis.gl/react-google-maps`
 - Lucide React
 
 ## Configuracao
