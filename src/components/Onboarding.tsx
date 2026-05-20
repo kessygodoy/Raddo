@@ -1,0 +1,207 @@
+import { useState } from 'react';
+import { Camera, MapPin, Shield, Sparkles } from 'lucide-react';
+import { genderOptions, sexualityOptions, formatRadius } from '../profileOptions';
+import { isDemoMode } from '../demoData';
+import { useI18n } from '../i18n';
+import { supabase } from '../supabase';
+import type { GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
+
+type Props = {
+  profile: UserProfile;
+  onDone: () => void;
+};
+
+export default function Onboarding({ profile, onDone }: Props) {
+  const { t } = useI18n();
+  const [displayName, setDisplayName] = useState(profile.displayName);
+  const [bio, setBio] = useState(profile.bio);
+  const [gender, setGender] = useState<GenderIdentity>(profile.gender);
+  const [sexualities, setSexualities] = useState<Sexuality[]>(profile.sexualities);
+  const [lookingFor, setLookingFor] = useState<GenderIdentity[]>(profile.lookingFor.length ? profile.lookingFor : ['woman']);
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('nearby');
+  const [visibilityRadius, setVisibilityRadius] = useState(profile.visibilityRadius || 30);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  function toggleValue<T extends string>(values: T[], value: T) {
+    return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+  }
+
+  async function finish() {
+    setSaving(true);
+    setError('');
+
+    if (!displayName.trim()) {
+      setError(t('chooseProfileName'));
+      setSaving(false);
+      return;
+    }
+
+    if (lookingFor.length === 0) {
+      setError(t('chooseInterest'));
+      setSaving(false);
+      return;
+    }
+
+    if (!isDemoMode) {
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          display_name: displayName.trim(),
+          bio: bio.trim(),
+          gender,
+          sexualities,
+          looking_for: lookingFor,
+          privacy_mode: privacyMode,
+          visibility_radius: visibilityRadius,
+          last_seen: new Date().toISOString(),
+        })
+        .eq('id', profile.uid);
+
+      if (updateError) {
+        setError(updateError.message);
+        setSaving(false);
+        return;
+      }
+    }
+
+    window.localStorage.setItem(`raddo-onboarding:${profile.uid}`, 'done');
+    setSaving(false);
+    onDone();
+  }
+
+  return (
+    <main className="app-shell theme-dark min-h-dvh overflow-auto p-4 text-white">
+      <section className="mx-auto grid min-h-[calc(100dvh-2rem)] max-w-2xl content-center gap-4">
+        <div className="rounded-lg border border-white/10 bg-white/8 p-5">
+          <div className="flex items-center gap-3">
+            <div className="grid h-12 w-12 place-items-center rounded-lg bg-teal-300 text-slate-950">
+              <Sparkles className="h-6 w-6" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold">{t('onboardingTitle')}</h1>
+              <p className="text-sm text-slate-300">{t('onboardingSubtitle')}</p>
+            </div>
+          </div>
+        </div>
+
+        <section className="grid gap-3 rounded-lg border border-white/10 bg-white/8 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Camera className="h-4 w-4 text-teal-300" />
+            {t('profileTab')}
+          </div>
+          <input
+            className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
+            onChange={(event) => setDisplayName(event.target.value)}
+            placeholder={t('name')}
+            value={displayName}
+          />
+          <textarea
+            className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 outline-none"
+            onChange={(event) => setBio(event.target.value)}
+            placeholder={t('shortBioPlaceholder')}
+            value={bio}
+          />
+        </section>
+
+        <section className="grid gap-3 rounded-lg border border-white/10 bg-white/8 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <MapPin className="h-4 w-4 text-teal-300" />
+            {t('genderInterests')}
+          </div>
+          <select
+            className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
+            onChange={(event) => setGender(event.target.value as GenderIdentity)}
+            value={gender}
+          >
+            {genderOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {t(option.value)}
+              </option>
+            ))}
+          </select>
+          <OptionButtons
+            label={t('mySexuality')}
+            selected={sexualities}
+            values={sexualityOptions}
+            onToggle={(value) => setSexualities((current) => toggleValue(current, value))}
+          />
+          <OptionButtons
+            label={t('interestedIn')}
+            selected={lookingFor}
+            values={genderOptions}
+            onToggle={(value) => setLookingFor((current) => toggleValue(current, value))}
+          />
+        </section>
+
+        <section className="grid gap-3 rounded-lg border border-white/10 bg-white/8 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Shield className="h-4 w-4 text-teal-300" />
+            {t('privacyTitle')}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {(['exact', 'nearby'] as PrivacyMode[]).map((mode) => (
+              <button
+                className={`h-11 rounded-lg text-sm ${
+                  privacyMode === mode ? 'bg-teal-300 text-slate-950' : 'border border-white/10 bg-slate-950/60 text-slate-200'
+                }`}
+                key={mode}
+                onClick={() => setPrivacyMode(mode)}
+                type="button"
+              >
+                {mode === 'exact' ? t('exactLocation') : t('nearby')}
+              </button>
+            ))}
+          </div>
+          <label className="grid gap-2 text-sm">
+            {t('radius', { radius: formatRadius(visibilityRadius) })}
+            <input
+              max={500}
+              min={0.02}
+              onChange={(event) => setVisibilityRadius(Number(event.target.value))}
+              step={0.01}
+              type="range"
+              value={visibilityRadius}
+            />
+          </label>
+        </section>
+
+        {error && <p className="rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{error}</p>}
+        <button className="h-12 rounded-lg bg-teal-300 font-semibold text-slate-950" onClick={finish} type="button">
+          {saving ? t('saving') : t('enterRaddo')}
+        </button>
+      </section>
+    </main>
+  );
+}
+
+type OptionButtonsProps<T extends string> = {
+  label: string;
+  values: Array<{ value: T; label: string }>;
+  selected: T[];
+  onToggle: (value: T) => void;
+};
+
+function OptionButtons<T extends string>({ label, values, selected, onToggle }: OptionButtonsProps<T>) {
+  const { t } = useI18n();
+
+  return (
+    <div className="grid gap-2">
+      <span className="text-sm text-slate-300">{label}</span>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {values.map((option) => (
+          <button
+            className={`min-h-10 rounded-lg px-2 text-sm ${
+              selected.includes(option.value) ? 'bg-teal-300 text-slate-950' : 'border border-white/10 bg-slate-950/60 text-slate-200'
+            }`}
+            key={option.value}
+            onClick={() => onToggle(option.value)}
+            type="button"
+          >
+            {t(option.value)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

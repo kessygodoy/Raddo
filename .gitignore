@@ -1,0 +1,39 @@
+node_modules
+dist
+.env
+.env.local
+.DS_Store
+*.log
+*.tsbuildinfo
+*.config.js
+*.config.d.ts
+android/.gradle
+android/keystore.properties
+android/*.jks
+android/app/build
+android/build
+# Gradle
+.gradle/
+android/.gradle/
+android/.gradle-user-home/
+
+# Build
+build/
+android/app/build/
+
+# Node
+node_modules/
+
+# Expo/React Native
+.expo/
+dist/
+
+# Local browser profiles generated during screenshot/store asset work
+store-assets/edge-profile-*/
+
+# Local/generated build metadata
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+capacitor.config.js
+capacitor.config.d.ts

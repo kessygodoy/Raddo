@@ -1,0 +1,22 @@
+Descrição curta:
+Conheça pessoas por perto, converse com matches e participe de chats locais no mapa.
+
+Descrição completa:
+Raddo é um app social para descobrir pessoas próximas, conversar com matches e participar de chats locais criados no mapa.
+
+Com o Raddo, você pode explorar perfis perto de você, curtir quem combina com seus interesses e iniciar conversas quando o match acontecer. O app também permite criar ou entrar em chats em pontos específicos do mapa, como eventos, cafés, festas, parques ou lugares onde outras pessoas estejam se reunindo.
+
+Você controla como quer aparecer: pode mostrar sua localização exata ou apenas indicar que está por perto. Também é possível ajustar o raio de alcance, escolher gênero, interesses, preferências e personalizar o visual do app com temas claro, escuro ou colorido.
+
+Principais recursos:
+- Descoberta de pessoas próximas por cards.
+- Curtidas, recusas e matches.
+- Chat em tempo real com seus matches.
+- Mapa com pessoas e chats locais.
+- Chats locais com capa, título e lista de participantes.
+- Perfil com foto, carrossel de fotos, bio, gênero e interesses.
+- Controle de privacidade para aparecer por perto ou com localização exata.
+- Temas claro, escuro e colorido.
+- Recursos Premium preparados para assinatura pela Google Play.
+
+Raddo foi criado para quem quer conhecer pessoas novas com mais contexto, mais controle e uma experiência simples de usar.
