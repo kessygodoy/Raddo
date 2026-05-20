@@ -9,6 +9,7 @@ Aplicativo mobile-first para descoberta social por localizacao, com privacidade 
 - Motion
 - Supabase Auth por e-mail + Postgres + Realtime
 - Capacitor Android
+- Leaflet com tiles abertos da Carto/OpenStreetMap
 - Lucide React
 
 ## Configuracao
@@ -32,7 +33,6 @@ supabase.sql
 ```bash
 VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
-VITE_GOOGLE_MAPS_API_KEY=
 ```
 
 5. No Supabase, configure Auth:
