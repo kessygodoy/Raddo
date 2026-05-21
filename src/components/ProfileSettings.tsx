@@ -1,15 +1,16 @@
 import { ChangeEvent, useEffect, useRef, useState } from 'react';
-import { Bell, Camera, Eye, FileText, MapPin, Palette, Shield, SlidersHorizontal, Upload, UserX } from 'lucide-react';
+import { Bell, Camera, Eye, FileText, Heart, MapPin, Palette, RotateCcw, Shield, SlidersHorizontal, Upload, UserX, X } from 'lucide-react';
 import { genderOptions, sexualityOptions, formatRadius } from '../profileOptions';
 import { isDemoMode } from '../demoData';
 import { deleteMyAccount } from '../accountDeletion';
 import { languageOptions, useI18n } from '../i18n';
 import { supabase } from '../supabase';
-import type { AppLanguage, AppTheme, GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
-import { unblockProfile, useBlockedProfiles } from '../hooks/useMatches';
+import type { AppLanguage, AppTheme, GenderIdentity, Sexuality, UserProfile } from '../types';
+import { unblockProfile, undoProfileInteraction, useBlockedProfiles, useProfileInteractions } from '../hooks/useMatches';
 import PremiumScreen from './PremiumScreen';
 import ProfilePreview from './ProfilePreview';
 import { getNotificationPermission, requestNativeNotifications, showAppNotification } from '../nativeNotifications';
+import { registerDeviceForPush } from '../pushNotifications';
 
 type Props = {
   profile: UserProfile;
@@ -25,11 +26,12 @@ const themeOptions: Array<{ value: AppTheme; label: string }> = [
   { value: 'pride', label: 'colorfulTheme' },
 ];
 
-type SettingsSection = 'profile' | 'gender' | 'theme' | 'premium' | 'safety';
+type SettingsSection = 'profile' | 'gender' | 'interactions' | 'theme' | 'premium' | 'safety';
 
 const settingsSections: Array<{ value: SettingsSection; label: string }> = [
   { value: 'profile', label: 'profileTab' },
   { value: 'gender', label: 'preferencesTab' },
+  { value: 'interactions', label: 'Interações' },
   { value: 'theme', label: 'themeTab' },
   { value: 'premium', label: 'premiumTab' },
   { value: 'safety', label: 'safetyTab' },
@@ -47,9 +49,11 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     typeof Notification === 'undefined' ? 'indisponível' : Notification.permission,
   );
   const [safetyMessage, setSafetyMessage] = useState('');
+  const [interactionsMessage, setInteractionsMessage] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
   const firstDraftRender = useRef(true);
   const blockedProfiles = useBlockedProfiles(profile.uid);
+  const interactions = useProfileInteractions(profile.uid);
 
   useEffect(() => {
     getNotificationPermission().then(setNotificationStatus);
@@ -170,6 +174,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const permission = await requestNativeNotifications();
     setNotificationStatus(permission);
     if (permission === 'granted') {
+      await registerDeviceForPush(profile.uid);
       await showAppNotification('Raddo', t('notificationEnabledBody'));
     }
   }
@@ -180,6 +185,15 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       setSafetyMessage(t('unblocked'));
     } catch (error) {
       setSafetyMessage(error instanceof Error ? error.message : t('unblockError'));
+    }
+  }
+
+  async function handleUndoInteraction(uid: string) {
+    try {
+      await undoProfileInteraction(profile.uid, uid);
+      setInteractionsMessage('Interação desfeita. Essa pessoa pode aparecer novamente.');
+    } catch (error) {
+      setInteractionsMessage(error instanceof Error ? error.message : 'Não consegui desfazer essa interação.');
     }
   }
 
@@ -244,7 +258,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       </aside>
 
       <div className="space-y-4">
-        <nav className="grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-white/8 p-2 sm:grid-cols-5">
+        <nav className="grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-white/8 p-2 sm:grid-cols-3">
           {settingsSections.map((section) => (
             <button
               className={`h-10 rounded-lg text-sm font-semibold ${
@@ -380,31 +394,6 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-                <Shield className="h-4 w-4 text-teal-300" />
-                {t('privacyTitle')}
-              </div>
-              <div className="grid gap-4">
-                <div className="grid grid-cols-2 gap-2">
-                  {(['exact', 'nearby'] as PrivacyMode[]).map((mode) => (
-                    <button
-                      className={`h-11 rounded-lg text-sm ${
-                        draft.privacyMode === mode
-                          ? 'bg-teal-300 text-slate-950'
-                          : 'border border-white/10 bg-slate-950/60 text-slate-200'
-                      }`}
-                      key={mode}
-                      onClick={() => updateDraft('privacyMode', mode)}
-                      type="button"
-                    >
-                      {mode === 'exact' ? t('exactLocation') : t('nearby')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <MapPin className="h-4 w-4 text-teal-300" />
                 {t('reachRadius')}
               </div>
@@ -498,10 +487,89 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           </div>
         )}
 
+        {activeSection === 'interactions' && (
+          <div className="space-y-4">
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <RotateCcw className="h-4 w-4 text-teal-300" />
+                Interações
+              </div>
+              <p className="mb-4 text-sm text-slate-300">
+                Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem nos Cards. Desfaça para liberar o perfil outra vez.
+              </p>
+              {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma interação registrada ainda.</p>}
+              <div className="grid gap-2">
+                {interactions.map((interaction) => (
+                  <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
+                    <img alt="" className="h-12 w-12 rounded-lg object-cover" src={interaction.profile.photoURL} />
+                    <div className="min-w-0 flex-1">
+                      <h3 className="truncate text-sm font-semibold">{interaction.profile.displayName}</h3>
+                      <p className="mt-1 flex items-center gap-1 text-xs text-slate-300">
+                        {interaction.type === 'like' ? (
+                          <>
+                            <Heart className="h-3.5 w-3.5 text-[#ff3f68]" />
+                            Curtido
+                          </>
+                        ) : (
+                          <>
+                            <X className="h-3.5 w-3.5 text-rose-200" />
+                            Recusado
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
+                      onClick={() => handleUndoInteraction(interaction.profile.uid)}
+                      type="button"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Desfazer
+                    </button>
+                  </article>
+                ))}
+              </div>
+              {interactionsMessage && <p className="mt-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{interactionsMessage}</p>}
+            </section>
+          </div>
+        )}
+
         {activeSection === 'premium' && <PremiumScreen profile={draft} />}
 
         {activeSection === 'safety' && (
           <div className="space-y-4">
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Shield className="h-4 w-4 text-teal-300" />
+                {t('mapVisibilityTitle')}
+              </div>
+              <p className="text-sm text-slate-300">{t('mapVisibilityHelp')}</p>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className={`h-11 rounded-lg text-sm font-semibold ${
+                    draft.privacyMode === 'exact'
+                      ? 'bg-teal-300 text-slate-950'
+                      : 'border border-white/10 bg-slate-950/60 text-slate-200'
+                  }`}
+                  onClick={() => updateDraft('privacyMode', 'exact')}
+                  type="button"
+                >
+                  {t('yes')}
+                </button>
+                <button
+                  className={`h-11 rounded-lg text-sm font-semibold ${
+                    draft.privacyMode !== 'exact'
+                      ? 'bg-teal-300 text-slate-950'
+                      : 'border border-white/10 bg-slate-950/60 text-slate-200'
+                  }`}
+                  onClick={() => updateDraft('privacyMode', 'nearby')}
+                  type="button"
+                >
+                  {t('no')}
+                </button>
+              </div>
+            </section>
+
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <Bell className="h-4 w-4 text-teal-300" />
@@ -570,8 +638,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               </div>
               <div className="grid gap-3 text-sm text-slate-300">
                 <p>
-                  O Raddo usa localização aproximada para mostrar pessoas e chats próximos. No modo Por perto,
-                  outros usuários não veem sua posição exata.
+                  O Raddo usa sua localização para calcular distâncias e chats próximos. Sua foto só aparece no
+                  mapa se você ativar a opção "Me mostrar no mapa".
                 </p>
                 <p>
                   Denúncias e bloqueios devem ser usados contra assédio, perfis falsos, spam ou conteúdo inadequado.

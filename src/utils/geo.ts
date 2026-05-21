@@ -47,8 +47,8 @@ export function offsetLocation(origin: LatLng, radiusKm: number, seed: string) {
 
 export function visibleLocation(profile: UserProfile) {
   if (!profile.location) return null;
-  if (profile.privacyMode === 'exact') return profile.location;
-  return offsetLocation(profile.location, profile.visibilityRadius, profile.uid);
+  if (profile.privacyMode !== 'exact') return null;
+  return profile.location;
 }
 
 export function isWithinRadius(me: UserProfile, other: UserProfile) {

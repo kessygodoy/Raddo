@@ -452,6 +452,32 @@ input[type="range"] {
   color: #2dd4bf;
 }
 
+.map-profile-photo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 999px;
+  background: #0f172a;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+}
+
+.map-profile-photo::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border: 1px solid rgba(45, 212, 191, 0.45);
+  border-radius: inherit;
+}
+
+.map-profile-photo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .map-pin-event {
   background: #d946ef;
   color: #d946ef;

@@ -3,7 +3,7 @@ import { supabase } from '../supabase';
 import { demoProfiles, isDemoMode } from '../demoData';
 import type { GenderFilter, GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
 import { isWithinRadius } from '../utils/geo';
-import { useBlockedProfileIds } from './useMatches';
+import { useBlockedProfileIds, useSeenProfileIds } from './useMatches';
 
 type ProfileRow = {
   id: string;
@@ -65,6 +65,7 @@ function hasAnyOverlap(a: string[], b: string[]) {
 export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFilter) {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const blockedIds = useBlockedProfileIds(me?.uid);
+  const seenIds = useSeenProfileIds(me?.uid);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -100,10 +101,11 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
     return profiles
       .filter((profile) => isWithinRadius(me, profile))
       .filter((profile) => !blockedIds.has(profile.uid))
+      .filter((profile) => !seenIds.has(profile.uid))
       .filter((profile) => genderFilter.length === 0 || genderFilter.includes(profile.gender))
       .filter((profile) => profile.lookingFor.includes(me.gender))
       .filter((profile) => me.lookingFor.includes(profile.gender))
       .filter((profile) => hasAnyOverlap(profile.interestedSexualities, me.sexualities))
       .filter((profile) => hasAnyOverlap(me.interestedSexualities, profile.sexualities));
-  }, [blockedIds, genderFilter, me, profiles]);
+  }, [blockedIds, genderFilter, me, profiles, seenIds]);
 }

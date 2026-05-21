@@ -19,6 +19,7 @@
     "@capacitor/core": "^7.4.3",
     "@capacitor/ios": "^7.6.5",
     "@capacitor/local-notifications": "^7.0.6",
+    "@capacitor/push-notifications": "^7.0.6",
     "@supabase/supabase-js": "^2.105.3",
     "@types/leaflet": "^1.9.21",
     "leaflet": "^1.9.4",

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Bell, LogOut, Map, MessageCircle, Radar, Sparkles, UserRound } from 'lucide-react';
+import { Bell, LogOut, Map as MapIcon, MessageCircle, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
 import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
-import { useMatches } from './hooks/useMatches';
+import { useMatchProfiles, useMatches } from './hooks/useMatches';
+import { useJoinedMapEvents } from './hooks/useMapEvents';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
 import type { AppLanguage, AppTheme, AppView } from './types';
 import AuthOverlay from './components/AuthOverlay';
@@ -15,7 +16,8 @@ import ProfileSettings from './components/ProfileSettings';
 import RadarMap from './components/RadarMap';
 import Onboarding from './components/Onboarding';
 import NotificationsPanel from './components/NotificationsPanel';
-import { getNotificationPermission, requestNativeNotifications, showAppNotification } from './nativeNotifications';
+import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
+import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
 
 const navItems = [
   { id: 'radar', labelKey: 'navRadar', icon: Radar },
@@ -41,6 +43,8 @@ export default function App() {
   const { user, profile, loading, profileLoading, profileError } = useAuthProfile();
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
+  const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
+  const joinedMapEvents = useJoinedMapEvents(profile?.uid);
 
   function setLanguage(nextLanguage: AppLanguage) {
     setLanguageState(nextLanguage);
@@ -84,6 +88,16 @@ export default function App() {
     });
   }, [profile]);
 
+  useEffect(() => {
+    if (!profile) return;
+
+    getNotificationPermission().then((permission) => {
+      if (permission === 'granted') {
+        void registerDeviceForPush(profile.uid);
+      }
+    });
+  }, [profile]);
+
   async function requestNotifications() {
     if (!profile) return;
 
@@ -91,21 +105,10 @@ export default function App() {
     setShowNotificationPrompt(false);
     const permission = await requestNativeNotifications();
     if (permission === 'granted') {
+      await registerDeviceForPush(profile.uid);
       await showAppNotification('Raddo', t('notificationEnabledBody'));
     }
   }
-
-  useEffect(() => {
-    if (!profile || matches.length === 0) return;
-
-    const countKey = `raddo-last-match-count:${profile.uid}`;
-    const lastCount = Number(window.localStorage.getItem(countKey) ?? matches.length);
-    window.localStorage.setItem(countKey, String(matches.length));
-
-    if (matches.length > lastCount) {
-      showAppNotification(t('notificationNewMatch'), 'Você tem um novo match no Raddo.');
-    }
-  }, [matches.length, profile, t]);
 
   function dismissNotifications() {
     if (profile) window.localStorage.setItem(`raddo-notification-prompt:${profile.uid}`, 'done');
@@ -115,6 +118,123 @@ export default function App() {
   function notificationIdForMatch(match: (typeof matches)[number]) {
     return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
   }
+
+  function notificationTextForMatch(match: (typeof matches)[number]) {
+    const otherUid = profile ? match.users.find((uid) => uid !== profile.uid) ?? match.users[0] : match.users[0];
+    const otherName = matchProfilesByUid[otherUid]?.displayName ?? 'alguém';
+    const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+
+    return {
+      body: hasMessage ? `${otherName}: ${match.lastMessage}` : t('notificationNewMatchText', { name: otherName }),
+      title: hasMessage ? t('notificationNewMessage') : t('notificationNewMatch'),
+    };
+  }
+
+  useEffect(() => {
+    if (!profile || matches.length === 0) return;
+
+    const storageKey = `raddo-device-notifications:${profile.uid}`;
+    const saved = window.localStorage.getItem(storageKey);
+    const currentIds = matches.map(notificationIdForMatch);
+
+    if (!saved) {
+      window.localStorage.setItem(storageKey, JSON.stringify(currentIds));
+      return;
+    }
+
+    const notifiedIds = new Set(JSON.parse(saved) as string[]);
+    const nextIds = new Set([...notifiedIds, ...currentIds]);
+
+    matches.forEach((match) => {
+      const notificationId = notificationIdForMatch(match);
+      if (notifiedIds.has(notificationId)) return;
+
+      const { body, title } = notificationTextForMatch(match);
+      void showAppNotification(title, body, {
+        matchId: match.id,
+        notificationId,
+        view: 'chat',
+      });
+    });
+
+    window.localStorage.setItem(storageKey, JSON.stringify([...nextIds]));
+  }, [matches, matchProfilesByUid, profile, t]);
+
+  useEffect(() => {
+    let removeListener: (() => void) | undefined;
+
+    onAppNotificationTap((data) => {
+      if (data.view === 'chat' && data.matchId) {
+        if (data.notificationId) markNotificationAsRead(data.notificationId);
+        setOpenMatchId(data.matchId);
+        setView('chat');
+      } else if (data.view === 'radar') {
+        setView('radar');
+      }
+    }).then((remove) => {
+      removeListener = remove;
+    });
+
+    return () => {
+      removeListener?.();
+    };
+  }, [profile]);
+
+  useEffect(() => {
+    let removeListener: (() => void) | undefined;
+
+    onPushNotificationTap((data) => {
+      if (data.view === 'radar') {
+        setView('radar');
+      } else if (data.view === 'chat' && data.matchId) {
+        setOpenMatchId(data.matchId);
+        setView('chat');
+      }
+    }).then((remove) => {
+      removeListener = remove;
+    });
+
+    return () => {
+      removeListener?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!profile || joinedMapEvents.length === 0) return undefined;
+
+    const eventsById = new Map(joinedMapEvents.map((event) => [event.id, event]));
+    const channel = supabase
+      .channel(`map-event-device-notifications:${profile.uid}:${joinedMapEvents.map((event) => event.id).sort().join(':')}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'map_event_messages' },
+        (payload) => {
+          const message = payload.new as {
+            id?: string;
+            event_id?: string;
+            sender_name?: string;
+            sender_uid?: string;
+            text?: string;
+          };
+          if (!message.event_id || !message.id) return;
+          if (message.sender_uid === profile.uid) return;
+
+          const mapEvent = eventsById.get(message.event_id);
+          if (!mapEvent) return;
+
+          void showAppNotification(mapEvent.title, `${message.sender_name || 'AlguÃ©m'}: ${message.text || ''}`, {
+            eventId: mapEvent.id,
+            notificationId: `map-event-message:${message.id}`,
+            view: 'radar',
+          });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [joinedMapEvents, profile]);
 
   function markNotificationAsRead(notificationId: string) {
     if (!profile) return;
@@ -182,7 +302,7 @@ export default function App() {
     content = needsOnboarding ? (
       <Onboarding profile={profile} onDone={() => setOnboardingDone(true)} />
     ) : (
-      <main className={`app-shell theme-${theme} min-h-dvh text-white`}>
+      <main className={`app-shell theme-${theme} h-dvh overflow-hidden text-white`}>
         {showNotificationPrompt && (
           <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
             <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
@@ -207,14 +327,14 @@ export default function App() {
             </section>
           </div>
         )}
-        <div className="mx-auto flex min-h-dvh w-full max-w-6xl flex-col">
+        <div className="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden">
           <header className="flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6">
             <button
               className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/8 px-3 py-2 text-left"
               onClick={() => setView('radar')}
               type="button"
             >
-              <Map className="h-5 w-5 text-teal-300" />
+              <MapIcon className="h-5 w-5 text-teal-300" />
               <span className="leading-tight">
                 <strong className="block text-sm">Raddo</strong>
                 <span className="text-xs text-slate-300">{t('nearbyCount', { count: nearbyProfiles.length })}</span>
@@ -245,7 +365,7 @@ export default function App() {
             </div>
           </header>
 
-          <section className="flex-1 px-4 pb-24 sm:px-6">
+          <section className={view === 'radar' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-auto px-4 pb-24 sm:px-6'}>
             {view === 'radar' && (
               <RadarMap
                 me={profile}
@@ -274,7 +394,7 @@ export default function App() {
             )}
           </section>
 
-          <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-[#101827]/95 px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2 backdrop-blur">
+          <nav className="fixed inset-x-0 bottom-0 z-[700] border-t border-white/10 bg-[#101827]/95 px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2 backdrop-blur">
             <div className="mx-auto grid max-w-xl grid-cols-4 gap-2">
               {navItems.map((item) => {
                 const Icon = item.icon;

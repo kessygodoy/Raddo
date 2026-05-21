@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Camera, MapPin, Shield, Sparkles } from 'lucide-react';
-import { genderOptions, sexualityOptions, formatRadius } from '../profileOptions';
+import { Camera, MapPin, Sparkles } from 'lucide-react';
+import { genderOptions, sexualityOptions } from '../profileOptions';
 import { isDemoMode } from '../demoData';
 import { useI18n } from '../i18n';
 import { supabase } from '../supabase';
-import type { GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
+import type { GenderIdentity, Sexuality, UserProfile } from '../types';
 
 type Props = {
   profile: UserProfile;
@@ -18,8 +18,7 @@ export default function Onboarding({ profile, onDone }: Props) {
   const [gender, setGender] = useState<GenderIdentity>(profile.gender);
   const [sexualities, setSexualities] = useState<Sexuality[]>(profile.sexualities);
   const [lookingFor, setLookingFor] = useState<GenderIdentity[]>(profile.lookingFor.length ? profile.lookingFor : ['woman']);
-  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>('nearby');
-  const [visibilityRadius, setVisibilityRadius] = useState(profile.visibilityRadius || 30);
+  const [visibilityRadius] = useState(profile.visibilityRadius || 30);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -52,7 +51,7 @@ export default function Onboarding({ profile, onDone }: Props) {
           gender,
           sexualities,
           looking_for: lookingFor,
-          privacy_mode: privacyMode,
+          privacy_mode: 'nearby',
           visibility_radius: visibilityRadius,
           last_seen: new Date().toISOString(),
         })
@@ -132,38 +131,6 @@ export default function Onboarding({ profile, onDone }: Props) {
             values={genderOptions}
             onToggle={(value) => setLookingFor((current) => toggleValue(current, value))}
           />
-        </section>
-
-        <section className="grid gap-3 rounded-lg border border-white/10 bg-white/8 p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Shield className="h-4 w-4 text-teal-300" />
-            {t('privacyTitle')}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            {(['exact', 'nearby'] as PrivacyMode[]).map((mode) => (
-              <button
-                className={`h-11 rounded-lg text-sm ${
-                  privacyMode === mode ? 'bg-teal-300 text-slate-950' : 'border border-white/10 bg-slate-950/60 text-slate-200'
-                }`}
-                key={mode}
-                onClick={() => setPrivacyMode(mode)}
-                type="button"
-              >
-                {mode === 'exact' ? t('exactLocation') : t('nearby')}
-              </button>
-            ))}
-          </div>
-          <label className="grid gap-2 text-sm">
-            {t('radius', { radius: formatRadius(visibilityRadius) })}
-            <input
-              max={500}
-              min={0.02}
-              onChange={(event) => setVisibilityRadius(Number(event.target.value))}
-              step={0.01}
-              type="range"
-              value={visibilityRadius}
-            />
-          </label>
         </section>
 
         {error && <p className="rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{error}</p>}

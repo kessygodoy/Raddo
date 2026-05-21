@@ -7,6 +7,7 @@ import {
   trySendLike,
   unlockLikedBy,
   unlockLikeBonus,
+  undoProfileInteraction,
   useLikedBy,
   useSeenProfileIds,
 } from '../hooks/useMatches';
@@ -137,6 +138,17 @@ export default function Discovery({ me, profiles }: Props) {
     await dislikeProfile(current);
   }
 
+  async function resetCardInteractions() {
+    setMessage('');
+    try {
+      await Promise.all([...seenIds].map((uid) => undoProfileInteraction(me.uid, uid)));
+      setSkipped(new Set());
+      setMessage('Interações desfeitas. Os perfis liberados podem aparecer novamente.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Não consegui liberar os perfis agora.');
+    }
+  }
+
   return (
     <section className="mx-auto grid max-w-md gap-4">
       {previewProfile && (
@@ -248,7 +260,7 @@ export default function Discovery({ me, profiles }: Props) {
                       </p>
                     </div>
                     <span className="shrink-0 rounded-md bg-white/15 px-2 py-1 text-xs text-slate-100">
-                      {current.privacyMode === 'exact' ? 'Localização exata' : 'Por perto'}
+                      {current.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                     </span>
                   </div>
                   {current.bio && <p className="mt-3 line-clamp-3 text-sm text-slate-200">{current.bio}</p>}
@@ -265,7 +277,21 @@ export default function Discovery({ me, profiles }: Props) {
             </motion.article>
           ) : (
             <div className="grid h-full place-items-center bg-slate-950/70 p-6 text-center text-slate-200">
-              <p>Sem novos perfis no raio atual.</p>
+              <div className="max-w-xs">
+                <p className="text-base font-semibold text-white">Sem cards disponíveis</p>
+                <p className="mt-2 text-sm text-slate-300">
+                  Você pode ter curtido ou recusado todos os perfis disponíveis nos filtros atuais.
+                </p>
+                {seenIds.size > 0 && (
+                  <button
+                    className="mt-4 h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+                    onClick={resetCardInteractions}
+                    type="button"
+                  >
+                    Liberar perfis novamente
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </AnimatePresence>

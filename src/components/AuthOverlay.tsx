@@ -3,6 +3,7 @@ import { Chrome, MapPin, Radar, ShieldCheck, Sparkles } from 'lucide-react';
 import { getAuthRedirectUrl } from '../authCallback';
 import { useI18n } from '../i18n';
 import { supabase } from '../supabase';
+import RaddoMark from './RaddoMark';
 
 export default function AuthOverlay() {
   const { t } = useI18n();
@@ -35,14 +36,7 @@ export default function AuthOverlay() {
       <div className="absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-white/8 to-transparent" />
       <section className="relative mx-auto grid min-h-[calc(100dvh-2.5rem)] w-full max-w-md content-center gap-5">
         <div className="grid justify-items-center text-center">
-          <div className="relative grid h-36 w-36 place-items-center rounded-[2.2rem] bg-[linear-gradient(145deg,#111827,#020617)] shadow-2xl shadow-black/50 ring-1 ring-white/10">
-            <div className="absolute inset-4 rounded-full bg-[radial-gradient(circle,rgba(255,31,69,0.28),transparent_62%)]" />
-            <div className="relative h-24 w-24">
-              <div className="absolute left-2 top-6 h-20 w-20 -rotate-45 rounded-full border-[18px] border-[#ff2148] border-b-transparent border-r-transparent drop-shadow-[0_0_22px_rgba(255,31,69,0.7)]" />
-              <div className="absolute left-[46px] top-[50px] h-7 w-7 rounded-full bg-[#ff2148] shadow-[0_0_24px_rgba(255,31,69,0.9)]" />
-              <div className="absolute left-[58px] top-[25px] h-2.5 w-16 -rotate-45 rounded-full bg-[linear-gradient(90deg,#ff2148,rgba(255,255,255,0.85),transparent)] shadow-[0_0_16px_rgba(255,31,69,0.7)]" />
-            </div>
-          </div>
+          <RaddoMark className="h-36 w-36 drop-shadow-[0_0_28px_rgba(255,23,68,0.35)]" showTile />
           <h1 className="mt-6 text-4xl font-semibold tracking-normal">Raddo</h1>
           <p className="mt-2 max-w-xs text-sm leading-6 text-slate-300">
             Conheça pessoas por perto, combine interesses e entre em chats locais no mapa.

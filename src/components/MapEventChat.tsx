@@ -1,10 +1,11 @@
 import { FormEvent, useMemo, useState } from 'react';
-import { Eye, LogOut, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
+import { Eye, LogOut, Megaphone, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
   deleteMapEvent,
   leaveMapEvent,
+  reportMapEvent,
   rejectMapEventRequest,
   sendMapEventMessage,
   setMapEventModerator,
@@ -39,7 +40,7 @@ function ProfileAvatar({ profile }: { profile: UserProfile }) {
 }
 
 export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
-  const messages = useMapEventMessages(event.id);
+  const messages = useMapEventMessages(event.id, me.uid);
   const participants = useMapEventParticipants(event.id, me);
   const moderators = useMapEventModerators(event.id);
   const isOwner = event.creatorUid === me.uid;
@@ -93,6 +94,18 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui sair do chat.');
+    }
+  }
+
+  async function handleReport() {
+    const confirmed = window.confirm('Denunciar este chat para revisão?');
+    if (!confirmed) return;
+
+    try {
+      await reportMapEvent(event, me.uid);
+      setError('Denúncia enviada para revisão.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui denunciar o chat.');
     }
   }
 
@@ -194,9 +207,8 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
         <header className="flex items-start justify-between gap-3 border-b border-white/10 p-4">
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold">{event.title}</h1>
-            <p className="mt-1 text-sm text-slate-300">
-              {event.description || 'Chat local do mapa'} · Criado por - {creatorName}
-            </p>
+            <p className="mt-1 text-xs font-semibold text-teal-200">Criado por {creatorName}</p>
+            <p className="mt-1 text-sm text-slate-300">{event.description || 'Chat local do mapa'}</p>
             {!event.isPermanent && (
               <p className="mt-1 text-xs text-teal-200">
                 Expira {expiresAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
@@ -204,6 +216,16 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             )}
           </div>
           <div className="flex shrink-0 gap-2">
+            {!isOwner && (
+              <button
+                aria-label="Denunciar chat"
+                className="grid h-10 w-10 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
+                onClick={handleReport}
+                type="button"
+              >
+                <Megaphone className="h-5 w-5" />
+              </button>
+            )}
             {isOwner && (
               <button
                 aria-label="Excluir chat"

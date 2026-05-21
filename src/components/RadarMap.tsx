@@ -2,14 +2,16 @@ import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useState } from 'reac
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Heart, ImagePlus, LocateFixed, MessageCircle, Plus, Users, X } from 'lucide-react';
+import { Heart, ImagePlus, LocateFixed, Megaphone, MessageCircle, Plus, Users, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
   deleteMapEvent,
   hashMapEventPassword,
   joinMapEvent,
+  reportMapEvent,
   requestMapEventEntry,
+  useMapEventCreatorNames,
   useMapEventParticipantCounts,
   useMapEvents as useLocalMapEvents,
 } from '../hooks/useMapEvents';
@@ -123,6 +125,23 @@ function eventEmojiIcon(emoji: string) {
     html: `<div class="map-pin-emoji">${visibleEmoji}</div>`,
     iconAnchor: [18, 18],
     iconSize: [36, 36],
+  });
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function profilePhotoIcon(photoURL: string) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="map-profile-photo"><img alt="" src="${escapeHtml(photoURL)}" /></div>`,
+    iconAnchor: [17, 17],
+    iconSize: [34, 34],
   });
 }
 
@@ -252,19 +271,18 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
               key={`people-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
               keyboard={false}
               position={[cluster.position.lat, cluster.position.lng]}
+              zIndexOffset={100}
             />
           );
         }
 
         const { profile, position } = cluster.items[0];
         return (
-          <Marker icon={personIcon} key={profile.uid} position={[position.lat, position.lng]}>
+          <Marker icon={profilePhotoIcon(profile.photoURL)} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
               {me.location ? `${distanceKm(me.location, position).toFixed(1)} km de você` : 'Distância indisponível'}
-              <br />
-              {profile.privacyMode === 'exact' ? 'Localização exata' : 'Por perto'}
             </Popup>
           </Marker>
         );
@@ -274,11 +292,13 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
 }
 
 function ClusteredEventMarkers({
+  creatorNames,
   eventParticipantCounts,
   events,
   me,
   onPreviewEvent,
 }: {
+  creatorNames: Record<string, string>;
   eventParticipantCounts: Record<string, number>;
   events: MapEvent[];
   me: UserProfile;
@@ -308,9 +328,12 @@ function ClusteredEventMarkers({
           icon={event.emoji ? eventEmojiIcon(event.emoji) : eventIcon}
           key={event.id}
           position={[event.location.lat, event.location.lng]}
+          zIndexOffset={500}
         >
           <Popup>
             <strong>{event.title}</strong>
+            <br />
+            Criado por {creatorNames[event.creatorUid] ?? 'criador do chat'}
             <br />
             {eventParticipantCounts[event.id] ?? 1} pessoas
             <br />
@@ -327,6 +350,7 @@ function ClusteredEventMarkers({
               key={`event-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
               keyboard={false}
               position={[cluster.position.lat, cluster.position.lng]}
+              zIndexOffset={500}
             />
           );
         }
@@ -338,9 +362,12 @@ function ClusteredEventMarkers({
             icon={event.emoji ? eventEmojiIcon(event.emoji) : eventIcon}
             key={event.id}
             position={[event.location.lat, event.location.lng]}
+            zIndexOffset={500}
           >
             <Popup>
               <strong>{event.title}</strong>
+              <br />
+              Criado por {creatorNames[event.creatorUid] ?? 'criador do chat'}
               <br />
               {eventParticipantCounts[event.id] ?? 1} pessoas
               <br />
@@ -386,10 +413,18 @@ export default function RadarMap({ me, profiles, theme }: Props) {
   const chatListEvents = showMyChatsList ? myEvents : visibleEvents;
   const tileLayer = tileLayerForTheme(theme);
   const eventParticipantCounts = useMapEventParticipantCounts(visibleEvents);
+  const eventCreatorNames = useMapEventCreatorNames(visibleEvents, me);
+  const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do chat');
 
   async function uploadEventCover(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (!me.isPremium) {
+      setEventError('Apenas usuários Premium podem adicionar capa ao chat.');
+      event.target.value = '';
+      return;
+    }
 
     setUploadingCover(true);
 
@@ -422,14 +457,15 @@ export default function RadarMap({ me, profiles, theme }: Props) {
     submitEvent.preventDefault();
     setEventError('');
     const title = eventTitle.trim();
+    const eventLocation = me.isPremium ? (selectedPoint ?? me.location) : me.location;
 
     if (!title) {
       setEventError('Escolha um título para o chat.');
       return;
     }
 
-    if (!selectedPoint) {
-      setEventError('Toque no mapa para escolher onde criar o chat.');
+    if (!eventLocation) {
+      setEventError('Ative sua localização para criar um chat.');
       return;
     }
 
@@ -443,13 +479,13 @@ export default function RadarMap({ me, profiles, theme }: Props) {
       const created = await createMapEvent({
         title,
         description: eventDescription.trim(),
-        coverURL: eventCoverURL,
+        coverURL: me.isPremium ? eventCoverURL : '',
         emoji: eventEmoji,
         accessMode: eventAccessMode,
         passwordHash,
         isPermanent: eventIsPermanent,
         isPremium: me.isPremium,
-        location: selectedPoint,
+        location: eventLocation,
         creatorUid: me.uid,
         radiusKm: eventRadius,
       });
@@ -515,6 +551,18 @@ export default function RadarMap({ me, profiles, theme }: Props) {
     }
   }
 
+  async function handleReportEvent(event: MapEvent) {
+    const confirmed = window.confirm('Denunciar este chat para revisão?');
+    if (!confirmed) return;
+
+    try {
+      await reportMapEvent(event, me.uid);
+      setEventError('Denúncia enviada. Obrigado por ajudar a manter o Raddo seguro.');
+    } catch (error) {
+      setEventError(error instanceof Error ? error.message : 'Não consegui enviar a denúncia.');
+    }
+  }
+
   async function likeNearbyProfile(profile: UserProfile) {
     const result = await trySendLike(me, profile.uid);
     setProfileActionMessage(result.ok ? (result.matched ? `Deu match com ${profile.displayName}.` : `Você curtiu ${profile.displayName}.`) : result.message);
@@ -532,7 +580,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
+    <div className="relative h-full min-h-0 overflow-hidden">
       {previewProfile && (
         <ProfilePreview
           me={me}
@@ -553,6 +601,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="truncate text-xl font-semibold">{previewEvent.title}</h1>
+                <p className="mt-1 text-xs font-semibold text-teal-200">Criado por {creatorLabel(previewEvent)}</p>
                 <p className="mt-1 text-sm text-slate-300">{previewEvent.description || 'Chat local do mapa'}</p>
               </div>
               <button
@@ -579,6 +628,17 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             </div>
 
             {eventError && <p className="mt-3 rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
+
+            {previewEvent.creatorUid !== me.uid && (
+              <button
+                className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 text-sm font-semibold text-amber-100"
+                onClick={() => handleReportEvent(previewEvent)}
+                type="button"
+              >
+                <Megaphone className="h-4 w-4" />
+                Denunciar chat
+              </button>
+            )}
 
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button
@@ -672,6 +732,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                     {event.coverURL && <img alt="" className="h-8 w-8 rounded-lg object-cover" src={event.coverURL} />}
                     {event.title}
                   </span>
+                  <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
                   <span className="mt-2 flex items-center gap-2 text-xs text-slate-300">
                     <Users className="h-3.5 w-3.5" />
                     {eventParticipantCounts[event.id] ?? 1} online agora
@@ -735,7 +796,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                       </p>
                     </button>
                     <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">
-                      {profile.privacyMode === 'exact' ? 'Localização exata' : 'Por perto'}
+                      {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                     </span>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2">
@@ -804,11 +865,18 @@ export default function RadarMap({ me, profiles, theme }: Props) {
               />
               <label className="grid gap-2 text-sm">
                 Capa do chat
-                <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
-                  <ImagePlus className="h-4 w-4 text-teal-300" />
-                  {uploadingCover ? 'Enviando capa...' : eventCoverURL ? 'Trocar capa' : 'Enviar capa'}
-                  <input accept="image/*" className="hidden" onChange={uploadEventCover} type="file" />
-                </span>
+                {me.isPremium ? (
+                  <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
+                    <ImagePlus className="h-4 w-4 text-teal-300" />
+                    {uploadingCover ? 'Enviando capa...' : eventCoverURL ? 'Trocar capa' : 'Enviar capa'}
+                    <input accept="image/*" className="hidden" onChange={uploadEventCover} type="file" />
+                  </span>
+                ) : (
+                  <span className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-center text-sm text-slate-300">
+                    <ImagePlus className="h-4 w-4 text-slate-400" />
+                    Capa disponível apenas no Premium
+                  </span>
+                )}
               </label>
               {eventCoverURL && (
                 <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">
@@ -891,6 +959,13 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                 />
               </label>
               <p className="text-xs text-slate-400">
+                {me.isPremium
+                  ? selectedPoint
+                    ? 'Ponto escolhido no mapa.'
+                    : 'Sem ponto escolhido: o chat será criado na sua posição atual.'
+                  : 'Seu chat será criado na sua localização atual. Apenas Premium pode criar em outro local.'}
+              </p>
+              <p className="hidden">
                 {selectedPoint ? 'Ponto escolhido no mapa.' : 'Sem ponto escolhido: o chat será criado na sua posição atual.'}
               </p>
               {eventError && <p className="rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
@@ -939,11 +1014,12 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         </div>
       )}
 
-      <section className={`relative min-h-[62dvh] overflow-hidden rounded-lg border border-white/10 ${mapShellClass(theme)}`}>
+      <section className={`absolute inset-0 overflow-hidden ${mapShellClass(theme)}`}>
         <MapContainer
           center={[center.lat, center.lng]}
-          className="h-[62dvh] min-h-[520px] w-full"
+          className="h-full min-h-0 w-full"
           scrollWheelZoom
+          zoomControl={false}
           zoom={13}
         >
           <TileLayer
@@ -951,7 +1027,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             key={theme}
             url={tileLayer.url}
           />
-          <MapClickTarget onPick={setSelectedPoint} />
+          {me.isPremium && <MapClickTarget onPick={setSelectedPoint} />}
 
           {me.location && (
             <Marker icon={meIcon} position={[me.location.lat, me.location.lng]}>
@@ -963,7 +1039,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             </Marker>
           )}
 
-          {selectedPoint && (
+          {me.isPremium && selectedPoint && (
             <Marker icon={draftIcon} position={[selectedPoint.lat, selectedPoint.lng]}>
               <Popup>Ponto escolhido para o novo chat</Popup>
             </Marker>
@@ -971,6 +1047,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
 
           <ClusteredProfileMarkers me={me} profiles={profiles} />
           <ClusteredEventMarkers
+            creatorNames={eventCreatorNames}
             eventParticipantCounts={eventParticipantCounts}
             events={visibleEvents}
             me={me}
@@ -988,7 +1065,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                   <br />
                   {me.location ? `${distanceKm(me.location, position).toFixed(1)} km de você` : 'Distância indisponível'}
                   <br />
-                  {profile.privacyMode === 'exact' ? 'Localização exata' : 'Por perto'}
+                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                 </Popup>
               </Marker>
             );
@@ -1014,18 +1091,20 @@ export default function RadarMap({ me, profiles, theme }: Props) {
           ))}
         </MapContainer>
 
-        <div className="absolute left-4 top-4 z-[500] flex max-w-[calc(100%-2rem)] items-stretch overflow-hidden rounded-lg border border-white/10 bg-slate-950/70 text-xs text-white shadow-xl backdrop-blur">
-          <div className="pointer-events-none px-3 py-2">
+        <div className="absolute left-4 right-4 top-4 z-[500] flex max-w-xl items-stretch overflow-hidden rounded-lg border border-white/10 bg-slate-950/80 text-xs text-white shadow-xl backdrop-blur">
+          <div className="pointer-events-none min-w-0 flex-1 px-3 py-2">
             <div className="flex items-center gap-2 font-semibold">
               <LocateFixed className="h-4 w-4 text-teal-300" />
               Mapa local
             </div>
-            <p className="mt-1 text-slate-300">Toque no mapa para escolher onde criar um chat.</p>
+            <p className="mt-1 text-slate-300">
+              {me.isPremium ? 'Toque no mapa para escolher onde criar um chat.' : 'Crie um chat na sua localização atual.'}
+            </p>
           </div>
-          {selectedPoint && (
+          {(me.isPremium ? selectedPoint : me.location) && (
             <button
               aria-label="Criar chat"
-              className="shrink-0 border-l border-white/10 bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+              className="shrink-0 border-l border-white/10 bg-[#ff3f68] px-4 text-sm font-semibold text-white"
               onClick={() => setCreateChatOpen(true)}
               type="button"
             >
@@ -1035,9 +1114,9 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         </div>
       </section>
 
-      <aside className="grid grid-cols-2 gap-3">
+      <aside className="pointer-events-none absolute inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+116px)] z-[520] grid grid-cols-2 gap-3 sm:inset-x-auto sm:left-4 sm:w-[440px]">
         <section
-          className="cursor-pointer rounded-lg border border-white/10 bg-white/8 p-4 transition hover:border-teal-300/50"
+          className="pointer-events-auto cursor-pointer rounded-lg border border-white/10 bg-slate-950/78 p-3 shadow-2xl backdrop-blur transition hover:border-teal-300/50"
           onClick={() => setShowChatsList(true)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') setShowChatsList(true);
@@ -1046,7 +1125,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
           tabIndex={0}
         >
           <h2 className="text-sm font-semibold">Chats disponíveis</h2>
-          <p className="mt-3 text-2xl font-semibold">{visibleEvents.length}</p>
+          <p className="mt-2 text-2xl font-semibold">{visibleEvents.length}</p>
           <p className="text-xs text-slate-300">
             {visibleEvents.length === 1 ? 'chat disponível no mapa' : 'chats disponíveis no mapa'}
           </p>
@@ -1064,6 +1143,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                   <MessageCircle className="h-4 w-4 text-fuchsia-300" />
                   {event.title}
                 </span>
+                <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
                 <span className="mt-1 flex items-center gap-2 text-xs text-slate-300">
                   <Users className="h-3.5 w-3.5" />
                   {eventParticipantCounts[event.id] ?? 1} online agora
@@ -1078,7 +1158,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         </section>
 
         <section
-          className="cursor-pointer rounded-lg border border-white/10 bg-white/8 p-4 transition hover:border-teal-300/50"
+          className="pointer-events-auto cursor-pointer rounded-lg border border-white/10 bg-slate-950/78 p-3 shadow-2xl backdrop-blur transition hover:border-teal-300/50"
           onClick={() => setShowPeopleList(true)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') setShowPeopleList(true);
@@ -1087,7 +1167,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
           tabIndex={0}
         >
           <h2 className="text-sm font-semibold">Pessoas próximas</h2>
-          <p className="mt-3 text-2xl font-semibold">{profiles.length}</p>
+          <p className="mt-2 text-2xl font-semibold">{profiles.length}</p>
           <p className="text-xs text-slate-300">
             {profiles.length === 1 ? 'pessoa no seu alcance' : 'pessoas no seu alcance'}
           </p>
@@ -1109,7 +1189,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                   </p>
                 </button>
                 <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">
-                  {profile.privacyMode === 'exact' ? 'Localização exata' : 'Por perto'}
+                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                 </span>
               </article>
             ))}

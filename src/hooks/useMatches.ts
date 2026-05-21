@@ -41,6 +41,12 @@ type ProfileRow = {
   liked_by_unlock_until: string | null;
 };
 
+export type ProfileInteraction = {
+  profile: UserProfile;
+  type: 'like' | 'dislike';
+  createdAt: string;
+};
+
 function rowToMatch(row: MatchRow): Match {
   return {
     id: row.id,
@@ -538,7 +544,7 @@ export function useSeenProfileIds(uid?: string) {
     loadSeen();
 
     const channel = supabase
-      .channel(`seen:${uid}`)
+      .channel(`seen:${uid}:${Date.now()}:${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${uid}` }, loadSeen)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${uid}` }, loadSeen)
       .subscribe();
@@ -550,6 +556,87 @@ export function useSeenProfileIds(uid?: string) {
   }, [uid]);
 
   return seenIds;
+}
+
+export function useProfileInteractions(uid?: string) {
+  const [interactions, setInteractions] = useState<ProfileInteraction[]>([]);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setInteractions([]);
+      return undefined;
+    }
+
+    if (!uid) {
+      setInteractions([]);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadInteractions() {
+      const [{ data: likes }, { data: passes }] = await Promise.all([
+        supabase.from('likes').select('to_uid,created_at').eq('from_uid', uid),
+        supabase.from('passes').select('to_uid,created_at').eq('from_uid', uid),
+      ]);
+
+      const rawInteractions = [
+        ...(likes ?? []).map((item) => ({ uid: item.to_uid as string, type: 'like' as const, createdAt: item.created_at as string })),
+        ...(passes ?? []).map((item) => ({ uid: item.to_uid as string, type: 'dislike' as const, createdAt: item.created_at as string })),
+      ];
+      const ids = [...new Set(rawInteractions.map((interaction) => interaction.uid))];
+
+      if (ids.length === 0) {
+        if (active) setInteractions([]);
+        return;
+      }
+
+      const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
+      const profilesById = new Map(((profiles ?? []) as ProfileRow[]).map((row) => [row.id, rowToProfile(row)]));
+
+      if (!active) return;
+
+      setInteractions(
+        rawInteractions
+          .map((interaction) => {
+            const profile = profilesById.get(interaction.uid);
+            return profile ? { profile, type: interaction.type, createdAt: interaction.createdAt } : null;
+          })
+          .filter(Boolean)
+          .sort((a, b) => Date.parse(b!.createdAt) - Date.parse(a!.createdAt)) as ProfileInteraction[],
+      );
+    }
+
+    loadInteractions();
+
+    const channel = supabase
+      .channel(`profile-interactions:${uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${uid}` }, loadInteractions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${uid}` }, loadInteractions)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [uid]);
+
+  return interactions;
+}
+
+export async function undoProfileInteraction(currentUid: string, targetUid: string) {
+  if (isDemoMode) return;
+
+  const [{ error: likeError }, { error: passError }] = await Promise.all([
+    supabase.from('likes').delete().eq('from_uid', currentUid).eq('to_uid', targetUid),
+    supabase.from('passes').delete().eq('from_uid', currentUid).eq('to_uid', targetUid),
+  ]);
+
+  if (likeError) throw new Error(likeError.message || 'Não consegui desfazer a curtida.');
+  if (passError) throw new Error(passError.message || 'Não consegui desfazer a recusa.');
+
+  const matchId = [currentUid, targetUid].sort().join('_');
+  await supabase.from('matches').delete().eq('id', matchId);
 }
 
 export async function trySendLike(me: UserProfile, toUid: string) {
