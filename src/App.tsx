@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Bell, LogOut, Map as MapIcon, MessageCircle, Radar, Sparkles, UserRound } from 'lucide-react';
+import { Bell, Heart, LogOut, Map as MapIcon, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
 import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
 import { useMatchProfiles, useMatches } from './hooks/useMatches';
-import { useJoinedMapEvents } from './hooks/useMapEvents';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
 import type { AppLanguage, AppTheme, AppView } from './types';
 import AuthOverlay from './components/AuthOverlay';
@@ -22,7 +21,7 @@ import { onPushNotificationTap, registerDeviceForPush } from './pushNotification
 const navItems = [
   { id: 'radar', labelKey: 'navRadar', icon: Radar },
   { id: 'discover', labelKey: 'navCards', icon: Sparkles },
-  { id: 'chat', labelKey: 'navChat', icon: MessageCircle },
+  { id: 'chat', labelKey: 'navChat', icon: Heart },
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
 
@@ -44,10 +43,16 @@ export default function App() {
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
-  const joinedMapEvents = useJoinedMapEvents(profile?.uid);
 
   function setLanguage(nextLanguage: AppLanguage) {
     setLanguageState(nextLanguage);
+  }
+
+  function openRadarPanel(panel: 'my-chats' | 'people') {
+    setView('radar');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(`raddo:open-${panel}`));
+    }, 80);
   }
 
   useEffect(() => {
@@ -133,6 +138,8 @@ export default function App() {
   useEffect(() => {
     if (!profile || matches.length === 0) return;
 
+    let active = true;
+    const currentProfileUid = profile.uid;
     const storageKey = `raddo-device-notifications:${profile.uid}`;
     const saved = window.localStorage.getItem(storageKey);
     const currentIds = matches.map(notificationIdForMatch);
@@ -145,19 +152,40 @@ export default function App() {
     const notifiedIds = new Set(JSON.parse(saved) as string[]);
     const nextIds = new Set([...notifiedIds, ...currentIds]);
 
-    matches.forEach((match) => {
-      const notificationId = notificationIdForMatch(match);
-      if (notifiedIds.has(notificationId)) return;
+    async function notifyNewMatches() {
+      for (const match of matches) {
+        const notificationId = notificationIdForMatch(match);
+        if (notifiedIds.has(notificationId)) continue;
 
-      const { body, title } = notificationTextForMatch(match);
-      void showAppNotification(title, body, {
-        matchId: match.id,
-        notificationId,
-        view: 'chat',
-      });
-    });
+        if (match.lastMessage && match.lastMessageAt) {
+          const { data } = await supabase
+            .from('messages')
+            .select('sender_uid')
+            .eq('match_id', match.id)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle<{ sender_uid: string }>();
+
+          if (!active) return;
+          if (data?.sender_uid === currentProfileUid) continue;
+        }
+
+        const { body, title } = notificationTextForMatch(match);
+        void showAppNotification(title, body, {
+          matchId: match.id,
+          notificationId,
+          view: 'chat',
+        });
+      }
+    }
+
+    void notifyNewMatches();
 
     window.localStorage.setItem(storageKey, JSON.stringify([...nextIds]));
+
+    return () => {
+      active = false;
+    };
   }, [matches, matchProfilesByUid, profile, t]);
 
   useEffect(() => {
@@ -198,43 +226,6 @@ export default function App() {
       removeListener?.();
     };
   }, []);
-
-  useEffect(() => {
-    if (!profile || joinedMapEvents.length === 0) return undefined;
-
-    const eventsById = new Map(joinedMapEvents.map((event) => [event.id, event]));
-    const channel = supabase
-      .channel(`map-event-device-notifications:${profile.uid}:${joinedMapEvents.map((event) => event.id).sort().join(':')}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'map_event_messages' },
-        (payload) => {
-          const message = payload.new as {
-            id?: string;
-            event_id?: string;
-            sender_name?: string;
-            sender_uid?: string;
-            text?: string;
-          };
-          if (!message.event_id || !message.id) return;
-          if (message.sender_uid === profile.uid) return;
-
-          const mapEvent = eventsById.get(message.event_id);
-          if (!mapEvent) return;
-
-          void showAppNotification(mapEvent.title, `${message.sender_name || 'AlguÃ©m'}: ${message.text || ''}`, {
-            eventId: mapEvent.id,
-            notificationId: `map-event-message:${message.id}`,
-            view: 'radar',
-          });
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [joinedMapEvents, profile]);
 
   function markNotificationAsRead(notificationId: string) {
     if (!profile) return;
@@ -327,23 +318,31 @@ export default function App() {
             </section>
           </div>
         )}
-        <div className="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden">
-          <header className="flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6">
-            <button
-              className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/8 px-3 py-2 text-left"
-              onClick={() => setView('radar')}
-              type="button"
-            >
-              <MapIcon className="h-5 w-5 text-teal-300" />
-              <span className="leading-tight">
-                <strong className="block text-sm">Raddo</strong>
-                <span className="text-xs text-slate-300">{t('nearbyCount', { count: nearbyProfiles.length })}</span>
-              </span>
-            </button>
+        <div className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden">
+          <header
+            className={
+              view === 'radar'
+                ? 'absolute inset-x-0 top-0 z-[650] flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6'
+                : 'flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6'
+            }
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                className="raddo-top-pill flex min-h-[3.25rem] items-center gap-2 rounded-2xl border border-white/10 bg-white/8 px-3 py-2 text-left"
+                onClick={() => openRadarPanel('people')}
+                type="button"
+              >
+                <MapIcon className="h-5 w-5 text-teal-300" />
+                <span className="leading-tight">
+                  <strong className="block text-sm">Raddo</strong>
+                  <span className="text-xs text-slate-300">{t('nearbyCount', { count: nearbyProfiles.length })}</span>
+                </span>
+              </button>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 aria-label={t('notificationsPage')}
-                className={`relative grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200 ${
+                className={`raddo-header-icon relative grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200 ${
                   view === 'notifications' ? 'text-[#ff3f68]' : ''
                 }`}
                 onClick={() => setView('notifications')}
@@ -356,7 +355,7 @@ export default function App() {
               </button>
               <button
                 aria-label={t('signOut')}
-                className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
+                className="raddo-header-icon grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
                 onClick={() => supabase.auth.signOut()}
                 type="button"
               >
@@ -365,7 +364,15 @@ export default function App() {
             </div>
           </header>
 
-          <section className={view === 'radar' ? 'min-h-0 flex-1 overflow-hidden' : 'min-h-0 flex-1 overflow-auto px-4 pb-24 sm:px-6'}>
+          <section
+            className={
+              view === 'radar'
+                ? 'min-h-0 flex-1 overflow-hidden'
+                : view === 'chat'
+                  ? 'min-h-0 flex-1 overflow-hidden px-0 pb-[calc(var(--raddo-bottom-safe)+92px)] pt-2'
+                  : 'scrollbar-hidden min-h-0 flex-1 overflow-auto px-4 pb-[calc(var(--raddo-bottom-safe)+128px)] sm:px-6'
+            }
+          >
             {view === 'radar' && (
               <RadarMap
                 me={profile}
@@ -394,7 +401,7 @@ export default function App() {
             )}
           </section>
 
-          <nav className="fixed inset-x-0 bottom-0 z-[700] border-t border-white/10 bg-[#101827]/95 px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2 backdrop-blur">
+          <nav className="raddo-bottom-nav fixed inset-x-0 bottom-0 z-[700] border-t border-white/10 bg-[#101827]/95 px-3 pb-[calc(var(--raddo-bottom-safe)+10px)] pt-2 backdrop-blur">
             <div className="mx-auto grid max-w-xl grid-cols-4 gap-2">
               {navItems.map((item) => {
                 const Icon = item.icon;

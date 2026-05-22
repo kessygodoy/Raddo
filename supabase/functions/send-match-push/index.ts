@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.105.3';
 
 type PushRequest = {
-  eventId?: string;
+  matchId?: string;
   messageId?: string;
   senderName?: string;
   senderUid?: string;
@@ -49,15 +49,15 @@ async function createGoogleAccessToken() {
   if (!clientEmail || !privateKey) throw new Error('Missing FCM_CLIENT_EMAIL or FCM_PRIVATE_KEY');
 
   const now = Math.floor(Date.now() / 1000);
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const claim = {
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now,
-    iss: clientEmail,
-    scope: 'https://www.googleapis.com/auth/firebase.messaging',
-  };
-  const unsignedJwt = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(claim))}`;
+  const unsignedJwt = `${base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${base64Url(
+    JSON.stringify({
+      aud: 'https://oauth2.googleapis.com/token',
+      exp: now + 3600,
+      iat: now,
+      iss: clientEmail,
+      scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    }),
+  )}`;
   const key = await crypto.subtle.importKey(
     'pkcs8',
     pemToArrayBuffer(privateKey),
@@ -132,49 +132,34 @@ Deno.serve(async (req) => {
   if (authError || !authData.user) return jsonResponse({ error: 'Unauthorized' }, 401);
 
   const body = await req.json() as PushRequest;
-  if (!body.eventId || !body.senderUid || !body.text) return jsonResponse({ error: 'Invalid payload' }, 400);
+  if (!body.matchId || !body.senderUid || !body.text) return jsonResponse({ error: 'Invalid payload' }, 400);
   if (authData.user.id !== body.senderUid) return jsonResponse({ error: 'Sender mismatch' }, 403);
 
   const admin = createClient(supabaseUrl, serviceRoleKey);
+  const { data: matchData, error: matchError } = await admin
+    .from('matches')
+    .select('id,users')
+    .eq('id', body.matchId)
+    .maybeSingle<{ id: string; users: string[] }>();
+  if (matchError || !matchData) return jsonResponse({ error: 'Match not found' }, 404);
+  if (!matchData.users.includes(body.senderUid)) return jsonResponse({ error: 'Sender is not in match' }, 403);
 
-  const { data: eventData, error: eventError } = await admin
-    .from('map_events')
-    .select('id,title')
-    .eq('id', body.eventId)
-    .maybeSingle<{ id: string; title: string }>();
-  if (eventError || !eventData) return jsonResponse({ error: 'Event not found' }, 404);
-
-  const { data: participantRows, error: participantError } = await admin
-    .from('map_event_participants')
-    .select('user_uid')
-    .eq('event_id', body.eventId)
-    .neq('user_uid', body.senderUid);
-  if (participantError) return jsonResponse({ error: participantError.message }, 500);
-
-  const recipientIds = [...new Set((participantRows ?? []).map((row) => row.user_uid as string))];
+  const recipientIds = matchData.users.filter((uid) => uid !== body.senderUid);
   if (recipientIds.length === 0) {
-    await writePushLog(admin, { kind: 'map_event', senderUid: body.senderUid, status: 'no_recipients' });
+    await writePushLog(admin, { kind: 'match', senderUid: body.senderUid, status: 'no_recipients' });
     return jsonResponse({ sent: 0 });
   }
 
   const { data: tokenRows, error: tokenError } = await admin
     .from('device_push_tokens')
     .select('token,user_uid')
-    .in('user_uid', recipientIds)
-    .neq('user_uid', body.senderUid);
+    .in('user_uid', recipientIds);
   if (tokenError) return jsonResponse({ error: tokenError.message }, 500);
 
-  const tokens = [
-    ...new Set(
-      (tokenRows ?? [])
-        .filter((row) => (row.user_uid as string) !== body.senderUid)
-        .map((row) => row.token as string)
-        .filter(Boolean),
-    ),
-  ];
+  const tokens = [...new Set((tokenRows ?? []).map((row) => row.token as string).filter(Boolean))];
   if (tokens.length === 0) {
     await writePushLog(admin, {
-      kind: 'map_event',
+      kind: 'match',
       recipientCount: recipientIds.length,
       senderUid: body.senderUid,
       status: 'no_tokens',
@@ -190,7 +175,6 @@ Deno.serve(async (req) => {
 
   const accessToken = await createGoogleAccessToken();
   const sendUrl = `https://fcm.googleapis.com/v1/projects/${fcmProjectId}/messages:send`;
-  const title = eventData.title || 'Chat local';
   const senderName = senderProfile?.display_name || body.senderName || 'Alguem';
   const senderPhotoUrl = senderProfile?.photo_url || '';
   const text = body.text.slice(0, 160);
@@ -209,14 +193,14 @@ Deno.serve(async (req) => {
               priority: 'high',
             },
             data: {
-              eventId: body.eventId ?? '',
+              matchId: body.matchId ?? '',
               messageId: body.messageId ?? '',
-              view: 'radar',
+              view: 'chat',
             },
             notification: {
               body: `${senderName}: ${text}`,
               image: senderPhotoUrl || undefined,
-              title: `\u{1F4AC} ${title}`,
+              title: '\u2764\uFE0F Nova mensagem',
             },
             token,
           },
@@ -246,7 +230,7 @@ Deno.serve(async (req) => {
   await writePushLog(admin, {
     detail,
     failedCount: failed,
-    kind: 'map_event',
+    kind: 'match',
     recipientCount: recipientIds.length,
     senderUid: body.senderUid,
     sentCount: sent,

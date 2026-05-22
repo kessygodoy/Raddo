@@ -1,8 +1,8 @@
-import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useState } from 'react';
+import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useState } from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Heart, ImagePlus, LocateFixed, Megaphone, MessageCircle, Plus, Users, X } from 'lucide-react';
+import { ArrowRight, Heart, ImagePlus, Megaphone, MessageCircle, Plus, Users, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
@@ -59,39 +59,52 @@ const eventIcon = L.divIcon({
   iconSize: [26, 26],
 });
 
-const eventEmojiOptions = ['💬', '🎉', '🍻', '🎵', '☕', '🍔', '🏃', '🌳', '🎮', '❤️', '⭐', '📍'];
+const eventEmojiOptions: string[] = [];
 
-const eventEmojiQuickOptions = eventEmojiOptions.slice(0, 11);
-eventEmojiOptions.push(
+const modernEventEmojiOptions = [
+  '\u{1F4AC}',
   '\u{1F4CD}',
-  '\u{1F525}',
+  '\u{1F389}',
   '\u{2728}',
+  '\u{1F525}',
+  '\u{1FAE1}',
   '\u{1F60E}',
-  '\u{1F970}',
   '\u{1F929}',
+  '\u{1F970}',
   '\u{1F44B}',
   '\u{1F91D}',
+  '\u{1F64C}',
   '\u{1F483}',
   '\u{1F57A}',
-  '\u{1F3A4}',
   '\u{1F3A7}',
+  '\u{1F3A4}',
   '\u{1F3B8}',
+  '\u{1F3B7}',
   '\u{1F3AC}',
   '\u{1F3A8}',
   '\u{1F4F8}',
+  '\u{1F3AE}',
+  '\u{1F579}\u{FE0F}',
+  '\u{2615}',
+  '\u{1F964}',
+  '\u{1F379}',
+  '\u{1F37B}',
+  '\u{1F377}',
+  '\u{1F942}',
   '\u{1F37D}\u{FE0F}',
+  '\u{1F354}',
   '\u{1F355}',
   '\u{1F32E}',
   '\u{1F363}',
+  '\u{1F35C}',
+  '\u{1F36A}',
   '\u{1F366}',
   '\u{1F382}',
-  '\u{1F377}',
-  '\u{1F379}',
-  '\u{1F964}',
   '\u{26BD}',
   '\u{1F3C0}',
   '\u{1F3D0}',
   '\u{1F3BE}',
+  '\u{1F3C3}',
   '\u{1F6B4}',
   '\u{1F3CB}\u{FE0F}',
   '\u{1F9D8}',
@@ -110,21 +123,89 @@ eventEmojiOptions.push(
   '\u{1F4DA}',
   '\u{1F4BB}',
   '\u{1F4BC}',
+  '\u{1F4A1}',
+  '\u{1F680}',
   '\u{1F697}',
   '\u{1F682}',
   '\u{2708}\u{FE0F}',
   '\u{1F48E}',
   '\u{1F451}',
-  '\u{1F680}',
-);
+  '\u{1F9ED}',
+  '\u{1F9E9}',
+  '\u{1F9FF}',
+  '\u{1F9CB}',
+  '\u{1FAE7}',
+  '\u{1FAF6}',
+  '\u{1F602}',
+  '\u{1F923}',
+  '\u{1F972}',
+  '\u{1F914}',
+  '\u{1F92B}',
+  '\u{1F917}',
+  '\u{1F973}',
+  '\u{1F47B}',
+  '\u{1F47D}',
+  '\u{1F916}',
+  '\u{1F984}',
+  '\u{1F98B}',
+  '\u{1F33B}',
+  '\u{1F331}',
+  '\u{1FAB4}',
+  '\u{1F344}',
+  '\u{1F9C3}',
+  '\u{1F9CB}',
+  '\u{1FAD6}',
+  '\u{1FAD4}',
+  '\u{1FAD5}',
+  '\u{1F950}',
+  '\u{1F96A}',
+  '\u{1F9C1}',
+  '\u{1F36D}',
+  '\u{1F36B}',
+  '\u{1F9CA}',
+  '\u{1F3AF}',
+  '\u{1FA80}',
+  '\u{1FA81}',
+  '\u{1F3B2}',
+  '\u{1F9E0}',
+  '\u{1F52E}',
+  '\u{1FA84}',
+  '\u{1F9F8}',
+  '\u{1F4A4}',
+  '\u{1F4AF}',
+  '\u{1F6A8}',
+  '\u{1F6A9}',
+  '\u{1F6F8}',
+  '\u{1F6E5}\u{FE0F}',
+  '\u{1F5FA}\u{FE0F}',
+  '\u{1F3D9}\u{FE0F}',
+  '\u{1F306}',
+  '\u{1F303}',
+  '\u{1F320}',
+  '\u{2604}\u{FE0F}',
+  '\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}',
+];
 
-function eventEmojiIcon(emoji: string) {
+eventEmojiOptions.splice(0, eventEmojiOptions.length, ...modernEventEmojiOptions);
+const eventEmojiQuickOptions = eventEmojiOptions.slice(0, 15);
+
+function eventEmojiIcon(emoji: string, highlighted = false) {
+  const emojiClassName = highlighted ? 'map-pin-emoji map-pin-emoji-own' : 'map-pin-emoji';
+  if (!eventEmojiOptions.includes(emoji)) {
+    return L.divIcon({
+      className: '',
+      html: `<div class="${emojiClassName}">\u{1F4AC}</div>`,
+      iconAnchor: highlighted ? [12, 12] : [18, 18],
+      iconSize: highlighted ? [24, 24] : [36, 36],
+    });
+  }
+
   const visibleEmoji = eventEmojiOptions.includes(emoji) ? emoji : '💬';
   return L.divIcon({
     className: '',
-    html: `<div class="map-pin-emoji">${visibleEmoji}</div>`,
-    iconAnchor: [18, 18],
-    iconSize: [36, 36],
+    html: `<div class="${emojiClassName}">${visibleEmoji}</div>`,
+    iconAnchor: highlighted ? [12, 12] : [18, 18],
+    iconSize: highlighted ? [24, 24] : [36, 36],
   });
 }
 
@@ -158,6 +239,15 @@ const eventGroupIcon = L.divIcon({
   iconAnchor: [18, 18],
   iconSize: [36, 36],
 });
+
+function ownerEventArrowIcon(angle: number) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="map-owner-event-arrow" style="transform: rotate(${angle}deg)">➜</div>`,
+    iconAnchor: [18, 18],
+    iconSize: [36, 36],
+  });
+}
 
 function MapClickTarget({ onPick }: { onPick: MapPointSetter }) {
   useLeafletMapEvents({
@@ -244,6 +334,23 @@ function isPositionInView(map: L.Map, position: LatLng) {
   return map.getBounds().pad(0.08).contains(L.latLng(position.lat, position.lng));
 }
 
+function edgePointForPosition(map: L.Map, position: LatLng) {
+  const size = map.getSize();
+  const center = L.point(size.x / 2, size.y / 2);
+  const target = map.latLngToContainerPoint(L.latLng(position.lat, position.lng));
+  const delta = target.subtract(center);
+  const margin = 24;
+  const scaleX = delta.x === 0 ? Number.POSITIVE_INFINITY : (size.x / 2 - margin) / Math.abs(delta.x);
+  const scaleY = delta.y === 0 ? Number.POSITIVE_INFINITY : (size.y / 2 - margin) / Math.abs(delta.y);
+  const scale = Math.min(scaleX, scaleY);
+  const edge = center.add(delta.multiplyBy(scale));
+
+  return {
+    angle: Math.atan2(delta.y, delta.x) * (180 / Math.PI),
+    position: map.containerPointToLatLng(edge),
+  };
+}
+
 function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: UserProfile[] }) {
   const map = useMap();
   const [, setMapVersion] = useState(0);
@@ -312,6 +419,9 @@ function ClusteredEventMarkers({
   });
 
   const visibleInBounds = events.filter((event) => isPositionInView(map, event.location));
+  const ownerOffscreenEvents = events.filter(
+    (event) => event.creatorUid === me.uid && !isPositionInView(map, event.location),
+  );
   const permanentEvents = visibleInBounds.filter((event) => event.isPermanent);
   const expiringEvents = visibleInBounds.filter((event) => !event.isPermanent);
   const clusters = clusterMapItems(
@@ -325,7 +435,7 @@ function ClusteredEventMarkers({
       {permanentEvents.map((event) => (
         <Marker
           eventHandlers={{ click: () => onPreviewEvent(event) }}
-          icon={event.emoji ? eventEmojiIcon(event.emoji) : eventIcon}
+          icon={event.emoji ? eventEmojiIcon(event.emoji, event.creatorUid === me.uid) : eventIcon}
           key={event.id}
           position={[event.location.lat, event.location.lng]}
           zIndexOffset={500}
@@ -359,7 +469,7 @@ function ClusteredEventMarkers({
         return (
           <Marker
             eventHandlers={{ click: () => onPreviewEvent(event) }}
-            icon={event.emoji ? eventEmojiIcon(event.emoji) : eventIcon}
+            icon={event.emoji ? eventEmojiIcon(event.emoji, event.creatorUid === me.uid) : eventIcon}
             key={event.id}
             position={[event.location.lat, event.location.lng]}
             zIndexOffset={500}
@@ -378,6 +488,19 @@ function ClusteredEventMarkers({
           </Marker>
         );
       })}
+      {ownerOffscreenEvents.map((event) => {
+        const edge = edgePointForPosition(map, event.location);
+        return (
+          <Marker
+            icon={ownerEventArrowIcon(edge.angle)}
+            interactive={false}
+            key={`owner-arrow-${event.id}`}
+            keyboard={false}
+            position={edge.position}
+            zIndexOffset={650}
+          />
+        );
+      })}
     </>
   );
 }
@@ -388,7 +511,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
   const [eventTitle, setEventTitle] = useState('');
   const [eventDescription, setEventDescription] = useState('');
   const [eventCoverURL, setEventCoverURL] = useState('');
-  const [eventEmoji, setEventEmoji] = useState('💬');
+  const [eventEmoji, setEventEmoji] = useState(modernEventEmojiOptions[0]);
   const [eventAccessMode, setEventAccessMode] = useState<MapEvent['accessMode']>('open');
   const [eventPassword, setEventPassword] = useState('');
   const [eventIsPermanent, setEventIsPermanent] = useState(false);
@@ -409,12 +532,38 @@ export default function RadarMap({ me, profiles, theme }: Props) {
   const visibleEvents = [...localEvents, ...mapEvents.filter((event) => !localEvents.some((local) => local.id === event.id))].filter(
     (event) => eventExpiresAt(event).getTime() > Date.now(),
   );
-  const myEvents = visibleEvents.filter((event) => event.creatorUid === me.uid);
-  const chatListEvents = showMyChatsList ? myEvents : visibleEvents;
+  const eventDistance = (event: MapEvent) => (me.location ? distanceKm(me.location, event.location) : Number.MAX_SAFE_INTEGER);
+  const profileDistance = (profile: UserProfile) =>
+    me.location && profile.location ? distanceKm(me.location, profile.location) : Number.MAX_SAFE_INTEGER;
+  const sortedVisibleEvents = [...visibleEvents].sort((a, b) => eventDistance(a) - eventDistance(b));
+  const myEvents = sortedVisibleEvents.filter((event) => event.creatorUid === me.uid);
+  const chatListEvents = showMyChatsList ? myEvents : sortedVisibleEvents;
+  const sortedProfiles = [...profiles].sort((a, b) => profileDistance(a) - profileDistance(b));
   const tileLayer = tileLayerForTheme(theme);
   const eventParticipantCounts = useMapEventParticipantCounts(visibleEvents);
   const eventCreatorNames = useMapEventCreatorNames(visibleEvents, me);
   const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do chat');
+
+  useEffect(() => {
+    const openMyChats = () => {
+      setShowChatsList(false);
+      setShowMyChatsList(true);
+    };
+    const openChats = () => {
+      setShowMyChatsList(false);
+      setShowChatsList(true);
+    };
+    const openPeople = () => setShowPeopleList(true);
+
+    window.addEventListener('raddo:open-chats', openChats);
+    window.addEventListener('raddo:open-my-chats', openMyChats);
+    window.addEventListener('raddo:open-people', openPeople);
+    return () => {
+      window.removeEventListener('raddo:open-chats', openChats);
+      window.removeEventListener('raddo:open-my-chats', openMyChats);
+      window.removeEventListener('raddo:open-people', openPeople);
+    };
+  }, []);
 
   async function uploadEventCover(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -492,7 +641,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
       setEventTitle('');
       setEventDescription('');
       setEventCoverURL('');
-      setEventEmoji('💬');
+      setEventEmoji(modernEventEmojiOptions[0]);
       setEventAccessMode('open');
       setEventPassword('');
       setEventIsPermanent(false);
@@ -591,8 +740,8 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         />
       )}
       {previewEvent && (
-        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 p-0 backdrop-blur-sm sm:place-items-center sm:p-6">
-          <section className="max-h-[88dvh] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:rounded-lg">
+        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
+          <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             {previewEvent.coverURL && (
               <div className="-mx-5 -mt-5 mb-4 aspect-video overflow-hidden bg-slate-950">
                 <img alt="" className="h-full w-full object-cover" src={previewEvent.coverURL} />
@@ -680,8 +829,8 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         />
       )}
       {(showChatsList || showMyChatsList) && (
-        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 p-0 backdrop-blur-sm sm:place-items-center sm:p-6">
-          <section className="max-h-[88dvh] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:rounded-lg">
+        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
+          <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -748,12 +897,12 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         </div>
       )}
       {showPeopleList && (
-        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 p-0 backdrop-blur-sm sm:place-items-center sm:p-6">
-          <section className="max-h-[88dvh] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:rounded-lg">
+        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
+          <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">Pessoas próximas</h2>
-                <p className="text-sm text-slate-300">{profiles.length} pessoas no seu alcance</p>
+                <p className="text-sm text-slate-300">{sortedProfiles.length} pessoas no seu alcance</p>
               </div>
               <button
                 aria-label="Fechar"
@@ -766,8 +915,8 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             </div>
             {profileActionMessage && <p className="mb-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
             <div className="grid gap-3">
-              {profiles.length === 0 && <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhum perfil no raio atual.</p>}
-              {profiles.map((profile) => (
+              {sortedProfiles.length === 0 && <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhum perfil no raio atual.</p>}
+              {sortedProfiles.map((profile) => (
                 <article className="rounded-lg bg-slate-950/60 p-3" key={profile.uid}>
                   <div className="flex items-center gap-3">
                     <button
@@ -1090,33 +1239,23 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             </Marker>
           ))}
         </MapContainer>
-
-        <div className="absolute left-4 right-4 top-4 z-[500] flex max-w-xl items-stretch overflow-hidden rounded-lg border border-white/10 bg-slate-950/80 text-xs text-white shadow-xl backdrop-blur">
-          <div className="pointer-events-none min-w-0 flex-1 px-3 py-2">
-            <div className="flex items-center gap-2 font-semibold">
-              <LocateFixed className="h-4 w-4 text-teal-300" />
-              Mapa local
-            </div>
-            <p className="mt-1 text-slate-300">
-              {me.isPremium ? 'Toque no mapa para escolher onde criar um chat.' : 'Crie um chat na sua localização atual.'}
-            </p>
-          </div>
-          {(me.isPremium ? selectedPoint : me.location) && (
-            <button
-              aria-label="Criar chat"
-              className="shrink-0 border-l border-white/10 bg-[#ff3f68] px-4 text-sm font-semibold text-white"
-              onClick={() => setCreateChatOpen(true)}
-              type="button"
-            >
-              Criar chat
-            </button>
-          )}
-        </div>
       </section>
 
-      <aside className="pointer-events-none absolute inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+116px)] z-[520] grid grid-cols-2 gap-3 sm:inset-x-auto sm:left-4 sm:w-[440px]">
+      {(me.isPremium ? selectedPoint : me.location) && (
+        <button
+          aria-label="Criar chat"
+          className="raddo-create-chat-cta absolute left-1/2 z-[560] grid h-20 w-20 -translate-x-1/2 place-items-center rounded-full text-white"
+          onClick={() => setCreateChatOpen(true)}
+          type="button"
+        >
+          <Plus className="h-10 w-10" />
+          <span className="absolute -bottom-7 whitespace-nowrap text-xs font-semibold text-white drop-shadow">Criar chat</span>
+        </button>
+      )}
+
+      <aside className="hidden">
         <section
-          className="pointer-events-auto cursor-pointer rounded-lg border border-white/10 bg-slate-950/78 p-3 shadow-2xl backdrop-blur transition hover:border-teal-300/50"
+          className="raddo-radar-card raddo-radar-card-chat pointer-events-auto cursor-pointer rounded-2xl p-3 text-left shadow-2xl backdrop-blur transition"
           onClick={() => setShowChatsList(true)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') setShowChatsList(true);
@@ -1124,14 +1263,23 @@ export default function RadarMap({ me, profiles, theme }: Props) {
           role="button"
           tabIndex={0}
         >
-          <h2 className="text-sm font-semibold">Chats disponíveis</h2>
-          <p className="mt-2 text-2xl font-semibold">{visibleEvents.length}</p>
-          <p className="text-xs text-slate-300">
-            {visibleEvents.length === 1 ? 'chat disponível no mapa' : 'chats disponíveis no mapa'}
-          </p>
+          <div className="mb-1.5 flex items-start justify-between gap-2">
+            <span className="raddo-radar-card-icon raddo-radar-card-icon-chat">
+              <MessageCircle className="h-5 w-5" />
+            </span>
+            <span className="raddo-count-badge raddo-count-badge-chat">{visibleEvents.length}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-100">
+              {visibleEvents.length === 1 ? '1 chat' : `${visibleEvents.length} chats`}
+            </p>
+            <span className="raddo-mini-arrow raddo-mini-arrow-chat">
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
+          </div>
           <div className="hidden">
             {visibleEvents.length === 0 && <p className="text-sm text-slate-300">Nenhum chat próximo.</p>}
-            {visibleEvents.map((event) => (
+            {sortedVisibleEvents.map((event) => (
               <button
                 className="w-full rounded-lg bg-slate-950/60 p-3 text-left"
                 key={event.id}
@@ -1158,7 +1306,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
         </section>
 
         <section
-          className="pointer-events-auto cursor-pointer rounded-lg border border-white/10 bg-slate-950/78 p-3 shadow-2xl backdrop-blur transition hover:border-teal-300/50"
+          className="hidden"
           onClick={() => setShowPeopleList(true)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') setShowPeopleList(true);
@@ -1166,16 +1314,25 @@ export default function RadarMap({ me, profiles, theme }: Props) {
           role="button"
           tabIndex={0}
         >
-          <h2 className="text-sm font-semibold">Pessoas próximas</h2>
-          <p className="mt-2 text-2xl font-semibold">{profiles.length}</p>
-          <p className="text-xs text-slate-300">
-            {profiles.length === 1 ? 'pessoa no seu alcance' : 'pessoas no seu alcance'}
-          </p>
+          <div className="mb-1.5 flex items-start justify-between gap-2">
+            <span className="raddo-radar-card-icon raddo-radar-card-icon-people">
+              <Users className="h-5 w-5" />
+            </span>
+            <span className="raddo-count-badge raddo-count-badge-people">{profiles.length}</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-100">
+              {profiles.length === 1 ? '1 pessoa' : `${profiles.length} pessoas`}
+            </p>
+            <span className="raddo-mini-arrow raddo-mini-arrow-people">
+              <ArrowRight className="h-3.5 w-3.5" />
+            </span>
+          </div>
           {profileActionMessage && <p className="mt-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
           <div className="hidden">
             {profiles.length === 0 && <p className="text-sm text-slate-300">Nenhum perfil no raio atual.</p>}
             {profileActionMessage && <p className="rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
-            {profiles.slice(0, 6).map((profile) => (
+            {sortedProfiles.slice(0, 6).map((profile) => (
               <article className="flex items-center gap-3" key={profile.uid}>
                 <button className="shrink-0" onClick={() => setPreviewProfile(profile)} type="button">
                   <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
@@ -1199,3 +1356,4 @@ export default function RadarMap({ me, profiles, theme }: Props) {
     </div>
   );
 }
+

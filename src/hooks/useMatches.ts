@@ -28,6 +28,7 @@ type ProfileRow = {
   lng: number | null;
   privacy_mode: UserProfile['privacyMode'];
   visibility_radius: number;
+  age: number | null;
   gender: UserProfile['gender'];
   sexualities: UserProfile['sexualities'] | null;
   looking_for: UserProfile['lookingFor'] | null;
@@ -76,6 +77,7 @@ function rowToProfile(row: ProfileRow): UserProfile {
     location: typeof row.lat === 'number' && typeof row.lng === 'number' ? { lat: row.lat, lng: row.lng } : null,
     privacyMode: row.privacy_mode,
     visibilityRadius: row.visibility_radius,
+    age: row.age ?? 18,
     gender: row.gender,
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? [],
@@ -190,28 +192,58 @@ export function useMessages(matchId?: string) {
     let active = true;
 
     async function loadMessages() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('messages')
         .select('*')
         .eq('match_id', matchId)
         .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Nao consegui carregar mensagens', error);
+        return;
+      }
 
       if (active) setMessages(((data ?? []) as MessageRow[]).map(rowToMessage));
     }
 
     loadMessages();
 
+    function upsertMessage(row: MessageRow) {
+      const nextMessage = rowToMessage(row);
+      setMessages((current) => {
+        const byId = new Map(current.map((message) => [message.id, message]));
+        byId.set(nextMessage.id, nextMessage);
+        return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      });
+    }
+
     const channel = supabase
       .channel(`messages:${matchId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages', filter: `match_id=eq.${matchId}` },
-        loadMessages,
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            upsertMessage(payload.new as MessageRow);
+            return;
+          }
+          loadMessages();
+        },
       )
       .subscribe();
+    const refreshTimer = window.setInterval(loadMessages, 2500);
+    const handleFocus = () => loadMessages();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadMessages();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [matchId]);
@@ -739,6 +771,7 @@ export function useLikedBy(me: UserProfile | null) {
               : null,
           privacyMode: row.privacy_mode,
           visibilityRadius: row.visibility_radius,
+          age: row.age ?? 18,
           gender: row.gender,
           sexualities: row.sexualities ?? [],
           lookingFor: row.looking_for ?? [],
@@ -770,19 +803,25 @@ export function useLikedBy(me: UserProfile | null) {
   return profiles;
 }
 
-export async function sendMessage(matchId: string, senderUid: string, text: string) {
+export async function sendMessage(matchId: string, senderUid: string, text: string, senderName = 'Raddo') {
   if (isDemoMode) return;
 
   const cleanText = text.trim();
   if (!cleanText) return;
 
   const now = new Date().toISOString();
-  await supabase.from('messages').insert({
-    sender_uid: senderUid,
-    text: cleanText,
-    match_id: matchId,
-    created_at: now,
-  });
+  const { data: messageData, error: messageError } = await supabase
+    .from('messages')
+    .insert({
+      sender_uid: senderUid,
+      text: cleanText,
+      match_id: matchId,
+      created_at: now,
+    })
+    .select('id')
+    .single<{ id: string }>();
+
+  if (messageError) throw new Error(messageError.message || 'Nao consegui enviar a mensagem.');
 
   await supabase
     .from('matches')
@@ -791,4 +830,15 @@ export async function sendMessage(matchId: string, senderUid: string, text: stri
       last_message_at: now,
     })
     .eq('id', matchId);
+
+  const { error: pushError } = await supabase.functions.invoke('send-match-push', {
+    body: {
+      matchId,
+      messageId: messageData?.id,
+      senderName,
+      senderUid,
+      text: cleanText,
+    },
+  });
+  if (pushError) console.warn('Nao consegui enviar push do match', pushError);
 }

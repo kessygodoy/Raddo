@@ -14,6 +14,7 @@ type Props = {
 export default function Onboarding({ profile, onDone }: Props) {
   const { t } = useI18n();
   const [displayName, setDisplayName] = useState(profile.displayName);
+  const [age, setAge] = useState(profile.age ?? 18);
   const [bio, setBio] = useState(profile.bio);
   const [gender, setGender] = useState<GenderIdentity>(profile.gender);
   const [sexualities, setSexualities] = useState<Sexuality[]>(profile.sexualities);
@@ -47,6 +48,7 @@ export default function Onboarding({ profile, onDone }: Props) {
         .from('profiles')
         .update({
           display_name: displayName.trim(),
+          age,
           bio: bio.trim(),
           gender,
           sexualities,
@@ -95,6 +97,16 @@ export default function Onboarding({ profile, onDone }: Props) {
             placeholder={t('name')}
             value={displayName}
           />
+          <label className="grid gap-2 text-sm text-slate-300">
+            Idade: {age}
+            <input
+              max={99}
+              min={18}
+              onChange={(event) => setAge(Number(event.target.value))}
+              type="range"
+              value={age}
+            />
+          </label>
           <textarea
             className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 outline-none"
             onChange={(event) => setBio(event.target.value)}

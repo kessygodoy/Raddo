@@ -14,6 +14,7 @@ type ProfileRow = {
   lng: number | null;
   privacy_mode: PrivacyMode;
   visibility_radius: number;
+  age: number | null;
   gender: GenderIdentity;
   sexualities: Sexuality[] | null;
   looking_for: GenderIdentity[] | null;
@@ -41,6 +42,7 @@ function rowToProfile(row: ProfileRow): UserProfile {
         : null,
     privacyMode: row.privacy_mode,
     visibilityRadius: row.visibility_radius,
+    age: row.age ?? 18,
     gender: row.gender,
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? [],
@@ -60,6 +62,17 @@ function rowToProfile(row: ProfileRow): UserProfile {
 function hasAnyOverlap(a: string[], b: string[]) {
   if (a.length === 0 || b.length === 0) return true;
   return a.some((item) => b.includes(item));
+}
+
+function isAgeCompatible(me: UserProfile, profile: UserProfile) {
+  const meAge = me.age ?? 18;
+  const profileAge = profile.age ?? 18;
+  const myMin = me.minAgePreference ?? 18;
+  const myMax = me.maxAgePreference ?? 99;
+  const theirMin = profile.minAgePreference ?? 18;
+  const theirMax = profile.maxAgePreference ?? 99;
+
+  return profileAge >= myMin && profileAge <= myMax && meAge >= theirMin && meAge <= theirMax;
 }
 
 export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFilter) {
@@ -103,6 +116,7 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
       .filter((profile) => !blockedIds.has(profile.uid))
       .filter((profile) => !seenIds.has(profile.uid))
       .filter((profile) => genderFilter.length === 0 || genderFilter.includes(profile.gender))
+      .filter((profile) => isAgeCompatible(me, profile))
       .filter((profile) => profile.lookingFor.includes(me.gender))
       .filter((profile) => me.lookingFor.includes(profile.gender))
       .filter((profile) => hasAnyOverlap(profile.interestedSexualities, me.sexualities))

@@ -136,6 +136,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         photos: nextDraft.photos,
         privacy_mode: nextDraft.privacyMode,
         visibility_radius: nextDraft.visibilityRadius,
+        age: nextDraft.age ?? 18,
         gender: nextDraft.gender,
         sexualities: nextDraft.sexualities,
         looking_for: nextDraft.lookingFor,
@@ -287,6 +288,16 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
                     onChange={(event) => updateDraft('displayName', event.target.value)}
                     value={draft.displayName}
+                  />
+                </label>
+                <label className="grid gap-2 text-sm">
+                  Idade: {draft.age ?? 18}
+                  <input
+                    max={99}
+                    min={18}
+                    onChange={(event) => updateDraft('age', Number(event.target.value))}
+                    type="range"
+                    value={draft.age ?? 18}
                   />
                 </label>
                 <label className="grid gap-2 text-sm">

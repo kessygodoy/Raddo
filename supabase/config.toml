@@ -2,3 +2,6 @@ project_id = "zsmfrfiemthftuiyursr"
 
 [functions.send-map-event-push]
 verify_jwt = true
+
+[functions.send-match-push]
+verify_jwt = true

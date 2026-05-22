@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, LogOut, Megaphone, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
 import {
   approveMapEventRequest,
@@ -54,11 +54,37 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [managementView, setManagementView] = useState<ManagementView>(null);
   const [actionProfile, setActionProfile] = useState<UserProfile | null>(null);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
+  const messageAreaRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
 
-  const allMessages = useMemo(() => [...messages, ...optimisticMessages], [messages, optimisticMessages]);
+  const allMessages = useMemo(() => {
+    const persistedKeys = new Set(
+      messages.map((message) => `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}`),
+    );
+    const pendingMessages = optimisticMessages.filter((message) => {
+      const key = `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}`;
+      return !persistedKeys.has(key);
+    });
+
+    return [...messages, ...pendingMessages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  }, [messages, optimisticMessages]);
   const moderatorProfiles = participants.filter((profile) => moderators.includes(profile.uid));
   const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do chat';
   const expiresAt = new Date(Date.parse(event.createdAt) + 24 * 60 * 60 * 1000);
+
+  useEffect(() => {
+    const area = messageAreaRef.current;
+    if (!area || !shouldStickToBottomRef.current) return;
+
+    area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+  }, [allMessages.length]);
+
+  function handleMessageAreaScroll() {
+    const area = messageAreaRef.current;
+    if (!area) return;
+    const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom < 80;
+  }
 
   async function handleSubmit(submitEvent: FormEvent) {
     submitEvent.preventDefault();
@@ -71,6 +97,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
         senderName: me.displayName,
         text,
       });
+      shouldStickToBottomRef.current = true;
       setOptimisticMessages((current) => [
         ...current,
         {
@@ -202,8 +229,8 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-0 pt-[calc(env(safe-area-inset-top)+14px)] backdrop-blur-sm sm:place-items-center sm:p-6">
-      <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-14px)] max-h-[calc(100dvh-env(safe-area-inset-top)-14px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
+    <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-[calc(env(safe-area-inset-top)+14px)] backdrop-blur-sm sm:place-items-center sm:p-6">
+      <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] max-h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
         <header className="flex items-start justify-between gap-3 border-b border-white/10 p-4">
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold">{event.title}</h1>
@@ -294,7 +321,11 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           )}
         </section>
 
-        <div className="min-h-64 flex-1 space-y-3 overflow-auto p-4">
+        <div
+          className="min-h-64 flex-1 space-y-3 overflow-auto p-4"
+          onScroll={handleMessageAreaScroll}
+          ref={messageAreaRef}
+        >
           {allMessages.length === 0 && <p className="text-sm text-slate-300">Seja a primeira pessoa a falar neste evento.</p>}
           {allMessages.map((message) => {
             const mine = message.senderUid === me.uid;

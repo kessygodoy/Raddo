@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
-const RaddoNotificationChannelId = 'raddo-updates';
+const RaddoNotificationChannelId = 'raddo_push';
 
 async function ensureNotificationChannel() {
   if (!Capacitor.isNativePlatform()) return;

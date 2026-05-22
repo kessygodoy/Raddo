@@ -9,6 +9,7 @@ create table if not exists public.profiles (
   lng double precision,
   privacy_mode text not null default 'nearby' check (privacy_mode in ('exact', 'nearby')),
   visibility_radius double precision not null default 5 check (visibility_radius between 0.02 and 500),
+  age integer not null default 18,
   gender text not null default 'man' check (gender in ('man', 'woman', 'couple')),
   sexualities text[] not null default '{}',
   looking_for text[] not null default array['man', 'woman', 'couple'],
@@ -26,6 +27,7 @@ create table if not exists public.profiles (
 );
 
 alter table public.profiles add column if not exists sexualities text[] not null default '{}';
+alter table public.profiles add column if not exists age integer not null default 18;
 alter table public.profiles add column if not exists interested_sexualities text[] not null default '{}';
 alter table public.profiles add column if not exists min_age_preference integer not null default 18;
 alter table public.profiles add column if not exists max_age_preference integer not null default 60;
@@ -43,6 +45,8 @@ alter table public.profiles drop constraint if exists profiles_visibility_radius
 alter table public.profiles add constraint profiles_visibility_radius_check check (visibility_radius between 0.02 and 500);
 alter table public.profiles drop constraint if exists profiles_gender_check;
 alter table public.profiles add constraint profiles_gender_check check (gender in ('man', 'woman', 'couple'));
+alter table public.profiles drop constraint if exists profiles_age_check;
+alter table public.profiles add constraint profiles_age_check check (age between 18 and 99);
 alter table public.profiles drop constraint if exists profiles_age_preference_check;
 alter table public.profiles add constraint profiles_age_preference_check check (
   min_age_preference between 18 and 99
@@ -602,6 +606,7 @@ begin
     photos,
     privacy_mode,
     visibility_radius,
+    age,
     gender,
     sexualities,
     looking_for,
@@ -623,6 +628,7 @@ begin
     array['https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80'],
     'nearby',
     5,
+    18,
     'man',
     '{}',
     array['man', 'woman', 'couple'],

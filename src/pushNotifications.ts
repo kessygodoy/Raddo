@@ -3,9 +3,11 @@ import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from './supabase';
 
 let listenersReady = false;
+let currentPushUserUid = '';
 
 export async function registerDeviceForPush(userUid: string) {
   if (!Capacitor.isNativePlatform()) return;
+  currentPushUserUid = userUid;
 
   const permission = await PushNotifications.requestPermissions();
   if (permission.receive !== 'granted') return;
@@ -14,15 +16,12 @@ export async function registerDeviceForPush(userUid: string) {
     listenersReady = true;
 
     await PushNotifications.addListener('registration', async (token) => {
-      await supabase.from('device_push_tokens').upsert(
-        {
-          platform: Capacitor.getPlatform(),
-          token: token.value,
-          updated_at: new Date().toISOString(),
-          user_uid: userUid,
-        },
-        { onConflict: 'token' },
-      );
+      if (!currentPushUserUid) return;
+
+      await supabase.rpc('register_device_push_token', {
+        platform_value: Capacitor.getPlatform(),
+        token_value: token.value,
+      });
     });
 
     await PushNotifications.addListener('registrationError', (error) => {

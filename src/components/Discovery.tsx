@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Eye, Heart, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, Heart, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import {
   sendDislike,
@@ -27,6 +27,8 @@ export default function Discovery({ me, profiles }: Props) {
   const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
   const [videoAdContext, setVideoAdContext] = useState<'likes' | 'likedBy' | null>(null);
   const [likedByAdUnlocked, setLikedByAdUnlocked] = useState(false);
+  const [likedByModalOpen, setLikedByModalOpen] = useState(false);
+  const [likedByPage, setLikedByPage] = useState(0);
   const [handledLikedByIds, setHandledLikedByIds] = useState<Set<string>>(new Set());
   const [maxDistanceKm, setMaxDistanceKm] = useState(me.visibilityRadius || 50);
   const [onlineOnly, setOnlineOnly] = useState(false);
@@ -57,26 +59,46 @@ export default function Discovery({ me, profiles }: Props) {
   );
   const current = queue[0];
   const visibleLikedBy = likedByUnlocked ? likedBy.filter((profile) => !handledLikedByIds.has(profile.uid)) : [];
+  const likedByPageSize = 6;
+  const likedByTotalPages = Math.max(1, Math.ceil(visibleLikedBy.length / likedByPageSize));
+  const safeLikedByPage = Math.min(likedByPage, likedByTotalPages - 1);
+  const pagedLikedBy = visibleLikedBy.slice(safeLikedByPage * likedByPageSize, (safeLikedByPage + 1) * likedByPageSize);
 
   async function finishVideoAd() {
     if (videoAdContext === 'likedBy') {
       await unlockLikedBy(me.uid);
       setLikedByAdUnlocked(true);
+      setLikedByModalOpen(true);
+      setLikedByPage(0);
     }
     setVideoAdContext(null);
   }
 
-  async function handleUnlockLikedBy() {
+  async function handleUnlockLikedBy(openListAfterUnlock = false) {
     if (me.isPremium) return;
 
     const shownRealAd = await showRewardedVideoAd();
     if (shownRealAd) {
       await unlockLikedBy(me.uid);
       setLikedByAdUnlocked(true);
+      if (openListAfterUnlock) {
+        setLikedByModalOpen(true);
+        setLikedByPage(0);
+      }
       return;
     }
 
     setVideoAdContext('likedBy');
+  }
+
+  async function openLikedByList() {
+    if (likedByUnlocked) {
+      setLikedByModalOpen(true);
+      setLikedByPage(0);
+      return;
+    }
+
+    await handleUnlockLikedBy(true);
   }
 
   async function registerLikeForAds() {
@@ -236,6 +258,102 @@ export default function Discovery({ me, profiles }: Props) {
             </motion.section>
           </motion.div>
         )}
+        {likedByModalOpen && (
+          <motion.div
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-[65] grid place-items-center bg-black/70 p-4 backdrop-blur"
+            exit={{ opacity: 0 }}
+            initial={{ opacity: 0 }}
+          >
+            <motion.section
+              animate={{ scale: 1, y: 0 }}
+              className="flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-white/10 bg-[#07111f] text-white shadow-2xl"
+              initial={{ scale: 0.94, y: 18 }}
+            >
+              <header className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Quem te curtiu</h2>
+                  <p className="text-sm text-slate-300">
+                    {visibleLikedBy.length} {visibleLikedBy.length === 1 ? 'pessoa' : 'pessoas'}
+                  </p>
+                </div>
+                <button
+                  aria-label="Fechar lista"
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white"
+                  onClick={() => setLikedByModalOpen(false)}
+                  type="button"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden">
+                {visibleLikedBy.length === 0 ? (
+                  <p className="rounded-lg border border-white/10 bg-white/8 p-4 text-sm text-slate-300">
+                    NinguÃ©m te curtiu ainda.
+                  </p>
+                ) : (
+                  <div className="grid gap-2">
+                    {pagedLikedBy.map((profile) => (
+                      <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={profile.uid}>
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          onClick={() => setPreviewProfile(profile)}
+                          type="button"
+                        >
+                          <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
+                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
+                        </button>
+                        <button
+                          aria-label={`Recusar ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 text-rose-100"
+                          onClick={() => dislikeLikedByProfile(profile)}
+                          type="button"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                        <button
+                          aria-label={`Curtir ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal-300 text-slate-950"
+                          onClick={() => likeLikedByProfile(profile)}
+                          type="button"
+                        >
+                          <Heart className="h-4 w-4" />
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {visibleLikedBy.length > likedByPageSize && (
+                <footer className="flex items-center justify-between gap-3 border-t border-white/10 p-4">
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm font-semibold disabled:opacity-40"
+                    disabled={safeLikedByPage === 0}
+                    onClick={() => setLikedByPage((page) => Math.max(0, page - 1))}
+                    type="button"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Anterior
+                  </button>
+                  <span className="text-sm text-slate-300">
+                    {safeLikedByPage + 1} / {likedByTotalPages}
+                  </span>
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm font-semibold disabled:opacity-40"
+                    disabled={safeLikedByPage >= likedByTotalPages - 1}
+                    onClick={() => setLikedByPage((page) => Math.min(likedByTotalPages - 1, page + 1))}
+                    type="button"
+                  >
+                    PrÃ³xima
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </footer>
+              )}
+            </motion.section>
+          </motion.div>
+        )}
       </AnimatePresence>
       <div className="relative h-[68dvh] min-h-[480px] overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <AnimatePresence mode="popLayout">
@@ -342,21 +460,27 @@ export default function Discovery({ me, profiles }: Props) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold">Quem te curtiu</h2>
-            <p className="text-xs text-slate-300">
-              {me.isPremium ? 'Premium ativo: lista completa' : likedByUnlocked ? 'Lista completa liberada' : `${likedBy.length} curtidas recebidas`}
-            </p>
+            <p className="text-2xl font-semibold">{likedBy.length}</p>
+            <p className="text-xs text-slate-300">{likedBy.length === 1 ? 'pessoa curtiu vocÃª' : 'pessoas curtiram vocÃª'}</p>
           </div>
-          {!likedByUnlocked && (
+          {false && (
             <button
               className="h-10 rounded-lg bg-teal-300 px-3 text-sm font-semibold text-slate-950"
-              onClick={handleUnlockLikedBy}
+              onClick={() => handleUnlockLikedBy()}
               type="button"
             >
               Ver anúncio
             </button>
           )}
+          <button
+            className="h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+            onClick={openLikedByList}
+            type="button"
+          >
+            Ver lista
+          </button>
         </div>
-        {likedByUnlocked && (
+        {false && (
           <div className="mt-3 grid gap-2">
             {likedBy.length === 0 && <p className="text-sm text-slate-300">Ninguém te curtiu ainda.</p>}
             {visibleLikedBy.map((profile) => (

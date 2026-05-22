@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { ChevronsUpDown, Flag, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX } from 'lucide-react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Flag, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX } from 'lucide-react';
 import type { Match, Message, UserProfile } from '../types';
 import {
   blockProfile,
@@ -25,12 +25,14 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
   const [activeMatchId, setActiveMatchId] = useState('');
+  const [chatView, setChatView] = useState<'list' | 'conversation'>('list');
   const [text, setText] = useState('');
   const [actionMessage, setActionMessage] = useState('');
   const [matchMenuOpen, setMatchMenuOpen] = useState(false);
-  const [matchListExpanded, setMatchListExpanded] = useState(true);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
+  const messageAreaRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
   const activeMatch = useMemo(
     () => sortedMatches.find((match) => match.id === activeMatchId) ?? sortedMatches[0],
     [activeMatchId, sortedMatches],
@@ -38,17 +40,42 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const messages = useMessages(activeMatch?.id);
   const activeOtherUid = activeMatch?.users.find((uid) => uid !== currentUid) ?? activeMatch?.users[0] ?? '';
   const visibleMessages = useMemo(
-    () => [...messages, ...optimisticMessages.filter((message) => message.matchId === activeMatch?.id)],
+    () => {
+      const persistedKeys = new Set(
+        messages.map((message) => `${message.matchId}:${message.senderUid}:${message.text.trim().toLowerCase()}`),
+      );
+      const pendingMessages = optimisticMessages.filter((message) => {
+        if (message.matchId !== activeMatch?.id) return false;
+        const key = `${message.matchId}:${message.senderUid}:${message.text.trim().toLowerCase()}`;
+        return !persistedKeys.has(key);
+      });
+
+      return [...messages, ...pendingMessages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+    },
     [activeMatch?.id, messages, optimisticMessages],
   );
-  const visibleMatches = matchListExpanded || !activeMatch ? sortedMatches : [activeMatch];
-
   useEffect(() => {
     if (openMatchId && sortedMatches.some((match) => match.id === openMatchId)) {
       setActiveMatchId(openMatchId);
+      setChatView('conversation');
       setMatchMenuOpen(false);
     }
   }, [openMatchId, sortedMatches]);
+
+  useEffect(() => {
+    const area = messageAreaRef.current;
+    if (!area || chatView !== 'conversation') return;
+    if (!shouldStickToBottomRef.current) return;
+
+    area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+  }, [chatView, visibleMessages.length]);
+
+  function handleMessageAreaScroll() {
+    const area = messageAreaRef.current;
+    if (!area) return;
+    const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom < 80;
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -64,12 +91,14 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     };
 
     setOptimisticMessages((current) => [...current, nextMessage]);
+    shouldStickToBottomRef.current = true;
     setText('');
-    await sendMessage(activeMatch.id, currentUid, cleanText);
+    await sendMessage(activeMatch.id, currentUid, cleanText, currentProfile.displayName);
   }
 
   function selectMatch(matchId: string) {
     setActiveMatchId(matchId);
+    setChatView('conversation');
     setMatchMenuOpen(false);
   }
 
@@ -134,7 +163,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   }
 
   return (
-    <section className="grid min-h-[72dvh] overflow-hidden rounded-lg border border-white/10 bg-[#0b1724] shadow-2xl md:grid-cols-[330px_1fr]">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1724] shadow-2xl">
       {previewProfile && (
         <ProfilePreview
           me={currentProfile}
@@ -144,32 +173,28 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           profile={previewProfile}
         />
       )}
-      <aside className="min-h-0 border-b border-white/10 bg-[#0f1f2d] md:border-b-0 md:border-r md:border-white/10">
+
+      {chatView === 'list' && (
+      <aside className="flex min-h-0 flex-1 flex-col bg-[#0f1f2d]">
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
           <h1 className="text-lg font-semibold">Conversas</h1>
           <MessageCircle className="h-5 w-5 text-teal-300" />
         </div>
 
-        {matchListExpanded && (
-          <div className="border-b border-white/10 p-3">
-            <label className="flex h-10 items-center gap-2 rounded-lg bg-[#07111f] px-3 text-slate-300">
-              <Search className="h-4 w-4" />
-              <input
-                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-500"
-                placeholder="Pesquisar conversa"
-                type="search"
-              />
-            </label>
-          </div>
-        )}
+        <div className="border-b border-white/10 p-3">
+          <label className="flex h-10 items-center gap-2 rounded-lg bg-[#07111f] px-3 text-slate-300">
+            <Search className="h-4 w-4" />
+            <input
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-500"
+              placeholder="Pesquisar conversa"
+              type="search"
+            />
+          </label>
+        </div>
 
-        <div
-          className={`scrollbar-hidden overflow-auto transition-[max-height] duration-300 ${
-            matchListExpanded ? 'max-h-72 md:max-h-[calc(72dvh-10.5rem)]' : 'max-h-[76px]'
-          }`}
-        >
+        <div className="scrollbar-hidden min-h-0 flex-1 overflow-auto">
           {sortedMatches.length === 0 && <p className="p-4 text-sm text-slate-300">Nenhum match ainda.</p>}
-          {visibleMatches.map((match) => {
+          {sortedMatches.map((match) => {
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
             const isActive = activeMatch?.id === match.id;
@@ -240,29 +265,52 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             );
           })}
         </div>
-        {sortedMatches.length > 1 && (
-          <div className="flex justify-center border-t border-white/10 py-2">
-            <button
-              aria-label={matchListExpanded ? 'Diminuir lista de matches' : 'Aumentar lista de matches'}
-              className="grid h-7 w-7 place-items-center rounded-full border border-white/10 bg-[#07111f] text-slate-200 shadow-lg transition hover:bg-white/8"
-              onClick={() => setMatchListExpanded((current) => !current)}
-              title={matchListExpanded ? 'Diminuir lista' : 'Aumentar lista'}
-              type="button"
-            >
-              <ChevronsUpDown className="h-4 w-4" />
-            </button>
-          </div>
-        )}
       </aside>
+      )}
 
-      <div className="flex min-h-[58dvh] flex-col bg-[#07111f]">
+      {chatView === 'conversation' && (
+      <div className="flex min-h-0 flex-1 flex-col bg-[#07111f]">
         {activeMatch && (
           <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-[#0f1f2d] px-3 py-2">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold">
-                {profilesByUid[activeOtherUid]?.displayName ?? `Match ${activeOtherUid.slice(-4)}`}
-              </p>
-              {actionMessage && <p className="truncate text-xs text-slate-300">{actionMessage}</p>}
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                aria-label="Voltar para conversas"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-100 transition hover:bg-white/8"
+                onClick={() => {
+                  setChatView('list');
+                  setMatchMenuOpen(false);
+                }}
+                type="button"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <button
+                className="flex min-w-0 items-center gap-2 text-left"
+                disabled={!profilesByUid[activeOtherUid]}
+                onClick={() => {
+                  const profile = profilesByUid[activeOtherUid];
+                  if (profile) setPreviewProfile(profile);
+                }}
+                type="button"
+              >
+                {profilesByUid[activeOtherUid]?.photoURL ? (
+                  <img
+                    alt=""
+                    className="h-10 w-10 shrink-0 rounded-full object-cover"
+                    src={profilesByUid[activeOtherUid]?.photoURL}
+                  />
+                ) : (
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-900 text-xs text-teal-200">
+                    {(profilesByUid[activeOtherUid]?.displayName ?? `M${activeOtherUid.slice(-1)}`).slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">
+                    {profilesByUid[activeOtherUid]?.displayName ?? `Match ${activeOtherUid.slice(-4)}`}
+                  </p>
+                  {actionMessage && <p className="truncate text-xs text-slate-300">{actionMessage}</p>}
+                </div>
+              </button>
             </div>
             <div className="relative shrink-0">
               <button
@@ -305,7 +353,11 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           </div>
         )}
 
-        <div className="chat-message-area scrollbar-hidden flex-1 space-y-2 overflow-auto p-4">
+        <div
+          className="chat-message-area scrollbar-hidden flex-1 space-y-2 overflow-auto p-4"
+          onScroll={handleMessageAreaScroll}
+          ref={messageAreaRef}
+        >
           {!activeMatch && <p className="text-sm text-slate-300">Escolha uma conversa para começar.</p>}
           {visibleMessages.map((message) => {
             const mine = message.senderUid === currentUid;
@@ -345,6 +397,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           </button>
         </form>
       </div>
+      )}
     </section>
   );
 }

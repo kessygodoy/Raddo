@@ -32,6 +32,7 @@ export type UserProfile = {
   location: LatLng | null;
   privacyMode: PrivacyMode;
   visibilityRadius: number;
+  age: number;
   gender: GenderIdentity;
   sexualities: Sexuality[];
   lookingFor: GenderIdentity[];

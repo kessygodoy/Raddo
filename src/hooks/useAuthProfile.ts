@@ -13,6 +13,7 @@ type ProfileRow = {
   lng: number | null;
   privacy_mode: PrivacyMode;
   visibility_radius: number;
+  age: number | null;
   gender: GenderIdentity;
   sexualities: Sexuality[] | null;
   looking_for: GenderIdentity[] | null;
@@ -48,6 +49,7 @@ function rowToProfile(row: ProfileRow): UserProfile {
     location,
     privacyMode: row.privacy_mode,
     visibilityRadius: row.visibility_radius,
+    age: row.age ?? 18,
     gender: row.gender,
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? ['man', 'woman', 'couple'],
@@ -82,6 +84,7 @@ function createEmptyProfile(user: User) {
     photos: [photoURL],
     privacy_mode: 'nearby' as PrivacyMode,
     visibility_radius: 5,
+    age: 18,
     gender: 'man' as GenderIdentity,
     sexualities: [],
     looking_for: ['man', 'woman', 'couple'] as GenderIdentity[],

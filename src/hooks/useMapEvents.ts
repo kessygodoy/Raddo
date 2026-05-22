@@ -58,6 +58,7 @@ type ProfileRow = {
   lng: number | null;
   privacy_mode: UserProfile['privacyMode'];
   visibility_radius: number;
+  age: number | null;
   gender: UserProfile['gender'];
   sexualities: UserProfile['sexualities'] | null;
   looking_for: UserProfile['lookingFor'] | null;
@@ -126,6 +127,7 @@ function rowToProfile(row: ProfileRow): UserProfile {
     location: typeof row.lat === 'number' && typeof row.lng === 'number' ? { lat: row.lat, lng: row.lng } : null,
     privacyMode: row.privacy_mode,
     visibilityRadius: row.visibility_radius,
+    age: row.age ?? 18,
     gender: row.gender,
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? [],
@@ -173,9 +175,19 @@ export function useMapEvents(me: UserProfile | null) {
       .channel('map-events')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_events' }, loadEvents)
       .subscribe();
+    const refreshTimer = window.setInterval(loadEvents, 5000);
+    const handleFocus = () => loadEvents();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadEvents();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [me]);
@@ -287,10 +299,21 @@ export function useJoinedMapEvents(uid: string | undefined) {
         { event: '*', schema: 'public', table: 'map_event_participants', filter: `user_uid=eq.${uid}` },
         loadEvents,
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_events' }, loadEvents)
       .subscribe();
+    const refreshTimer = window.setInterval(loadEvents, 5000);
+    const handleFocus = () => loadEvents();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadEvents();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [uid]);
@@ -347,17 +370,47 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
 
     loadMessages();
 
+    function upsertMessage(row: EventMessageRow) {
+      const nextMessage = rowToMessage(row);
+      setMessages((current) => {
+        const byId = new Map(current.map((message) => [message.id, message]));
+        byId.set(nextMessage.id, nextMessage);
+        return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      });
+    }
+
     const channel = supabase
       .channel(`map-event-messages:${eventId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'map_event_messages', filter: `event_id=eq.${eventId}` },
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            upsertMessage(payload.new as EventMessageRow);
+            return;
+          }
+          loadMessages();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'map_event_participants', filter: `event_id=eq.${eventId}` },
         loadMessages,
       )
       .subscribe();
+    const refreshTimer = window.setInterval(loadMessages, 2500);
+    const handleFocus = () => loadMessages();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadMessages();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [eventId, viewerUid]);
@@ -409,9 +462,19 @@ export function useMapEventParticipants(eventId: string | undefined, me: UserPro
         loadParticipants,
       )
       .subscribe();
+    const refreshTimer = window.setInterval(loadParticipants, 5000);
+    const handleFocus = () => loadParticipants();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadParticipants();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [eventId, me]);
@@ -473,9 +536,19 @@ export function useMapEventParticipantCounts(events: MapEvent[]) {
       .channel(`map-event-participant-counts:${eventIds.join(':')}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_participants' }, loadCounts)
       .subscribe();
+    const refreshTimer = window.setInterval(loadCounts, 5000);
+    const handleFocus = () => loadCounts();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) loadCounts();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [eventIdsKey]);
@@ -921,7 +994,7 @@ export async function sendMapEventMessage(input: {
 
   if (error) throw new Error(error.message);
 
-  void supabase.functions.invoke('send-map-event-push', {
+  const { error: pushError } = await supabase.functions.invoke('send-map-event-push', {
     body: {
       eventId: input.eventId,
       messageId: data?.id,
@@ -930,4 +1003,5 @@ export async function sendMapEventMessage(input: {
       text: cleanText,
     },
   });
+  if (pushError) console.warn('Nao consegui enviar push do chat local', pushError);
 }
