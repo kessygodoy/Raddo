@@ -8,12 +8,18 @@ create table if not exists public.profiles (
   lat double precision,
   lng double precision,
   privacy_mode text not null default 'nearby' check (privacy_mode in ('exact', 'nearby')),
+  appear_in_cards boolean not null default true,
+  show_distance boolean not null default true,
+  show_online_status boolean not null default true,
   visibility_radius double precision not null default 5 check (visibility_radius between 0.02 and 500),
   age integer not null default 18,
   gender text not null default 'man' check (gender in ('man', 'woman', 'couple')),
+  gender_identities text[] not null default '{}',
   sexualities text[] not null default '{}',
   looking_for text[] not null default array['man', 'woman', 'couple'],
   interested_sexualities text[] not null default '{}',
+  interests text[] not null default '{}',
+  relationship_goals text[] not null default '{}',
   min_age_preference integer not null default 18,
   max_age_preference integer not null default 60,
   last_seen timestamptz,
@@ -28,7 +34,13 @@ create table if not exists public.profiles (
 
 alter table public.profiles add column if not exists sexualities text[] not null default '{}';
 alter table public.profiles add column if not exists age integer not null default 18;
+alter table public.profiles add column if not exists appear_in_cards boolean not null default true;
+alter table public.profiles add column if not exists show_distance boolean not null default true;
+alter table public.profiles add column if not exists show_online_status boolean not null default true;
 alter table public.profiles add column if not exists interested_sexualities text[] not null default '{}';
+alter table public.profiles add column if not exists gender_identities text[] not null default '{}';
+alter table public.profiles add column if not exists interests text[] not null default '{}';
+alter table public.profiles add column if not exists relationship_goals text[] not null default '{}';
 alter table public.profiles add column if not exists min_age_preference integer not null default 18;
 alter table public.profiles add column if not exists max_age_preference integer not null default 60;
 alter table public.profiles add column if not exists is_premium boolean not null default false;
@@ -41,6 +53,9 @@ update public.profiles set gender = 'man' where gender not in ('man', 'woman', '
 update public.profiles
 set looking_for = array['man', 'woman', 'couple']
 where looking_for is null or looking_for && array['women', 'men', 'nonbinary'];
+update public.profiles
+set gender_identities = array[gender]
+where gender_identities = '{}';
 alter table public.profiles drop constraint if exists profiles_visibility_radius_check;
 alter table public.profiles add constraint profiles_visibility_radius_check check (visibility_radius between 0.02 and 500);
 alter table public.profiles drop constraint if exists profiles_gender_check;
@@ -82,9 +97,43 @@ create table if not exists public.reports (
   id uuid primary key default gen_random_uuid(),
   reporter_uid uuid not null references auth.users(id) on delete cascade,
   reported_uid uuid not null references auth.users(id) on delete cascade,
+  context_type text not null default 'profile',
+  context_id text not null default '',
+  context_title text not null default '',
   reason text not null default 'reported_profile',
+  recent_messages jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   check (reporter_uid <> reported_uid)
+);
+
+create table if not exists public.image_moderation_reports (
+  id uuid primary key default gen_random_uuid(),
+  owner_uid uuid not null references auth.users(id) on delete cascade,
+  owner_email text not null default '',
+  owner_display_name text not null default '',
+  bucket text not null,
+  storage_path text not null,
+  public_url text not null,
+  context text not null default 'image',
+  reasons text[] not null default '{}',
+  recent_messages jsonb not null default '[]'::jsonb,
+  safe_search jsonb not null default '{}'::jsonb,
+  status text not null default 'pending_human_review',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.app_moderators (
+  user_uid uuid primary key references auth.users(id) on delete cascade,
+  role text not null default 'moderator' check (role in ('admin', 'moderator')),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.app_bans (
+  banned_uid uuid primary key references auth.users(id) on delete cascade,
+  banned_by_uid uuid not null references auth.users(id) on delete cascade,
+  reason text not null default 'violacao_das_regras',
+  created_at timestamptz not null default now(),
+  check (banned_uid <> banned_by_uid)
 );
 
 create table if not exists public.matches (
@@ -100,6 +149,11 @@ create table if not exists public.messages (
   match_id text not null references public.matches(id) on delete cascade,
   sender_uid uuid not null references auth.users(id) on delete cascade,
   text text not null check (length(text) between 1 and 1000),
+  message_type text not null default 'text',
+  image_url text not null default '',
+  image_path text not null default '',
+  view_once boolean not null default false,
+  viewed_by uuid[] not null default '{}',
   created_at timestamptz not null default now()
 );
 
@@ -142,6 +196,11 @@ create table if not exists public.map_event_messages (
   sender_uid uuid not null,
   sender_name text not null default 'Pessoa',
   text text not null check (length(text) between 1 and 1000),
+  message_type text not null default 'text',
+  image_url text not null default '',
+  image_path text not null default '',
+  view_once boolean not null default false,
+  viewed_by uuid[] not null default '{}',
   created_at timestamptz not null default now()
 );
 
@@ -214,6 +273,9 @@ alter table public.likes enable row level security;
 alter table public.passes enable row level security;
 alter table public.blocks enable row level security;
 alter table public.reports enable row level security;
+alter table public.image_moderation_reports enable row level security;
+alter table public.app_moderators enable row level security;
+alter table public.app_bans enable row level security;
 alter table public.matches enable row level security;
 alter table public.messages enable row level security;
 alter table public.map_events enable row level security;
@@ -240,6 +302,7 @@ drop policy if exists "users create own blocks" on public.blocks;
 drop policy if exists "users delete own blocks" on public.blocks;
 drop policy if exists "users create reports" on public.reports;
 drop policy if exists "users read own reports" on public.reports;
+drop policy if exists "users read own image moderation reports" on public.image_moderation_reports;
 drop policy if exists "match members read matches" on public.matches;
 drop policy if exists "match members create matches" on public.matches;
 drop policy if exists "match members update matches" on public.matches;
@@ -358,6 +421,21 @@ on public.reports for select
 to authenticated
 using (auth.uid() = reporter_uid);
 
+create policy "moderators read reports"
+on public.reports for select
+to authenticated
+using (public.is_app_moderator());
+
+create policy "users read own image moderation reports"
+on public.image_moderation_reports for select
+to authenticated
+using (auth.uid() = owner_uid);
+
+create policy "moderators read image moderation reports"
+on public.image_moderation_reports for select
+to authenticated
+using (public.is_app_moderator());
+
 create policy "match members read matches"
 on public.matches for select
 to authenticated
@@ -383,8 +461,9 @@ grant select, insert, delete on public.likes to authenticated;
 grant select, insert, delete on public.passes to authenticated;
 grant select, insert, delete on public.blocks to authenticated;
 grant select, insert on public.reports to authenticated;
+grant select on public.image_moderation_reports to authenticated;
 grant select, insert, update, delete on public.matches to authenticated;
-grant select, insert on public.messages to authenticated;
+grant select, insert, update on public.messages to authenticated;
 
 create policy "match members read messages"
 on public.messages for select
@@ -403,6 +482,25 @@ to authenticated
 with check (
   auth.uid() = sender_uid
   and exists (
+    select 1 from public.matches
+    where matches.id = messages.match_id
+    and auth.uid() = any(matches.users)
+  )
+);
+
+drop policy if exists "match members update message views" on public.messages;
+create policy "match members update message views"
+on public.messages for update
+to authenticated
+using (
+  exists (
+    select 1 from public.matches
+    where matches.id = messages.match_id
+    and auth.uid() = any(matches.users)
+  )
+)
+with check (
+  exists (
     select 1 from public.matches
     where matches.id = messages.match_id
     and auth.uid() = any(matches.users)
@@ -454,6 +552,25 @@ with check (
   )
 );
 
+drop policy if exists "event participants update message views" on public.map_event_messages;
+create policy "event participants update message views"
+on public.map_event_messages for update
+to authenticated
+using (
+  exists (
+    select 1 from public.map_event_participants
+    where map_event_participants.event_id = map_event_messages.event_id
+      and map_event_participants.user_uid = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.map_event_participants
+    where map_event_participants.event_id = map_event_messages.event_id
+      and map_event_participants.user_uid = auth.uid()
+  )
+);
+
 drop policy if exists "event participants are readable" on public.map_event_participants;
 create policy "event participants are readable"
 on public.map_event_participants for select
@@ -473,7 +590,7 @@ to authenticated
 using (auth.uid() = user_uid);
 
 grant select, insert, delete on public.map_events to authenticated;
-grant select, insert on public.map_event_messages to authenticated;
+grant select, insert, update on public.map_event_messages to authenticated;
 grant select, insert, delete on public.map_event_participants to authenticated;
 grant select, insert, delete on public.map_event_moderators to authenticated;
 grant select, insert, delete on public.map_event_join_requests to authenticated;
@@ -605,12 +722,18 @@ begin
     photo_url,
     photos,
     privacy_mode,
+    appear_in_cards,
+    show_distance,
+    show_online_status,
     visibility_radius,
     age,
     gender,
+    gender_identities,
     sexualities,
     looking_for,
     interested_sexualities,
+    interests,
+    relationship_goals,
     min_age_preference,
     max_age_preference,
     bio,
@@ -627,11 +750,17 @@ begin
     'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80',
     array['https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80'],
     'nearby',
+    true,
+    true,
+    true,
     5,
     18,
     'man',
+    array['man'],
     '{}',
     array['man', 'woman', 'couple'],
+    '{}',
+    '{}',
     '{}',
     18,
     60,

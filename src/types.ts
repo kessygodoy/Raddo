@@ -4,7 +4,9 @@ export type AppTheme = 'dark' | 'light' | 'pride';
 export type AppLanguage = 'pt-BR' | 'en-US' | 'es';
 export type MapEventAccessMode = 'open' | 'approval' | 'password';
 
-export type GenderIdentity = 'man' | 'woman' | 'couple';
+export type GenderIdentity = 'man' | 'woman' | 'couple' | 'nonbinary' | 'trans' | 'other' | 'prefer_not_to_say';
+export type ProfileInterest = 'games' | 'gym' | 'anime' | 'technology' | 'music' | 'travel' | 'cars' | 'pets';
+export type RelationshipGoal = 'dating' | 'friendship' | 'chat' | 'casual';
 
 export type Sexuality =
   | 'hetero'
@@ -31,12 +33,18 @@ export type UserProfile = {
   photos: string[];
   location: LatLng | null;
   privacyMode: PrivacyMode;
+  appearInCards: boolean;
+  showDistance: boolean;
+  showOnlineStatus: boolean;
   visibilityRadius: number;
   age: number;
   gender: GenderIdentity;
+  genderIdentities: GenderIdentity[];
   sexualities: Sexuality[];
   lookingFor: GenderIdentity[];
   interestedSexualities: Sexuality[];
+  interests: ProfileInterest[];
+  relationshipGoals: RelationshipGoal[];
   minAgePreference?: number;
   maxAgePreference?: number;
   lastSeen: string | null;
@@ -67,6 +75,11 @@ export type Message = {
   senderUid: string;
   text: string;
   matchId: string;
+  messageType: 'image' | 'text';
+  imageURL: string;
+  imagePath: string;
+  viewOnce: boolean;
+  viewedBy: string[];
   createdAt: string;
 };
 
@@ -91,6 +104,11 @@ export type MapEventMessage = {
   senderUid: string;
   senderName: string;
   text: string;
+  messageType: 'image' | 'text';
+  imageURL: string;
+  imagePath: string;
+  viewOnce: boolean;
+  viewedBy: string[];
   createdAt: string;
 };
 

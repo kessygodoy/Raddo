@@ -16,6 +16,11 @@ type MessageRow = {
   sender_uid: string;
   text: string;
   match_id: string;
+  message_type: 'image' | 'text' | null;
+  image_url: string | null;
+  image_path: string | null;
+  view_once: boolean | null;
+  viewed_by: string[] | null;
   created_at: string;
 };
 
@@ -27,12 +32,18 @@ type ProfileRow = {
   lat: number | null;
   lng: number | null;
   privacy_mode: UserProfile['privacyMode'];
+  appear_in_cards: boolean | null;
+  show_distance: boolean | null;
+  show_online_status: boolean | null;
   visibility_radius: number;
   age: number | null;
   gender: UserProfile['gender'];
+  gender_identities: UserProfile['genderIdentities'] | null;
   sexualities: UserProfile['sexualities'] | null;
   looking_for: UserProfile['lookingFor'] | null;
   interested_sexualities: UserProfile['interestedSexualities'] | null;
+  interests: UserProfile['interests'] | null;
+  relationship_goals: UserProfile['relationshipGoals'] | null;
   last_seen: string | null;
   bio: string | null;
   is_premium: boolean | null;
@@ -64,6 +75,11 @@ function rowToMessage(row: MessageRow): Message {
     senderUid: row.sender_uid,
     text: row.text,
     matchId: row.match_id,
+    messageType: row.message_type ?? 'text',
+    imageURL: row.image_url ?? '',
+    imagePath: row.image_path ?? '',
+    viewOnce: Boolean(row.view_once),
+    viewedBy: row.viewed_by ?? [],
     createdAt: row.created_at,
   };
 }
@@ -76,12 +92,18 @@ function rowToProfile(row: ProfileRow): UserProfile {
     photos: row.photos ?? [row.photo_url],
     location: typeof row.lat === 'number' && typeof row.lng === 'number' ? { lat: row.lat, lng: row.lng } : null,
     privacyMode: row.privacy_mode,
+    appearInCards: row.appear_in_cards ?? true,
+    showDistance: row.show_distance ?? true,
+    showOnlineStatus: row.show_online_status ?? true,
     visibilityRadius: row.visibility_radius,
     age: row.age ?? 18,
     gender: row.gender,
+    genderIdentities: row.gender_identities ?? [row.gender],
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? [],
     interestedSexualities: row.interested_sexualities ?? [],
+    interests: row.interests ?? [],
+    relationshipGoals: row.relationship_goals ?? [],
     lastSeen: row.last_seen,
     bio: row.bio ?? '',
     isPremium: Boolean(row.is_premium),
@@ -169,6 +191,11 @@ export function useMessages(matchId?: string) {
           senderUid: otherUid,
           text: 'Oi, vi seu perfil no Raddo.',
           matchId,
+          messageType: 'text',
+          imageURL: '',
+          imagePath: '',
+          viewOnce: false,
+          viewedBy: [],
           createdAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
         },
         {
@@ -176,6 +203,11 @@ export function useMessages(matchId?: string) {
           senderUid: 'demo-user',
           text: 'Oi! Tambem apareceu match aqui.',
           matchId,
+          messageType: 'text',
+          imageURL: '',
+          imagePath: '',
+          viewOnce: false,
+          viewedBy: [],
           createdAt: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
         },
         {
@@ -183,6 +215,11 @@ export function useMessages(matchId?: string) {
           senderUid: otherUid,
           text: 'Legal, você está por perto?',
           matchId,
+          messageType: 'text',
+          imageURL: '',
+          imagePath: '',
+          viewOnce: false,
+          viewedBy: [],
           createdAt: new Date(Date.now() - 1000 * 60 * 7).toISOString(),
         },
       ]);
@@ -440,13 +477,42 @@ export async function unblockProfile(currentUid: string, blockedUid: string) {
   if (error) throw new Error(error.message || 'Não consegui desbloquear essa pessoa.');
 }
 
+async function loadRecentReportedProfileMessages(reporterUid: string, reportedUid: string) {
+  const { data: matchRows } = await supabase
+    .from('matches')
+    .select('id')
+    .contains('users', [reporterUid, reportedUid])
+    .limit(1);
+  const matchId = matchRows?.[0]?.id as string | undefined;
+  if (!matchId) return [];
+
+  const { data } = await supabase
+    .from('messages')
+    .select('id,sender_uid,text,message_type,image_url,created_at')
+    .eq('match_id', matchId)
+    .eq('sender_uid', reportedUid)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  return (data ?? []).map((message) => ({
+    id: message.id,
+    createdAt: message.created_at,
+    imageUrl: message.image_url,
+    messageType: message.message_type,
+    senderUid: message.sender_uid,
+    text: message.text,
+  }));
+}
+
 export async function reportProfile(reporterUid: string, reportedUid: string, reason = 'reported_profile') {
   if (isDemoMode) return;
 
+  const recentMessages = await loadRecentReportedProfileMessages(reporterUid, reportedUid);
   const { error } = await supabase.from('reports').insert({
     reporter_uid: reporterUid,
     reported_uid: reportedUid,
     reason,
+    recent_messages: recentMessages,
     created_at: new Date().toISOString(),
   });
 
@@ -770,12 +836,18 @@ export function useLikedBy(me: UserProfile | null) {
               ? { lat: row.lat, lng: row.lng }
               : null,
           privacyMode: row.privacy_mode,
+          appearInCards: row.appear_in_cards ?? true,
+          showDistance: row.show_distance ?? true,
+          showOnlineStatus: row.show_online_status ?? true,
           visibilityRadius: row.visibility_radius,
           age: row.age ?? 18,
           gender: row.gender,
+          genderIdentities: row.gender_identities ?? [row.gender],
           sexualities: row.sexualities ?? [],
           lookingFor: row.looking_for ?? [],
           interestedSexualities: row.interested_sexualities ?? [],
+          interests: row.interests ?? [],
+          relationshipGoals: row.relationship_goals ?? [],
           lastSeen: row.last_seen,
           bio: row.bio ?? '',
           isPremium: Boolean(row.is_premium),
@@ -803,10 +875,16 @@ export function useLikedBy(me: UserProfile | null) {
   return profiles;
 }
 
-export async function sendMessage(matchId: string, senderUid: string, text: string, senderName = 'Raddo') {
+export async function sendMessage(
+  matchId: string,
+  senderUid: string,
+  text: string,
+  senderName = 'Raddo',
+  image?: { imagePath?: string; imageURL: string; viewOnce: boolean },
+) {
   if (isDemoMode) return;
 
-  const cleanText = text.trim();
+  const cleanText = text.trim() || (image ? 'Imagem' : '');
   if (!cleanText) return;
 
   const now = new Date().toISOString();
@@ -816,6 +894,11 @@ export async function sendMessage(matchId: string, senderUid: string, text: stri
       sender_uid: senderUid,
       text: cleanText,
       match_id: matchId,
+      message_type: image ? 'image' : 'text',
+      image_url: image?.imageURL ?? '',
+      image_path: image?.imagePath ?? '',
+      view_once: image?.viewOnce ?? false,
+      viewed_by: [],
       created_at: now,
     })
     .select('id')
@@ -841,4 +924,41 @@ export async function sendMessage(matchId: string, senderUid: string, text: stri
     },
   });
   if (pushError) console.warn('Nao consegui enviar push do match', pushError);
+}
+
+export async function editMessage(message: Message, viewerUid: string, nextText: string) {
+  const cleanText = nextText.trim();
+  if (isDemoMode || message.senderUid !== viewerUid || message.messageType !== 'text' || !cleanText) return;
+
+  const { error } = await supabase
+    .from('messages')
+    .update({ text: cleanText })
+    .eq('id', message.id)
+    .eq('sender_uid', viewerUid);
+  if (error) throw new Error(error.message || 'Não consegui editar a mensagem.');
+}
+
+export async function deleteMessage(message: Message, viewerUid: string) {
+  if (isDemoMode || message.senderUid !== viewerUid) return;
+
+  const rpcResult = await supabase.rpc('delete_match_message', {
+    target_message_id: message.id,
+  });
+
+  if (!rpcResult.error) return;
+
+  const missingFunction =
+    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('delete_match_message');
+  if (!missingFunction) throw new Error(rpcResult.error.message || 'Nao consegui excluir a mensagem.');
+
+  const { error } = await supabase.from('messages').delete().eq('id', message.id).eq('sender_uid', viewerUid);
+  if (error) throw new Error(error.message || 'Não consegui excluir a mensagem.');
+}
+
+export async function markMessageImageViewed(message: Message, viewerUid: string) {
+  if (isDemoMode || message.senderUid === viewerUid || message.viewedBy.includes(viewerUid)) return;
+
+  const nextViewedBy = [...new Set([...message.viewedBy, viewerUid])];
+  const { error } = await supabase.from('messages').update({ viewed_by: nextViewedBy }).eq('id', message.id);
+  if (error) throw new Error(error.message || 'Não consegui marcar a imagem como vista.');
 }

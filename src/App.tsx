@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, Heart, LogOut, Map as MapIcon, Radar, Sparkles, UserRound } from 'lucide-react';
+import { Bell, Heart, LogOut, Map as MapIcon, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
@@ -17,6 +17,7 @@ import Onboarding from './components/Onboarding';
 import NotificationsPanel from './components/NotificationsPanel';
 import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
 import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
+import { installAndroidApkUpdate } from './androidUpdater';
 
 const navItems = [
   { id: 'radar', labelKey: 'navRadar', icon: Radar },
@@ -25,11 +26,24 @@ const navItems = [
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
 
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '0.1.0';
+const APP_UPDATE_URL = import.meta.env.VITE_APP_UPDATE_URL || '/version.json';
+
+type AppUpdateInfo = {
+  version?: string;
+  message?: string;
+  url?: string;
+  apkUrl?: string;
+};
+
 export default function App() {
   const [view, setView] = useState<AppView>('radar');
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [openMatchId, setOpenMatchId] = useState('');
+  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [updateInstallMessage, setUpdateInstallMessage] = useState('');
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
   const [theme, setTheme] = useState<AppTheme>(() => {
     const savedTheme = window.localStorage.getItem('radar-match-theme');
@@ -48,8 +62,9 @@ export default function App() {
     setLanguageState(nextLanguage);
   }
 
-  function openRadarPanel(panel: 'my-chats' | 'people') {
+  function openRadarPanel(panel: 'chats' | 'my-chats' | 'nearby-chats' | 'people') {
     setView('radar');
+    setHeaderMenuOpen(false);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(`raddo:open-${panel}`));
     }, 80);
@@ -67,6 +82,37 @@ export default function App() {
 
   useEffect(() => {
     hideAdMobBanner();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkForUpdate() {
+      try {
+        const response = await fetch(`${APP_UPDATE_URL}?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) return;
+
+        const info = await response.json() as AppUpdateInfo;
+        if (!info.version || info.version === APP_VERSION) return;
+        if (window.localStorage.getItem(`raddo-update-dismissed:${info.version}`) === 'yes') return;
+        if (!cancelled) setAvailableUpdate(info);
+      } catch {
+        // Update checks are opportunistic; the app must keep working offline.
+      }
+    }
+
+    void checkForUpdate();
+    const timer = window.setInterval(checkForUpdate, 10 * 60 * 1000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void checkForUpdate();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -244,6 +290,24 @@ export default function App() {
     setView('chat');
   }
 
+  async function installAvailableUpdate() {
+    if (!availableUpdate) return;
+
+    setUpdateInstallMessage('');
+    try {
+      if (availableUpdate.apkUrl) {
+        await installAndroidApkUpdate(availableUpdate.apkUrl);
+        setUpdateInstallMessage('Download iniciado. Quando terminar, confirme a instalação na tela do Android.');
+      } else if (availableUpdate.url) {
+        window.location.href = availableUpdate.url;
+      } else {
+        window.location.reload();
+      }
+    } catch (error) {
+      setUpdateInstallMessage(error instanceof Error ? error.message : 'Não consegui iniciar a atualização.');
+    }
+  }
+
   let content;
 
   if (!hasSupabaseConfig && !isDemoMode) {
@@ -318,6 +382,39 @@ export default function App() {
             </section>
           </div>
         )}
+        {availableUpdate && (
+          <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
+            <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+              <h1 className="text-xl font-semibold">Nova versão disponível</h1>
+              <p className="mt-2 text-sm text-slate-300">
+                {availableUpdate.message || 'Existe uma atualização do Raddo. Deseja atualizar agora?'}
+              </p>
+              {updateInstallMessage && <p className="mt-3 rounded-lg bg-white/8 p-3 text-xs text-slate-200">{updateInstallMessage}</p>}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                  onClick={() => {
+                    if (availableUpdate.version) {
+                      window.localStorage.setItem(`raddo-update-dismissed:${availableUpdate.version}`, 'yes');
+                    }
+                    setUpdateInstallMessage('');
+                    setAvailableUpdate(null);
+                  }}
+                  type="button"
+                >
+                  Agora não
+                </button>
+                <button
+                  className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950"
+                  onClick={installAvailableUpdate}
+                  type="button"
+                >
+                  Atualizar
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
         <div className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden">
           <header
             className={
@@ -345,7 +442,10 @@ export default function App() {
                 className={`raddo-header-icon relative grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200 ${
                   view === 'notifications' ? 'text-[#ff3f68]' : ''
                 }`}
-                onClick={() => setView('notifications')}
+                onClick={() => {
+                  setHeaderMenuOpen(false);
+                  setView('notifications');
+                }}
                 type="button"
               >
                 <Bell className="h-5 w-5" />
@@ -353,10 +453,48 @@ export default function App() {
                   <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#ff3f68] ring-2 ring-[#07111f]" />
                 )}
               </button>
+              <div className="relative">
+                <button
+                  aria-label="Abrir opções dos chats"
+                  className="raddo-header-icon grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
+                  onClick={() => setHeaderMenuOpen((current) => !current)}
+                  type="button"
+                >
+                  <MoreVertical className="h-5 w-5" />
+                </button>
+                {headerMenuOpen && (
+                  <div className="absolute right-0 top-12 z-[900] w-56 overflow-hidden rounded-lg border border-white/10 bg-[#07111f]/95 p-1 text-sm text-white shadow-2xl backdrop-blur">
+                    <button
+                      className="w-full rounded-md px-3 py-2 text-left font-semibold text-slate-100 hover:bg-white/8"
+                      onClick={() => openRadarPanel('my-chats')}
+                      type="button"
+                    >
+                      Meus chats
+                    </button>
+                    <button
+                      className="w-full rounded-md px-3 py-2 text-left font-semibold text-slate-100 hover:bg-white/8"
+                      onClick={() => openRadarPanel('chats')}
+                      type="button"
+                    >
+                      Chats em que eu estou
+                    </button>
+                    <button
+                      className="w-full rounded-md px-3 py-2 text-left font-semibold text-slate-100 hover:bg-white/8"
+                      onClick={() => openRadarPanel('nearby-chats')}
+                      type="button"
+                    >
+                      Chats próximos
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 aria-label={t('signOut')}
                 className="raddo-header-icon grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
-                onClick={() => supabase.auth.signOut()}
+                onClick={() => {
+                  setHeaderMenuOpen(false);
+                  supabase.auth.signOut();
+                }}
                 type="button"
               >
                 <LogOut className="h-5 w-5" />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Eye, Heart, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { UserProfile } from '../types';
@@ -290,7 +290,7 @@ export default function Discovery({ me, profiles }: Props) {
               <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden">
                 {visibleLikedBy.length === 0 ? (
                   <p className="rounded-lg border border-white/10 bg-white/8 p-4 text-sm text-slate-300">
-                    NinguÃ©m te curtiu ainda.
+                    Ninguém te curtiu ainda.
                   </p>
                 ) : (
                   <div className="grid gap-2">
@@ -346,7 +346,7 @@ export default function Discovery({ me, profiles }: Props) {
                     onClick={() => setLikedByPage((page) => Math.min(likedByTotalPages - 1, page + 1))}
                     type="button"
                   >
-                    PrÃ³xima
+                    Próxima
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </footer>
@@ -461,7 +461,7 @@ export default function Discovery({ me, profiles }: Props) {
           <div>
             <h2 className="text-sm font-semibold">Quem te curtiu</h2>
             <p className="text-2xl font-semibold">{likedBy.length}</p>
-            <p className="text-xs text-slate-300">{likedBy.length === 1 ? 'pessoa curtiu vocÃª' : 'pessoas curtiram vocÃª'}</p>
+            <p className="text-xs text-slate-300">{likedBy.length === 1 ? 'pessoa curtiu você' : 'pessoas curtiram você'}</p>
           </div>
           {false && (
             <button
@@ -548,3 +548,5 @@ function ToggleButton({ active, label, onClick }: { active: boolean; label: stri
     </button>
   );
 }
+
+

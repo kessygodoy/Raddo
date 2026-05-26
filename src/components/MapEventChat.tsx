@@ -1,10 +1,13 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Eye, LogOut, Megaphone, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
+﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, Eye, ImagePlus, LogOut, MapPin, Megaphone, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
   deleteMapEvent,
+  deleteMapEventMessage,
+  editMapEventMessage,
   leaveMapEvent,
+  markMapEventMessageImageViewed,
   reportMapEvent,
   rejectMapEventRequest,
   sendMapEventMessage,
@@ -19,6 +22,12 @@ import {
 import { sendDislike, trySendLike } from '../hooks/useMatches';
 import type { MapEvent, UserProfile } from '../types';
 import ProfilePreview from './ProfilePreview';
+import { reportReasons, type ReportReason } from '../reportOptions';
+import ExternalGpsModal from './ExternalGpsModal';
+import ChatImageMessage from './ChatImageMessage';
+import { uploadChatImage } from '../chatImages';
+import PendingChatImageModal from './PendingChatImageModal';
+import MessageActionsMenu from './MessageActionsMenu';
 
 type Props = {
   event: MapEvent;
@@ -50,10 +59,18 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const bannedUsers = useMapEventBans(event.id, me, canManage);
   const [optimisticMessages, setOptimisticMessages] = useState<typeof messages>([]);
   const [text, setText] = useState('');
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [sendingImage, setSendingImage] = useState(false);
+  const [pendingImageURL, setPendingImageURL] = useState('');
+  const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [error, setError] = useState('');
+  const [openMessageMenuId, setOpenMessageMenuId] = useState('');
   const [managementView, setManagementView] = useState<ManagementView>(null);
   const [actionProfile, setActionProfile] = useState<UserProfile | null>(null);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason>('harassment');
+  const [gpsOpen, setGpsOpen] = useState(false);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -106,12 +123,85 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           senderUid: me.uid,
           senderName: me.displayName,
           text: text.trim(),
+          messageType: 'text',
+          imageURL: '',
+          imagePath: '',
+          viewOnce: false,
+          viewedBy: [],
           createdAt: new Date().toISOString(),
         },
       ]);
       setText('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+    }
+  }
+
+  async function handleImageUpload(eventInput: ChangeEvent<HTMLInputElement>) {
+    const file = eventInput.target.files?.[0];
+    eventInput.target.value = '';
+    if (!file) return;
+
+    setUploadingImage(true);
+    setError('');
+    try {
+      const imageURL = await uploadChatImage({
+        allowRejected: event.accessMode !== 'open',
+        contextId: event.id,
+        context: 'map-chat-image',
+        file,
+        ownerUid: me.uid,
+      });
+      setPendingImageURL(imageURL);
+      setPendingImageViewOnce(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui enviar a imagem.');
+    } finally {
+      setUploadingImage(false);
+    }
+  }
+
+  function cancelPendingImage() {
+    if (uploadingImage || sendingImage) return;
+    setPendingImageURL('');
+    setPendingImageViewOnce(false);
+  }
+
+  async function confirmPendingImage() {
+    if (!pendingImageURL) return;
+
+    setSendingImage(true);
+    try {
+      await sendMapEventMessage({
+        eventId: event.id,
+        image: { imageURL: pendingImageURL, viewOnce: pendingImageViewOnce },
+        senderUid: me.uid,
+        senderName: me.displayName,
+        text: 'Imagem',
+      });
+      shouldStickToBottomRef.current = true;
+      setOptimisticMessages((current) => [
+        ...current,
+        {
+          id: `local-image-${Date.now()}`,
+          eventId: event.id,
+          senderUid: me.uid,
+          senderName: me.displayName,
+          text: 'Imagem',
+          messageType: 'image',
+          imageURL: pendingImageURL,
+          imagePath: '',
+          viewOnce: pendingImageViewOnce,
+          viewedBy: [],
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      setPendingImageURL('');
+      setPendingImageViewOnce(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui enviar a imagem.');
+    } finally {
+      setSendingImage(false);
     }
   }
 
@@ -129,10 +219,19 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     if (!confirmed) return;
 
     try {
-      await reportMapEvent(event, me.uid);
+      await reportMapEvent(event, me.uid, reportReason);
       setError('Denúncia enviada para revisão.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui denunciar o chat.');
+    }
+  }
+
+  async function handleReportProfile(profile: UserProfile) {
+    try {
+      await reportMapEvent(event, me.uid, 'reported_chat_user', profile.uid);
+      setError(`${profile.displayName} foi denunciado para revisão.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui denunciar essa pessoa.');
     }
   }
 
@@ -228,8 +327,44 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     return profile.bio || 'No chat local';
   }
 
+  async function handleEditMessage(message: (typeof allMessages)[number]) {
+    setOpenMessageMenuId('');
+    const nextText = window.prompt('Editar mensagem', message.text);
+    if (!nextText || nextText.trim() === message.text.trim()) return;
+
+    try {
+      await editMapEventMessage(message, me.uid, nextText);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui editar a mensagem.');
+    }
+  }
+
+  async function handleDeleteMessage(message: (typeof allMessages)[number]) {
+    setOpenMessageMenuId('');
+    const confirmed = window.confirm('Excluir esta mensagem?');
+    if (!confirmed) return;
+
+    try {
+      await deleteMapEventMessage(message, me.uid, canManage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui excluir a mensagem.');
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-[calc(env(safe-area-inset-top)+14px)] backdrop-blur-sm sm:place-items-center sm:p-6">
+      {gpsOpen && <ExternalGpsModal location={event.location} onClose={() => setGpsOpen(false)} title={event.title} />}
+      {(uploadingImage || pendingImageURL) && (
+        <PendingChatImageModal
+          imageURL={pendingImageURL}
+          onCancel={cancelPendingImage}
+          onSend={confirmPendingImage}
+          sending={sendingImage}
+          setViewOnce={setPendingImageViewOnce}
+          uploading={uploadingImage}
+          viewOnce={pendingImageViewOnce}
+        />
+      )}
       <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] max-h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
         <header className="flex items-start justify-between gap-3 border-b border-white/10 p-4">
           <div className="min-w-0">
@@ -243,11 +378,19 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             )}
           </div>
           <div className="flex shrink-0 gap-2">
+            <button
+              aria-label="Abrir localização no GPS"
+              className="grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
+              onClick={() => setGpsOpen(true)}
+              type="button"
+            >
+              <MapPin className="h-5 w-5" />
+            </button>
             {!isOwner && (
               <button
                 aria-label="Denunciar chat"
                 className="grid h-10 w-10 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
-                onClick={handleReport}
+                onClick={() => setReportOpen(true)}
                 type="button"
               >
                 <Megaphone className="h-5 w-5" />
@@ -281,6 +424,36 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             </button>
           </div>
         </header>
+
+        {reportOpen && (
+          <section className="border-b border-white/10 bg-slate-950/50 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold">Motivo da denúncia</p>
+              <button className="text-xs text-slate-300" onClick={() => setReportOpen(false)} type="button">
+                Fechar
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {reportReasons.map((reason) => (
+                <button
+                  className={`min-h-10 rounded-lg border px-2 text-xs font-semibold ${
+                    reportReason === reason.value
+                      ? 'border-teal-300 bg-teal-300 text-slate-950'
+                      : 'border-white/10 bg-white/8 text-slate-100'
+                  }`}
+                  key={reason.value}
+                  onClick={() => setReportReason(reason.value)}
+                  type="button"
+                >
+                  {reason.label}
+                </button>
+              ))}
+            </div>
+            <button className="mt-3 h-10 w-full rounded-lg bg-teal-300 text-sm font-semibold text-slate-950" onClick={handleReport} type="button">
+              Enviar denúncia
+            </button>
+          </section>
+        )}
 
         <section className="border-b border-white/10 p-3">
           <button
@@ -329,11 +502,46 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           {allMessages.length === 0 && <p className="text-sm text-slate-300">Seja a primeira pessoa a falar neste evento.</p>}
           {allMessages.map((message) => {
             const mine = message.senderUid === me.uid;
+            const canEditMessage = mine && message.messageType === 'text';
+            const canDeleteMessage = mine || canManage;
+            const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL);
+            const canDownloadMessage = isImageMessage && !message.viewOnce;
+            const copyValue = isImageMessage ? message.imageURL : message.text;
+            const downloadFilename = message.imagePath.split('/').pop() || `raddo-imagem-${message.id}.jpg`;
             return (
               <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`} key={message.id}>
-                <div className={`max-w-[82%] rounded-lg px-3 py-2 text-sm ${mine ? 'bg-teal-300 text-slate-950' : 'bg-slate-900 text-slate-100'}`}>
-                  {!mine && <p className="mb-1 text-xs font-semibold text-teal-200">{message.senderName}</p>}
-                  <p>{message.text}</p>
+                <div className={`relative max-w-[82%] rounded-lg px-3 py-2 text-sm ${mine ? 'bg-teal-300 text-slate-950' : 'bg-slate-900 text-slate-100'}`}>
+                  <MessageActionsMenu
+                    canCopy={!isImageMessage || !message.viewOnce}
+                    canDelete={canDeleteMessage}
+                    canDownload={canDownloadMessage}
+                    canEdit={canEditMessage}
+                    copyLabel={isImageMessage ? 'Copiar link' : 'Copiar'}
+                    copyValue={copyValue}
+                    downloadFilename={downloadFilename}
+                    downloadUrl={message.imageURL}
+                    mine={mine}
+                    onClose={() => setOpenMessageMenuId('')}
+                    onDelete={() => handleDeleteMessage(message)}
+                    onEdit={() => handleEditMessage(message)}
+                    onFeedback={setError}
+                    onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
+                    open={openMessageMenuId === message.id}
+                  />
+                  <div className="pr-6">
+                    {!mine && <p className="mb-1 text-xs font-semibold text-teal-200">{message.senderName}</p>}
+                    {message.messageType === 'image' && message.imageURL ? (
+                      <ChatImageMessage
+                        imageURL={message.imageURL}
+                        mine={mine}
+                        onViewed={() => markMapEventMessageImageViewed(message, me.uid)}
+                        viewed={message.viewedBy.includes(me.uid)}
+                        viewOnce={message.viewOnce}
+                      />
+                    ) : (
+                      <p>{message.text}</p>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -391,6 +599,16 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                           >
                             <Eye className="h-5 w-5" />
                           </button>
+                          {!isMe && (
+                            <button
+                              aria-label={`Denunciar ${profile.displayName}`}
+                              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
+                              onClick={() => handleReportProfile(profile)}
+                              type="button"
+                            >
+                              <Megaphone className="h-5 w-5" />
+                            </button>
+                          )}
                           {!isMe && canManage && event.creatorUid !== profile.uid && (
                             <button
                               aria-label={`Opções de ${profile.displayName}`}
@@ -546,6 +764,14 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           />
         )}
         <form className="flex gap-2 border-t border-white/10 p-3" onSubmit={handleSubmit}>
+          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100" title="Abrir câmera">
+            <Camera className="h-5 w-5" />
+            <input accept="image/*" capture="environment" className="hidden" disabled={uploadingImage} onChange={handleImageUpload} type="file" />
+          </label>
+          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100" title="Escolher imagem">
+            <ImagePlus className="h-5 w-5" />
+            <input accept="image/*" className="hidden" disabled={uploadingImage} onChange={handleImageUpload} type="file" />
+          </label>
           <input
             className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
             onChange={(inputEvent) => setText(inputEvent.target.value)}
@@ -564,3 +790,5 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     </div>
   );
 }
+
+

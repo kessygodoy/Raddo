@@ -5,3 +5,6 @@ verify_jwt = true
 
 [functions.send-match-push]
 verify_jwt = true
+
+[functions.moderate-image]
+verify_jwt = true

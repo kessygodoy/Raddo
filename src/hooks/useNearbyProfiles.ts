@@ -13,12 +13,18 @@ type ProfileRow = {
   lat: number | null;
   lng: number | null;
   privacy_mode: PrivacyMode;
+  appear_in_cards: boolean | null;
+  show_distance: boolean | null;
+  show_online_status: boolean | null;
   visibility_radius: number;
   age: number | null;
   gender: GenderIdentity;
+  gender_identities: UserProfile['genderIdentities'] | null;
   sexualities: Sexuality[] | null;
   looking_for: GenderIdentity[] | null;
   interested_sexualities: Sexuality[] | null;
+  interests: UserProfile['interests'] | null;
+  relationship_goals: UserProfile['relationshipGoals'] | null;
   min_age_preference: number | null;
   max_age_preference: number | null;
   last_seen: string | null;
@@ -41,12 +47,18 @@ function rowToProfile(row: ProfileRow): UserProfile {
         ? { lat: row.lat, lng: row.lng }
         : null,
     privacyMode: row.privacy_mode,
+    appearInCards: row.appear_in_cards ?? true,
+    showDistance: row.show_distance ?? true,
+    showOnlineStatus: row.show_online_status ?? true,
     visibilityRadius: row.visibility_radius,
     age: row.age ?? 18,
     gender: row.gender,
+    genderIdentities: row.gender_identities ?? [row.gender],
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? [],
     interestedSexualities: row.interested_sexualities ?? [],
+    interests: row.interests ?? [],
+    relationshipGoals: row.relationship_goals ?? [],
     minAgePreference: row.min_age_preference ?? 18,
     maxAgePreference: row.max_age_preference ?? 60,
     lastSeen: row.last_seen,
@@ -113,12 +125,13 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
 
     return profiles
       .filter((profile) => isWithinRadius(me, profile))
+      .filter((profile) => profile.appearInCards)
       .filter((profile) => !blockedIds.has(profile.uid))
       .filter((profile) => !seenIds.has(profile.uid))
-      .filter((profile) => genderFilter.length === 0 || genderFilter.includes(profile.gender))
+      .filter((profile) => genderFilter.length === 0 || profile.genderIdentities.some((gender) => genderFilter.includes(gender)))
       .filter((profile) => isAgeCompatible(me, profile))
-      .filter((profile) => profile.lookingFor.includes(me.gender))
-      .filter((profile) => me.lookingFor.includes(profile.gender))
+      .filter((profile) => profile.lookingFor.some((gender) => me.genderIdentities.includes(gender)))
+      .filter((profile) => me.lookingFor.some((gender) => profile.genderIdentities.includes(gender)))
       .filter((profile) => hasAnyOverlap(profile.interestedSexualities, me.sexualities))
       .filter((profile) => hasAnyOverlap(me.interestedSexualities, profile.sexualities));
   }, [blockedIds, genderFilter, me, profiles, seenIds]);

@@ -4,6 +4,7 @@ import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm } from '../utils/geo';
 import { reportProfile } from '../hooks/useMatches';
+import { reportReasons, type ReportReason } from '../reportOptions';
 
 type Props = {
   me: UserProfile;
@@ -20,6 +21,8 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
   const photos = profile.photos.length ? profile.photos : [profile.photoURL];
   const [photoIndex, setPhotoIndex] = useState(0);
   const [reportMessage, setReportMessage] = useState('');
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const photo = photos[photoIndex] ?? profile.photoURL;
 
   function previousPhoto() {
@@ -31,12 +34,10 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
   }
 
   async function handleReport() {
-    const confirmed = window.confirm(t('reportProfileConfirm'));
-    if (!confirmed) return;
-
     try {
-      await reportProfile(me.uid, profile.uid);
+      await reportProfile(me.uid, profile.uid, reportReason);
       setReportMessage(t('reportSent'));
+      setReportOpen(false);
     } catch (error) {
       setReportMessage(error instanceof Error ? error.message : t('reportError'));
     }
@@ -88,7 +89,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
           <div>
             <h1 className="text-2xl font-semibold">{profile.displayName}</h1>
             <p className="mt-1 text-sm text-slate-300">
-              {me.location && profile.location
+              {profile.showDistance && me.location && profile.location
                 ? t('distanceKm', { distance: distanceKm(me.location, profile.location).toFixed(1) })
                 : t('distanceUnavailable')}
             </p>
@@ -110,14 +111,40 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
           </div>
           {reportMessage && <p className="rounded-lg bg-white/8 p-2 text-xs text-slate-100">{reportMessage}</p>}
           {showReport && (
-            <button
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm text-rose-100"
-              onClick={handleReport}
-              type="button"
-            >
-              <Flag className="h-4 w-4" />
-              {t('reportProfile')}
-            </button>
+            <div className="grid gap-2">
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm text-rose-100"
+                onClick={() => setReportOpen((current) => !current)}
+                type="button"
+              >
+                <Flag className="h-4 w-4" />
+                {t('reportProfile')}
+              </button>
+              {reportOpen && (
+                <div className="grid gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                  <p className="text-xs text-slate-300">Escolha o motivo da denúncia.</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {reportReasons.map((reason) => (
+                      <button
+                        className={`min-h-10 rounded-lg border px-2 text-xs font-semibold ${
+                          reportReason === reason.value
+                            ? 'border-teal-300 bg-teal-300 text-slate-950'
+                            : 'border-white/10 bg-white/8 text-slate-100'
+                        }`}
+                        key={reason.value}
+                        onClick={() => setReportReason(reason.value)}
+                        type="button"
+                      >
+                        {reason.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="h-10 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950" onClick={handleReport} type="button">
+                    Enviar denúncia
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {(onLike || onDislike) && (
             <div className="grid grid-cols-2 gap-3 pt-2">

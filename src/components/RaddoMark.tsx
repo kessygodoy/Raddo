@@ -11,16 +11,25 @@ export default function RaddoMark({ className = 'h-10 w-10', showTile = false }:
       viewBox="0 0 128 128"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <path
-        d="M64 22a42 42 0 0 1 29.7 12.3L81.6 46.4A25 25 0 0 0 39 64c0 10 5.9 18.7 14.4 22.7V107A43.2 43.2 0 0 1 64 22Z"
-        fill="#ff1744"
-      />
-      <path
-        d="M100.4 42.8A42 42 0 0 1 74.6 106.7V86.5A25 25 0 0 0 88.7 54.4Z"
-        fill="#ff1744"
-      />
-      <path d="M58.8 86.9h10.4V107H58.8Z" fill="#ff1744" />
-      <circle cx="64" cy="64" fill="#ff1744" r="17" />
+      <defs>
+        <filter id="raddo-icon-shadow" colorInterpolationFilters="sRGB" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="8" floodColor="#000000" floodOpacity=".28" stdDeviation="7" />
+        </filter>
+      </defs>
+      {showTile && <rect fill="rgba(255,255,255,.06)" height="128" rx="30" width="128" />}
+      <g filter="url(#raddo-icon-shadow)">
+        <circle cx="64" cy="64" fill="#ff4446" r="52" />
+        <path
+          d="M78.5 40.5A31.5 31.5 0 1 1 45.2 91.7L39.5 98l2.2-15.5A31.5 31.5 0 0 1 50 38.6"
+          fill="none"
+          stroke="#151c1f"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="13"
+        />
+        <circle cx="64" cy="64" fill="#151c1f" r="10.5" />
+        <circle cx="45" cy="42" fill="#151c1f" r="7" />
+      </g>
     </svg>
   );
 }

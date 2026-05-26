@@ -1,4 +1,4 @@
-import { BadgeCheck, Bell, Eye, Heart, MessageCircle, VideoOff } from 'lucide-react';
+import { BadgeCheck, Eye, Heart, MessageCircle, VideoOff } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { UserProfile } from '../types';
 
@@ -11,7 +11,6 @@ const perks = [
   { icon: VideoOff, title: 'premiumPerkAdsTitle', text: 'premiumPerkAdsText' },
   { icon: Eye, title: 'premiumPerkLikedByTitle', text: 'premiumPerkLikedByText' },
   { icon: MessageCircle, title: 'premiumPerkMapChatsTitle', text: 'premiumPerkMapChatsText' },
-  { icon: Bell, title: 'premiumPerkNotificationsTitle', text: 'premiumPerkNotificationsText' },
 ];
 
 export default function PremiumScreen({ profile }: Props) {

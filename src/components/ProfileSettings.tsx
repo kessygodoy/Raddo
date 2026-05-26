@@ -1,16 +1,53 @@
-import { ChangeEvent, useEffect, useRef, useState } from 'react';
-import { Bell, Camera, Eye, FileText, Heart, MapPin, Palette, RotateCcw, Shield, SlidersHorizontal, Upload, UserX, X } from 'lucide-react';
-import { genderOptions, sexualityOptions, formatRadius } from '../profileOptions';
+﻿import { ChangeEvent, useEffect, useRef, useState } from 'react';
+import {
+  Bell,
+  Camera,
+  Car,
+  Dumbbell,
+  Eye,
+  FileText,
+  Gamepad2,
+  Heart,
+  MapPin,
+  MessageCircle,
+  MessageSquareWarning,
+  Music,
+  Palette,
+  PawPrint,
+  Plane,
+  RotateCcw,
+  Search,
+  Shield,
+  SlidersHorizontal,
+  Sparkles,
+  Upload,
+  UserRound,
+  UserX,
+  X,
+} from 'lucide-react';
+import {
+  formatGender,
+  formatInterest,
+  formatRadius,
+  formatRelationshipGoal,
+  formatSexuality,
+  genderOptions,
+  interestOptions,
+  relationshipGoalOptions,
+  sexualityOptions,
+} from '../profileOptions';
 import { isDemoMode } from '../demoData';
 import { deleteMyAccount } from '../accountDeletion';
 import { languageOptions, useI18n } from '../i18n';
 import { supabase } from '../supabase';
-import type { AppLanguage, AppTheme, GenderIdentity, Sexuality, UserProfile } from '../types';
+import type { AppLanguage, AppTheme, GenderIdentity, ProfileInterest, RelationshipGoal, Sexuality, UserProfile } from '../types';
 import { unblockProfile, undoProfileInteraction, useBlockedProfiles, useProfileInteractions } from '../hooks/useMatches';
 import PremiumScreen from './PremiumScreen';
 import ProfilePreview from './ProfilePreview';
 import { getNotificationPermission, requestNativeNotifications, showAppNotification } from '../nativeNotifications';
 import { registerDeviceForPush } from '../pushNotifications';
+import { moderateUploadedImage } from '../imageModeration';
+import { banAppUser, type ModerationCase, useAppModeratorRole, useModerationCases } from '../moderation';
 
 type Props = {
   profile: UserProfile;
@@ -27,6 +64,7 @@ const themeOptions: Array<{ value: AppTheme; label: string }> = [
 ];
 
 type SettingsSection = 'profile' | 'gender' | 'interactions' | 'theme' | 'premium' | 'safety';
+type PreferenceStep = 'find' | 'identity';
 
 const settingsSections: Array<{ value: SettingsSection; label: string }> = [
   { value: 'profile', label: 'profileTab' },
@@ -44,30 +82,67 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
   const [uploadingCarouselPhotos, setUploadingCarouselPhotos] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
+  const [preferenceStep, setPreferenceStep] = useState<PreferenceStep>('find');
+  const [preferenceSearch, setPreferenceSearch] = useState('');
   const [showPublicPreview, setShowPublicPreview] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState(
     typeof Notification === 'undefined' ? 'indisponível' : Notification.permission,
   );
   const [safetyMessage, setSafetyMessage] = useState('');
+  const [banUserUid, setBanUserUid] = useState('');
+  const [banReason, setBanReason] = useState('');
+  const [selectedModerationCase, setSelectedModerationCase] = useState<ModerationCase | null>(null);
+  const [termsOpen, setTermsOpen] = useState(false);
   const [interactionsMessage, setInteractionsMessage] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
-  const firstDraftRender = useRef(true);
+  const saveTimeoutRef = useRef<number | null>(null);
+  const latestDraftRef = useRef(profile);
   const blockedProfiles = useBlockedProfiles(profile.uid);
   const interactions = useProfileInteractions(profile.uid);
+  const appModeratorRole = useAppModeratorRole(profile.uid);
+  const moderationCases = useModerationCases(Boolean(appModeratorRole));
 
   useEffect(() => {
     getNotificationPermission().then(setNotificationStatus);
   }, []);
 
+  useEffect(() => {
+    setDraft(profile);
+    latestDraftRef.current = profile;
+  }, [profile]);
+
+  useEffect(
+    () => () => {
+      if (saveTimeoutRef.current !== null) {
+        window.clearTimeout(saveTimeoutRef.current);
+        void saveProfile(latestDraftRef.current);
+      }
+    },
+    [],
+  );
+
   function updateDraft<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
-    setDraft((prev) => ({ ...prev, [key]: value }));
+    setDraft((prev) => {
+      const nextDraft = { ...prev, [key]: value };
+      queueAutoSave(nextDraft);
+      return nextDraft;
+    });
   }
 
   function toggleArrayValue<T extends string>(values: T[], value: T, checked: boolean) {
     return checked ? [...new Set([...values, value])] : values.filter((item) => item !== value);
   }
 
-  async function uploadFile(file: File) {
+  function limitedInterests(values: ProfileInterest[], value: ProfileInterest, checked: boolean) {
+    const next = toggleArrayValue(values, value, checked);
+    return next.slice(0, 8);
+  }
+
+  function primaryGender(values: GenderIdentity[]) {
+    return values.find((value) => value === 'man' || value === 'woman' || value === 'couple') ?? 'man';
+  }
+
+  async function uploadFile(file: File, context: 'profile-carousel' | 'profile-photo') {
     if (isDemoMode) return URL.createObjectURL(file);
 
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -80,6 +155,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     if (error) return '';
 
     const { data } = supabase.storage.from('profile-photos').getPublicUrl(path);
+    await moderateUploadedImage({ context, path, publicUrl: data.publicUrl });
     return data.publicUrl;
   }
 
@@ -88,8 +164,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     if (!file) return;
 
     setUploadingProfilePhoto(true);
-    const uploadedUrl = await uploadFile(file);
-    if (uploadedUrl) updateDraft('photoURL', uploadedUrl);
+    try {
+      const uploadedUrl = await uploadFile(file, 'profile-photo');
+      if (uploadedUrl) updateDraft('photoURL', uploadedUrl);
+    } catch (error) {
+      setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar a imagem.');
+    }
     setUploadingProfilePhoto(false);
     event.target.value = '';
   }
@@ -102,8 +182,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const uploadedUrls: string[] = [];
 
     for (const file of files) {
-      const uploadedUrl = await uploadFile(file);
-      if (uploadedUrl) uploadedUrls.push(uploadedUrl);
+      try {
+        const uploadedUrl = await uploadFile(file, 'profile-carousel');
+        if (uploadedUrl) uploadedUrls.push(uploadedUrl);
+      } catch (error) {
+        setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar uma imagem.');
+      }
     }
 
     if (uploadedUrls.length > 0) {
@@ -135,12 +219,18 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         photo_url: nextDraft.photoURL || '',
         photos: nextDraft.photos,
         privacy_mode: nextDraft.privacyMode,
+        appear_in_cards: nextDraft.appearInCards,
+        show_distance: nextDraft.showDistance,
+        show_online_status: nextDraft.showOnlineStatus,
         visibility_radius: nextDraft.visibilityRadius,
         age: nextDraft.age ?? 18,
-        gender: nextDraft.gender,
+        gender: primaryGender(nextDraft.genderIdentities.length ? nextDraft.genderIdentities : [nextDraft.gender]),
+        gender_identities: nextDraft.genderIdentities.length ? nextDraft.genderIdentities : [nextDraft.gender],
         sexualities: nextDraft.sexualities,
         looking_for: nextDraft.lookingFor,
         interested_sexualities: nextDraft.interestedSexualities,
+        interests: nextDraft.interests,
+        relationship_goals: nextDraft.relationshipGoals,
         min_age_preference: nextDraft.minAgePreference ?? 18,
         max_age_preference: nextDraft.maxAgePreference ?? 60,
         bio: nextDraft.bio,
@@ -152,19 +242,23 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     setSaveStatus(error ? t('savedError', { message: error.message }) : t('savedAutomatically'));
   }
 
-  useEffect(() => {
-    if (firstDraftRender.current) {
-      firstDraftRender.current = false;
-      return undefined;
-    }
-
+  function queueAutoSave(nextDraft: UserProfile, delay = 650) {
+    latestDraftRef.current = nextDraft;
     setSaveStatus(t('saving'));
-    const timeoutId = window.setTimeout(() => {
-      void saveProfile(draft);
-    }, 650);
+    if (saveTimeoutRef.current !== null) window.clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = window.setTimeout(() => {
+      saveTimeoutRef.current = null;
+      void saveProfile(nextDraft);
+    }, delay);
+  }
 
-    return () => window.clearTimeout(timeoutId);
-  }, [draft]);
+  function flushAutoSave() {
+    if (saveTimeoutRef.current !== null) {
+      window.clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    void saveProfile(latestDraftRef.current);
+  }
 
   async function enableNotifications() {
     if (false && typeof Notification === 'undefined') {
@@ -213,6 +307,30 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     } catch (error) {
       setSafetyMessage(error instanceof Error ? error.message : t('deleteAccountError'));
       setDeletingAccount(false);
+    }
+  }
+
+  async function handleBanAppUser() {
+    const targetUid = banUserUid.trim();
+    if (!targetUid) {
+      setSafetyMessage('Informe o UID do usuário que será banido.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Banir este usuário do app?\n\n${targetUid}`);
+    if (!confirmed) return;
+
+    try {
+      await banAppUser({
+        bannedByUid: profile.uid,
+        bannedUid: targetUid,
+        reason: banReason,
+      });
+      setBanUserUid('');
+      setBanReason('');
+      setSafetyMessage('Usuário banido do app.');
+    } catch (error) {
+      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui banir o usuário.');
     }
   }
 
@@ -302,11 +420,18 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 </label>
                 <label className="grid gap-2 text-sm">
                   Foto de perfil
-                  <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
-                    <Upload className="h-4 w-4 text-teal-300" />
-                    {uploadingProfilePhoto ? 'Enviando...' : 'Trocar foto de perfil'}
-                    <input accept="image/*" className="hidden" onChange={uploadProfilePhoto} type="file" />
-                  </span>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                      <Camera className="h-4 w-4 text-teal-300" />
+                      {uploadingProfilePhoto ? 'Enviando...' : 'Abrir câmera'}
+                      <input accept="image/*" capture="environment" className="hidden" onChange={uploadProfilePhoto} type="file" />
+                    </span>
+                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                      <Upload className="h-4 w-4 text-teal-300" />
+                      {uploadingProfilePhoto ? 'Enviando...' : 'Escolher foto'}
+                      <input accept="image/*" className="hidden" onChange={uploadProfilePhoto} type="file" />
+                    </span>
+                  </div>
                 </label>
                 {draft.photoURL && (
                   <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2">
@@ -319,11 +444,18 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 )}
                 <label className="grid gap-2 text-sm">
                   Fotos do carrossel
-                  <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
-                    <Upload className="h-4 w-4 text-teal-300" />
-                    {uploadingCarouselPhotos ? 'Enviando...' : 'Enviar fotos para carrossel'}
-                    <input accept="image/*" className="hidden" multiple onChange={uploadCarouselPhotos} type="file" />
-                  </span>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                      <Camera className="h-4 w-4 text-teal-300" />
+                      {uploadingCarouselPhotos ? 'Enviando...' : 'Abrir câmera'}
+                      <input accept="image/*" capture="environment" className="hidden" onChange={uploadCarouselPhotos} type="file" />
+                    </span>
+                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                      <Upload className="h-4 w-4 text-teal-300" />
+                      {uploadingCarouselPhotos ? 'Enviando...' : 'Escolher fotos'}
+                      <input accept="image/*" className="hidden" multiple onChange={uploadCarouselPhotos} type="file" />
+                    </span>
+                  </div>
                 </label>
                 {draft.photos.length > 0 && (
                   <div className="grid gap-2">
@@ -359,47 +491,112 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         {activeSection === 'gender' && (
           <div className="space-y-4">
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-                <MapPin className="h-4 w-4 text-teal-300" />
-                {t('genderInterests')}
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <MapPin className="h-4 w-4 text-teal-300" />
+                  Preferências
+                </div>
+                <div className="grid grid-cols-2 rounded-full border border-white/10 bg-slate-950/40 p-1 text-xs font-semibold">
+                  <button
+                    className={`rounded-full px-3 py-2 ${preferenceStep === 'find' ? 'bg-teal-300 text-slate-950' : 'text-slate-300'}`}
+                    onClick={() => setPreferenceStep('find')}
+                    type="button"
+                  >
+                    Quem encontrar
+                  </button>
+                  <button
+                    className={`rounded-full px-3 py-2 ${preferenceStep === 'identity' ? 'bg-teal-300 text-slate-950' : 'text-slate-300'}`}
+                    onClick={() => setPreferenceStep('identity')}
+                    type="button"
+                  >
+                    Identidade
+                  </button>
+                </div>
               </div>
-              <div className="grid gap-4">
-              <label className="grid gap-1 text-sm">
-                {t('iAm')}
-                <select
-                  className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
-                  onChange={(event) => updateDraft('gender', event.target.value as GenderIdentity)}
-                  value={draft.gender}
-                >
-                  {genderOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {t(option.value)}
-                    </option>
-                  ))}
-                </select>
+              <PreferenceSummary draft={draft} />
+              <label className="mb-4 flex h-11 items-center gap-2 rounded-lg border border-white/10 bg-slate-950/50 px-3 text-sm">
+                <Search className="h-4 w-4 text-teal-300" />
+                <input
+                  className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-500"
+                  onChange={(event) => setPreferenceSearch(event.target.value)}
+                  placeholder="Pesquisar opções"
+                  value={preferenceSearch}
+                />
               </label>
-              <OptionGrid
-                selected={draft.sexualities}
-                title={t('mySexuality')}
-                values={sexualityOptions}
-                onChange={(value, checked) =>
-                  updateDraft('sexualities', toggleArrayValue(draft.sexualities, value, checked))
-                }
-              />
-              <OptionGrid
-                selected={draft.lookingFor}
-                title={t('interestedIn')}
-                values={genderOptions}
-                onChange={(value, checked) => updateDraft('lookingFor', toggleArrayValue(draft.lookingFor, value, checked))}
-              />
-              <OptionGrid
-                selected={draft.interestedSexualities}
-                title={t('interestedSexualities')}
-                values={sexualityOptions}
-                onChange={(value, checked) =>
-                  updateDraft('interestedSexualities', toggleArrayValue(draft.interestedSexualities, value, checked))
-                }
-              />
+              <div className="grid gap-4">
+                {preferenceStep === 'find' ? (
+                  <>
+                    <ModernChipGrid
+                      helper="Você verá pessoas que combinam com estes grupos."
+                      iconKind="people"
+                      query={preferenceSearch}
+                      selected={draft.lookingFor}
+                      title="Quem você quer encontrar?"
+                      values={genderOptions}
+                      onChange={(value, checked) => updateDraft('lookingFor', toggleArrayValue(draft.lookingFor, value, checked))}
+                    />
+                    <ModernChipGrid
+                      helper="Escolha entre 3 e 8 para melhorar o matching."
+                      iconKind="interest"
+                      maxSelected={8}
+                      minRecommended={3}
+                      query={preferenceSearch}
+                      selected={draft.interests}
+                      title="Interesses para conversar"
+                      values={interestOptions}
+                      onChange={(value, checked) => updateDraft('interests', limitedInterests(draft.interests, value, checked))}
+                    />
+                    <ModernChipGrid
+                      helper="Ajuda a encontrar pessoas com a mesma intenção."
+                      iconKind="goal"
+                      query={preferenceSearch}
+                      selected={draft.relationshipGoals}
+                      title="Objetivo"
+                      values={relationshipGoalOptions}
+                      onChange={(value, checked) =>
+                        updateDraft('relationshipGoals', toggleArrayValue(draft.relationshipGoals, value, checked))
+                      }
+                    />
+                  </>
+                ) : (
+                  <>
+                    <ModernChipGrid
+                      helper="Escolha apenas uma opção ou prefira não informar."
+                      iconKind="identity"
+                      query={preferenceSearch}
+                      selected={draft.genderIdentities.length ? draft.genderIdentities : [draft.gender]}
+                      single
+                      title="Como você se identifica?"
+                      values={genderOptions}
+                      onChange={(value) => {
+                        const fallback = [value as GenderIdentity];
+                        updateDraft('genderIdentities', fallback);
+                        updateDraft('gender', primaryGender(fallback));
+                      }}
+                    />
+                    <ModernChipGrid
+                      helper="Escolha apenas uma orientação."
+                      iconKind="identity"
+                      query={preferenceSearch}
+                      selected={draft.sexualities}
+                      single
+                      title="Orientação"
+                      values={sexualityOptions}
+                      onChange={(value) => updateDraft('sexualities', [value])}
+                    />
+                    <ModernChipGrid
+                      helper="Refina para quais pessoas você aparece."
+                      iconKind="identity"
+                      query={preferenceSearch}
+                      selected={draft.interestedSexualities}
+                      title="Orientações de interesse"
+                      values={sexualityOptions}
+                      onChange={(value, checked) =>
+                        updateDraft('interestedSexualities', toggleArrayValue(draft.interestedSexualities, value, checked))
+                      }
+                    />
+                  </>
+                )}
               </div>
             </section>
 
@@ -414,6 +611,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   max={500}
                   min={0.02}
                   onChange={(event) => updateDraft('visibilityRadius', Number(event.target.value))}
+                  onKeyUp={flushAutoSave}
+                  onPointerUp={flushAutoSave}
+                  onTouchEnd={flushAutoSave}
                   step={0.01}
                   type="range"
                   value={draft.visibilityRadius}
@@ -433,6 +633,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   max={Math.min(draft.maxAgePreference ?? 60, 99)}
                     min={18}
                     onChange={(event) => updateDraft('minAgePreference', Number(event.target.value))}
+                    onKeyUp={flushAutoSave}
+                    onPointerUp={flushAutoSave}
+                    onTouchEnd={flushAutoSave}
                     type="range"
                   value={draft.minAgePreference ?? 18}
                   />
@@ -443,6 +646,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     max={99}
                   min={Math.max(draft.minAgePreference ?? 18, 18)}
                     onChange={(event) => updateDraft('maxAgePreference', Number(event.target.value))}
+                    onKeyUp={flushAutoSave}
+                    onPointerUp={flushAutoSave}
+                    onTouchEnd={flushAutoSave}
                     type="range"
                   value={draft.maxAgePreference ?? 60}
                   />
@@ -506,7 +712,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 Interações
               </div>
               <p className="mb-4 text-sm text-slate-300">
-                Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem nos Cards. Desfaça para liberar o perfil outra vez.
+                Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem no Descobrir. Desfaça para liberar o perfil outra vez.
               </p>
               {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma interação registrada ainda.</p>}
               <div className="grid gap-2">
@@ -583,6 +789,33 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Eye className="h-4 w-4 text-teal-300" />
+                Visibilidade do perfil
+              </div>
+              <div className="grid gap-2">
+                <PrivacyToggle
+                  checked={draft.appearInCards}
+                  description="Quando desligado, seu perfil não aparece no Descobrir nem em Pessoas próximas."
+                  label="Aparecer no Descobrir"
+                  onChange={(checked) => updateDraft('appearInCards', checked)}
+                />
+                <PrivacyToggle
+                  checked={draft.showDistance}
+                  description="Quando desligado, outras pessoas veem sua bio sem distância aproximada."
+                  label="Mostrar distância aproximada"
+                  onChange={(checked) => updateDraft('showDistance', checked)}
+                />
+                <PrivacyToggle
+                  checked={draft.showOnlineStatus}
+                  description="Controla se outras pessoas podem ver seu status online/ativo."
+                  label="Mostrar online agora"
+                  onChange={(checked) => updateDraft('showOnlineStatus', checked)}
+                />
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <Bell className="h-4 w-4 text-teal-300" />
                 Notificações
               </div>
@@ -623,6 +856,148 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               {safetyMessage && <p className="mt-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{safetyMessage}</p>}
             </section>
 
+            {appModeratorRole && (
+              <section className="rounded-lg border border-amber-300/30 bg-slate-950/60 p-4">
+                <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-amber-100">
+                  <Shield className="h-4 w-4" />
+                  Moderação do app
+                </div>
+                <p className="mb-3 text-sm text-amber-50/80">
+                  Você está como {appModeratorRole === 'admin' ? 'administrador' : 'moderador'}. Use banimento apenas para contas com violação clara das regras.
+                </p>
+                <div className="mb-4 overflow-hidden rounded-xl border border-white/10 bg-[#07111f]">
+                  <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                      <MessageSquareWarning className="h-4 w-4 text-amber-200" />
+                      Denúncias recentes
+                    </div>
+                    <span className="rounded-full bg-white/8 px-2 py-1 text-xs text-slate-300">
+                      {moderationCases.loading ? 'Carregando' : `${moderationCases.cases.length} casos`}
+                    </span>
+                  </div>
+                  <div className="grid max-h-72 overflow-auto">
+                    {!moderationCases.loading && moderationCases.cases.length === 0 && (
+                      <p className="p-3 text-sm text-slate-300">Nenhuma denúncia com mensagens recentes.</p>
+                    )}
+                    {moderationCases.cases.map((item) => (
+                      <button
+                        className={`flex items-center gap-3 border-b border-white/5 p-3 text-left transition hover:bg-white/8 ${
+                          selectedModerationCase?.id === item.id ? 'bg-white/10' : ''
+                        }`}
+                        key={item.id}
+                        onClick={() => {
+                          setSelectedModerationCase(item);
+                          setBanUserUid(item.reportedUid);
+                        }}
+                        type="button"
+                      >
+                        {item.userPhotoURL ? (
+                          <img alt="" className="h-11 w-11 rounded-full object-cover" src={item.userPhotoURL} />
+                        ) : (
+                          <div className="grid h-11 w-11 place-items-center rounded-full bg-amber-300 text-sm font-bold text-slate-950">
+                            {item.userDisplayName.slice(0, 1).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-sm font-semibold text-white">{item.userDisplayName}</span>
+                            <span className="shrink-0 text-[10px] text-slate-400">
+                              {new Date(item.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="truncate text-xs text-slate-300">
+                            {item.source === 'image'
+                              ? 'Imagem em moderação'
+                              : item.contextType === 'map_chat'
+                                ? 'Chat denunciado'
+                                : 'Perfil denunciado'} · {item.reason}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {selectedModerationCase && (
+                  <div className="mb-4 rounded-xl border border-white/10 bg-[#07111f]">
+                    <div className="flex items-start justify-between gap-3 border-b border-white/10 p-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-white">{selectedModerationCase.userDisplayName}</p>
+                        {selectedModerationCase.contextType === 'map_chat' && (
+                          <p className="text-xs text-amber-100">Chat denunciado · {selectedModerationCase.recentMessages.length} mensagens salvas</p>
+                        )}
+                        <p className="text-xs text-slate-300">
+                          UID: <span className="font-mono">{selectedModerationCase.reportedUid}</span>
+                        </p>
+                        <p className="text-xs text-amber-100">{selectedModerationCase.reason}</p>
+                      </div>
+                      <button
+                        aria-label="Fechar caso"
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/8 text-slate-100"
+                        onClick={() => setSelectedModerationCase(null)}
+                        type="button"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {selectedModerationCase.imageUrl && (
+                      <div className="border-b border-white/10 p-3">
+                        <img alt="" className="max-h-56 w-full rounded-lg object-cover" src={selectedModerationCase.imageUrl} />
+                      </div>
+                    )}
+                    <div className="grid max-h-80 gap-2 overflow-auto p-3">
+                      {selectedModerationCase.recentMessages.length === 0 && (
+                        <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhuma mensagem recente salva neste caso.</p>
+                      )}
+                      {selectedModerationCase.recentMessages.map((message, index) => (
+                        <article className="max-w-[86%] rounded-lg bg-slate-900 px-3 py-2 text-sm text-slate-100" key={message.id || index}>
+                          <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-slate-400">
+                            <span>{message.senderName || selectedModerationCase.userDisplayName}</span>
+                            {message.createdAt && (
+                              <span>{new Date(message.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                            )}
+                          </div>
+                          {message.imageUrl ? (
+                            <img alt="" className="max-h-48 rounded-lg object-cover" src={message.imageUrl} />
+                          ) : (
+                            <p>{message.text || 'Mensagem sem texto'}</p>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-3">
+                  <label className="grid gap-1 text-sm text-amber-50">
+                    UID do usuário
+                    <input
+                      className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-white outline-none"
+                      onChange={(event) => setBanUserUid(event.target.value)}
+                      placeholder="Cole o UID do usuário"
+                      value={banUserUid}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-sm text-amber-50">
+                    Motivo
+                    <textarea
+                      className="min-h-20 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-white outline-none"
+                      onChange={(event) => setBanReason(event.target.value)}
+                      placeholder="Ex: conteúdo proibido, assédio, spam..."
+                      value={banReason}
+                    />
+                  </label>
+                  <button
+                    className="h-11 rounded-lg bg-rose-400 px-4 text-sm font-semibold text-white"
+                    onClick={handleBanAppUser}
+                    type="button"
+                  >
+                    Banir usuário do app
+                  </button>
+                </div>
+              </section>
+            )}
+
             <section className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4">
               <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-rose-100">
                 <UserX className="h-4 w-4" />
@@ -643,22 +1018,25 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
             </section>
 
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-                <FileText className="h-4 w-4 text-teal-300" />
-                Termos e privacidade
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-sm font-semibold">
+                  <FileText className="h-4 w-4 text-teal-300" />
+                  Termos e privacidade
+                </div>
+                <button
+                  className="h-9 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-xs font-semibold text-slate-100"
+                  onClick={() => setTermsOpen((current) => !current)}
+                  type="button"
+                >
+                  {termsOpen ? 'Ocultar' : 'Ler termos'}
+                </button>
               </div>
-              <div className="grid gap-3 text-sm text-slate-300">
-                <p>
-                  O Raddo usa sua localização para calcular distâncias e chats próximos. Sua foto só aparece no
-                  mapa se você ativar a opção "Me mostrar no mapa".
+              {!termsOpen && (
+                <p className="mt-3 text-sm text-slate-300">
+                  Leia os termos de uso, privacidade, segurança, denúncias, moderação e exclusão de dados do Raddo.
                 </p>
-                <p>
-                  Denúncias e bloqueios devem ser usados contra assédio, perfis falsos, spam ou conteúdo inadequado.
-                </p>
-                <p>
-                  Antes de publicar na loja, substitua este resumo por termos de uso e política de privacidade completos.
-                </p>
-              </div>
+              )}
+              {termsOpen && <TermsAndPrivacyContent />}
             </section>
           </div>
         )}
@@ -672,29 +1050,342 @@ type OptionGridProps<T extends string> = {
   values: Array<{ value: T; label: string }>;
   selected: T[];
   onChange: (value: T, checked: boolean) => void;
+  onClear: () => void;
+  onSelectAll: () => void;
 };
 
-function OptionGrid<T extends string>({ title, values, selected, onChange }: OptionGridProps<T>) {
+function PreferenceSummary({ draft }: { draft: UserProfile }) {
   const { t } = useI18n();
+  const visibleTo = draft.lookingFor.length > 0 ? draft.lookingFor.map((item) => t(item)).join(', ') : 'ninguém';
+  const identities = (draft.genderIdentities.length ? draft.genderIdentities : [draft.gender]).map((item) => t(item)).join(', ');
+  const interestSummary =
+    draft.interests.length > 0 ? draft.interests.map((item) => formatInterest(item)).join(', ') : 'adicione interesses';
+  const goalSummary =
+    draft.relationshipGoals.length > 0
+      ? draft.relationshipGoals.map((item) => formatRelationshipGoal(item)).join(', ')
+      : 'sem objetivo definido';
 
   return (
-    <div className="grid gap-2 text-sm">
-      <span>{title}</span>
+    <div className="mb-4 grid gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
+      <div className="flex flex-wrap gap-2">
+        <SummaryPill label="Identidade" value={identities || formatGender(draft.gender)} />
+        <SummaryPill label="Quero ver" value={visibleTo} />
+        <SummaryPill label="Interesses" value={interestSummary} />
+        <SummaryPill label="Objetivo" value={goalSummary} />
+      </div>
+      <p className="text-xs leading-relaxed text-slate-300">
+        Você aparecerá para pessoas interessadas em {identities || 'seu perfil'}.
+      </p>
+    </div>
+  );
+}
+
+function SummaryPill({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs">
+      <span className="text-slate-400">{label}:</span>
+      <span className="truncate font-semibold text-slate-100">{value}</span>
+    </span>
+  );
+}
+
+function PrivacyToggle({
+  checked,
+  description,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  description: string;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/50 p-3 text-left"
+      onClick={() => onChange(!checked)}
+      type="button"
+    >
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold text-slate-100">{label}</span>
+        <span className="mt-1 block text-xs leading-relaxed text-slate-400">{description}</span>
+      </span>
+      <span className={`grid h-7 w-12 shrink-0 rounded-full p-1 transition ${checked ? 'bg-teal-300' : 'bg-slate-700'}`}>
+        <span className={`h-5 w-5 rounded-full bg-white transition ${checked ? 'translate-x-5' : ''}`} />
+      </span>
+    </button>
+  );
+}
+
+function TermsAndPrivacyContent() {
+  const sections = [
+    {
+      title: '1. Uso do Raddo',
+      text:
+        'O Raddo é um app social para conhecer pessoas próximas, conversar em matches e participar de chats locais no mapa. Ao usar o app, você concorda em respeitar outros usuários, não publicar conteúdo ilegal, ofensivo, sexual envolvendo menores, violento, fraudulento, discriminatório ou que viole direitos de terceiros.',
+    },
+    {
+      title: '2. Idade mínima',
+      text:
+        'O Raddo é destinado apenas a pessoas com 18 anos ou mais. Contas suspeitas de pertencer a menores de idade podem ser removidas ou banidas sem aviso prévio.',
+    },
+    {
+      title: '3. Localização',
+      text:
+        'O app usa sua localização para calcular distâncias, mostrar chats próximos e melhorar a descoberta de pessoas no seu alcance. Sua foto só aparece no mapa quando você ativa a opção de aparecer no mapa. Você pode desativar essa visibilidade nas configurações de segurança.',
+    },
+    {
+      title: '4. Perfil, fotos e mensagens',
+      text:
+        'Você é responsável pelas informações, fotos, mensagens e chats que publica. Fotos de perfil, capas de chats e imagens enviadas podem passar por verificação automática e revisão humana quando necessário para proteger a comunidade.',
+    },
+    {
+      title: '5. Conteúdo proibido',
+      text:
+        'É proibido publicar nudez explícita, exploração sexual, conteúdo envolvendo menores, assédio, ameaças, discurso de ódio, golpes, spam, divulgação indevida de dados pessoais, conteúdo violento extremo ou qualquer material ilegal.',
+    },
+    {
+      title: '6. Denúncias, bloqueios e moderação',
+      text:
+        'Usuários podem denunciar perfis, chats e conteúdos inadequados. O Raddo pode analisar denúncias, remover conteúdo, limitar recursos, bloquear acesso a chats ou banir contas que violem as regras. Donos e moderadores de chats locais também podem remover mensagens e banir pessoas daquele chat.',
+    },
+    {
+      title: '7. Privacidade e dados',
+      text:
+        'Coletamos dados necessários para funcionamento do app, como perfil, fotos, preferências, localização aproximada ou exata quando ativada, curtidas, matches, mensagens, denúncias, bloqueios, tokens de notificação e registros técnicos. Esses dados são usados para autenticação, descoberta, chat, segurança, moderação e prevenção de abuso.',
+    },
+    {
+      title: '8. Compartilhamento de dados',
+      text:
+        'Não vendemos seus dados pessoais. Podemos usar serviços de infraestrutura, autenticação, banco de dados, armazenamento, notificações, anúncios, pagamentos e moderação para operar o app. Também podemos compartilhar informações quando exigido por lei ou para proteger usuários e a plataforma.',
+    },
+    {
+      title: '9. Premium e anúncios',
+      text:
+        'Alguns recursos podem depender de anúncios ou assinatura Premium. O preço informado no app pode ser exibido como R$4,99 mensais. Assinaturas, cobranças, cancelamentos e reembolsos seguem as regras da loja ou meio de pagamento utilizado.',
+    },
+    {
+      title: '10. Exclusão de conta',
+      text:
+        'Você pode solicitar ou executar a exclusão da conta na área de segurança. A exclusão remove perfil, fotos, localização, curtidas, matches, mensagens e chats criados quando tecnicamente possível. Alguns registros mínimos podem ser mantidos temporariamente por obrigação legal, segurança ou prevenção de abuso.',
+    },
+    {
+      title: '11. Segurança infantil',
+      text:
+        'O Raddo não permite menores de 18 anos. Conteúdo de exploração, abuso ou sexualização de menores é proibido e pode ser denunciado às autoridades competentes quando aplicável.',
+    },
+    {
+      title: '12. Alterações',
+      text:
+        'Estes termos podem ser atualizados para refletir mudanças no app, exigências legais ou melhorias de segurança. O uso contínuo do Raddo após alterações indica concordância com a versão atualizada.',
+    },
+    {
+      title: '13. Contato',
+      text:
+        'Para dúvidas, denúncias, privacidade ou exclusão de dados, entre em contato pelo canal de suporte informado na página do app ou nos materiais oficiais do Raddo.',
+    },
+  ];
+
+  return (
+    <div className="mt-4 max-h-96 space-y-4 overflow-auto rounded-lg border border-white/10 bg-slate-950/50 p-4 text-sm text-slate-300">
+      {sections.map((section) => (
+        <section className="space-y-1" key={section.title}>
+          <h3 className="font-semibold text-slate-100">{section.title}</h3>
+          <p className="leading-relaxed">{section.text}</p>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+type ModernChipGridProps<T extends string> = {
+  title: string;
+  helper: string;
+  values: Array<{ value: T; label: string }>;
+  selected: T[];
+  query: string;
+  iconKind: 'people' | 'identity' | 'interest' | 'goal';
+  minRecommended?: number;
+  maxSelected?: number;
+  single?: boolean;
+  onChange: (value: T, checked: boolean) => void;
+};
+
+function ModernChipGrid<T extends string>({
+  title,
+  helper,
+  values,
+  selected,
+  query,
+  iconKind,
+  minRecommended,
+  maxSelected,
+  single = false,
+  onChange,
+}: ModernChipGridProps<T>) {
+  const { t } = useI18n();
+  const cleanQuery = query.trim().toLowerCase();
+  const filteredValues = cleanQuery
+    ? values.filter((option) => `${option.label} ${t(option.value)}`.toLowerCase().includes(cleanQuery))
+    : values;
+  const reachedLimit = typeof maxSelected === 'number' && selected.length >= maxSelected;
+
+  return (
+    <div className="grid gap-3 rounded-xl border border-white/10 bg-slate-950/35 p-3 text-sm">
+      <div>
+        <h3 className="font-semibold text-slate-100">{title}</h3>
+        <p className="mt-1 text-xs leading-relaxed text-slate-400">{helper}</p>
+        {minRecommended && (
+          <p className={`mt-1 text-xs ${selected.length >= minRecommended ? 'text-teal-300' : 'text-amber-200'}`}>
+            {selected.length}/{maxSelected ?? values.length} selecionados
+          </p>
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {values.map((option) => (
-          <label
-            className="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3"
-            key={option.value}
-          >
-            <input
-              checked={selected.includes(option.value)}
-              onChange={(event) => onChange(option.value, event.target.checked)}
-              type="checkbox"
-            />
-            {t(option.value)}
-          </label>
-        ))}
+        {filteredValues.map((option) => {
+          const active = selected.includes(option.value);
+          const disabled = !active && reachedLimit;
+          const Icon = chipIcon(option.value, iconKind);
+          return (
+            <button
+              className={`group min-h-14 rounded-xl border px-3 py-2 text-left transition ${
+                active
+                  ? 'border-teal-300/70 bg-teal-300 text-slate-950 shadow-lg shadow-teal-950/20'
+                  : 'border-white/10 bg-slate-950/60 text-slate-100'
+              } ${disabled ? 'opacity-45' : 'active:scale-[0.98]'}`}
+              disabled={disabled}
+              key={option.value}
+              onClick={() => onChange(option.value, single ? true : !active)}
+              type="button"
+            >
+              <span className="flex items-center gap-2">
+                <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-slate-950' : 'text-teal-300'}`} />
+                <span className="font-semibold">{t(option.value) || option.label}</span>
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
+
+function chipIcon(value: string, kind: ModernChipGridProps<string>['iconKind']) {
+  if (kind === 'interest') {
+    const interestIcons: Partial<Record<ProfileInterest, typeof Sparkles>> = {
+      games: Gamepad2,
+      gym: Dumbbell,
+      anime: Sparkles,
+      technology: MessageCircle,
+      music: Music,
+      travel: Plane,
+      cars: Car,
+      pets: PawPrint,
+    };
+    return interestIcons[value as ProfileInterest] ?? Sparkles;
+  }
+
+
+  if (kind === 'goal') {
+    const goalIcons: Partial<Record<RelationshipGoal, typeof Sparkles>> = {
+      dating: Heart,
+      friendship: UserRound,
+      chat: MessageCircle,
+      casual: Sparkles,
+    };
+    return goalIcons[value as RelationshipGoal] ?? Sparkles;
+  }
+
+  return kind === 'people' ? UserRound : Sparkles;
+}
+
+type SingleChoiceChipsProps<T extends string> = {
+  title: string;
+  values: Array<{ value: T; label: string }>;
+  selected: T;
+  onChange: (value: T) => void;
+};
+
+function SingleChoiceChips<T extends string>({ title, values, selected, onChange }: SingleChoiceChipsProps<T>) {
+  const { t } = useI18n();
+
+  return (
+    <div className="grid gap-2 text-sm">
+      <span className="font-semibold text-slate-100">{title}</span>
+      <div className="flex flex-wrap gap-2">
+        {values.map((option) => {
+          const active = selected === option.value;
+          return (
+            <button
+              className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
+                active
+                  ? 'bg-teal-300 text-slate-950 shadow-lg shadow-teal-950/30'
+                  : 'border border-white/10 bg-slate-950/60 text-slate-200'
+              }`}
+              key={option.value}
+              onClick={() => onChange(option.value)}
+              type="button"
+            >
+              {t(option.value) || option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OptionGrid<T extends string>({ title, values, selected, onChange, onClear, onSelectAll }: OptionGridProps<T>) {
+  const { t } = useI18n();
+  const selectedCount = selected.length;
+
+  return (
+    <div className="grid gap-3 rounded-lg border border-white/10 bg-slate-950/35 p-3 text-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <span className="font-semibold text-slate-100">{title}</span>
+          <p className="mt-0.5 text-xs text-slate-400">
+            {selectedCount === 0 ? 'Nenhuma opção selecionada' : `${selectedCount} selecionada${selectedCount > 1 ? 's' : ''}`}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button
+            className="h-8 rounded-full border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
+            onClick={onSelectAll}
+            type="button"
+          >
+            Todos
+          </button>
+          <button
+            className="h-8 rounded-full border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
+            onClick={onClear}
+            type="button"
+          >
+            Limpar
+          </button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {values.map((option) => {
+          const active = selected.includes(option.value);
+          return (
+            <button
+              className={`min-h-10 rounded-full px-4 text-sm font-semibold transition ${
+                active
+                  ? 'bg-teal-300 text-slate-950 shadow-lg shadow-teal-950/30'
+                  : 'border border-white/10 bg-slate-950/60 text-slate-200'
+              }`}
+              key={option.value}
+              onClick={() => onChange(option.value, !active)}
+              type="button"
+            >
+              {t(option.value) || formatSexuality(option.value)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+

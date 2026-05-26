@@ -12,12 +12,18 @@ type ProfileRow = {
   lat: number | null;
   lng: number | null;
   privacy_mode: PrivacyMode;
+  appear_in_cards: boolean | null;
+  show_distance: boolean | null;
+  show_online_status: boolean | null;
   visibility_radius: number;
   age: number | null;
   gender: GenderIdentity;
+  gender_identities: GenderIdentity[] | null;
   sexualities: Sexuality[] | null;
   looking_for: GenderIdentity[] | null;
   interested_sexualities: Sexuality[] | null;
+  interests: UserProfile['interests'] | null;
+  relationship_goals: UserProfile['relationshipGoals'] | null;
   min_age_preference: number | null;
   max_age_preference: number | null;
   last_seen: string | null;
@@ -48,12 +54,18 @@ function rowToProfile(row: ProfileRow): UserProfile {
     photos: row.photos ?? [row.photo_url],
     location,
     privacyMode: row.privacy_mode,
+    appearInCards: row.appear_in_cards ?? true,
+    showDistance: row.show_distance ?? true,
+    showOnlineStatus: row.show_online_status ?? true,
     visibilityRadius: row.visibility_radius,
     age: row.age ?? 18,
     gender: row.gender,
+    genderIdentities: row.gender_identities ?? [row.gender],
     sexualities: row.sexualities ?? [],
     lookingFor: row.looking_for ?? ['man', 'woman', 'couple'],
     interestedSexualities: row.interested_sexualities ?? [],
+    interests: row.interests ?? [],
+    relationshipGoals: row.relationship_goals ?? [],
     minAgePreference: row.min_age_preference ?? 18,
     maxAgePreference: row.max_age_preference ?? 60,
     lastSeen: row.last_seen,
@@ -83,12 +95,18 @@ function createEmptyProfile(user: User) {
     photo_url: photoURL,
     photos: [photoURL],
     privacy_mode: 'nearby' as PrivacyMode,
+    appear_in_cards: true,
+    show_distance: true,
+    show_online_status: true,
     visibility_radius: 5,
     age: 18,
     gender: 'man' as GenderIdentity,
+    gender_identities: ['man'] as GenderIdentity[],
     sexualities: [],
     looking_for: ['man', 'woman', 'couple'] as GenderIdentity[],
     interested_sexualities: [],
+    interests: [],
+    relationship_goals: [],
     min_age_preference: 18,
     max_age_preference: 60,
     bio: '',
@@ -112,6 +130,19 @@ function getErrorMessage(error: unknown) {
 }
 
 async function loadOrCreateProfile(user: User) {
+  const { data: activeBan, error: banError } = await supabase
+    .from('app_bans')
+    .select('reason')
+    .eq('banned_uid', user.id)
+    .maybeSingle<{ reason: string }>();
+
+  if (banError && banError.code !== '42P01' && banError.code !== '42703') throw banError;
+
+  if (!banError && activeBan) {
+    await supabase.auth.signOut();
+    throw new Error(`Sua conta foi banida do Raddo. Motivo: ${activeBan.reason || 'violação das regras'}.`);
+  }
+
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
