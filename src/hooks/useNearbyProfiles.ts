@@ -89,6 +89,7 @@ function isAgeCompatible(me: UserProfile, profile: UserProfile) {
 
 export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFilter) {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [overrideProfileIds, setOverrideProfileIds] = useState<Set<string>>(new Set());
   const blockedIds = useBlockedProfileIds(me?.uid);
   const seenIds = useSeenProfileIds(me?.uid);
 
@@ -120,19 +121,56 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
     };
   }, [me]);
 
+  useEffect(() => {
+    if (isDemoMode) {
+      setOverrideProfileIds(new Set());
+      return undefined;
+    }
+
+    if (!me) {
+      setOverrideProfileIds(new Set());
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadOverrideProfileIds() {
+      const { data, error } = await supabase.rpc('raddo_visible_profile_override_uids');
+      if (!active) return;
+      if (error) {
+        setOverrideProfileIds(new Set());
+        return;
+      }
+      setOverrideProfileIds(new Set((data ?? []) as string[]));
+    }
+
+    loadOverrideProfileIds();
+
+    return () => {
+      active = false;
+    };
+  }, [me]);
+
   return useMemo(() => {
     if (!me) return [];
 
     return profiles
-      .filter((profile) => isWithinRadius(me, profile))
-      .filter((profile) => profile.appearInCards)
-      .filter((profile) => !blockedIds.has(profile.uid))
-      .filter((profile) => !seenIds.has(profile.uid))
-      .filter((profile) => genderFilter.length === 0 || profile.genderIdentities.some((gender) => genderFilter.includes(gender)))
-      .filter((profile) => isAgeCompatible(me, profile))
-      .filter((profile) => profile.lookingFor.some((gender) => me.genderIdentities.includes(gender)))
-      .filter((profile) => me.lookingFor.some((gender) => profile.genderIdentities.includes(gender)))
-      .filter((profile) => hasAnyOverlap(profile.interestedSexualities, me.sexualities))
-      .filter((profile) => hasAnyOverlap(me.interestedSexualities, profile.sexualities));
-  }, [blockedIds, genderFilter, me, profiles, seenIds]);
+      .filter((profile) => {
+        const isOverride = overrideProfileIds.has(profile.uid);
+        if (blockedIds.has(profile.uid)) return false;
+        if (isOverride) return true;
+
+        return (
+          isWithinRadius(me, profile) &&
+          profile.appearInCards &&
+          !seenIds.has(profile.uid) &&
+          (genderFilter.length === 0 || profile.genderIdentities.some((gender) => genderFilter.includes(gender))) &&
+          isAgeCompatible(me, profile) &&
+          profile.lookingFor.some((gender) => me.genderIdentities.includes(gender)) &&
+          me.lookingFor.some((gender) => profile.genderIdentities.includes(gender)) &&
+          hasAnyOverlap(profile.interestedSexualities, me.sexualities) &&
+          hasAnyOverlap(me.interestedSexualities, profile.sexualities)
+        );
+      });
+  }, [blockedIds, genderFilter, me, overrideProfileIds, profiles, seenIds]);
 }

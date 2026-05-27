@@ -57,6 +57,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const canManage = isOwner || isModerator;
   const joinRequests = useMapEventJoinRequests(event.id, me, canManage);
   const bannedUsers = useMapEventBans(event.id, me, canManage);
+  const [handledJoinRequestIds, setHandledJoinRequestIds] = useState<Set<string>>(new Set());
   const [optimisticMessages, setOptimisticMessages] = useState<typeof messages>([]);
   const [text, setText] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
@@ -71,6 +72,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const [gpsOpen, setGpsOpen] = useState(false);
+  const [requestActionUid, setRequestActionUid] = useState('');
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -86,8 +88,67 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     return [...messages, ...pendingMessages].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   }, [messages, optimisticMessages]);
   const moderatorProfiles = participants.filter((profile) => moderators.includes(profile.uid));
+  const visibleJoinRequests = useMemo(
+    () => joinRequests.filter((profile) => !handledJoinRequestIds.has(profile.uid)),
+    [handledJoinRequestIds, joinRequests],
+  );
   const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do chat';
   const expiresAt = new Date(Date.parse(event.createdAt) + 24 * 60 * 60 * 1000);
+
+  useEffect(() => {
+    setHandledJoinRequestIds(new Set());
+  }, [event.id]);
+
+  useEffect(() => {
+    const handleBack = (backEvent: Event) => {
+      if (uploadingImage || pendingImageURL) {
+        backEvent.preventDefault();
+        cancelPendingImage();
+        return;
+      }
+
+      if (gpsOpen) {
+        backEvent.preventDefault();
+        setGpsOpen(false);
+        return;
+      }
+
+      if (reportOpen) {
+        backEvent.preventDefault();
+        setReportOpen(false);
+        return;
+      }
+
+      if (previewProfile) {
+        backEvent.preventDefault();
+        setPreviewProfile(null);
+        return;
+      }
+
+      if (actionProfile) {
+        backEvent.preventDefault();
+        setActionProfile(null);
+        return;
+      }
+
+      if (openMessageMenuId) {
+        backEvent.preventDefault();
+        setOpenMessageMenuId('');
+        return;
+      }
+
+      if (managementView) {
+        backEvent.preventDefault();
+        setManagementView(null);
+      }
+    };
+
+    window.addEventListener('raddo:android-back', handleBack, { capture: true });
+
+    return () => {
+      window.removeEventListener('raddo:android-back', handleBack, { capture: true });
+    };
+  }, [actionProfile, gpsOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, uploadingImage]);
 
   useEffect(() => {
     const area = messageAreaRef.current;
@@ -170,11 +231,15 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   async function confirmPendingImage() {
     if (!pendingImageURL) return;
 
+    const imageURL = pendingImageURL;
+    const viewOnce = pendingImageViewOnce;
+    setPendingImageURL('');
+    setPendingImageViewOnce(false);
     setSendingImage(true);
     try {
       await sendMapEventMessage({
         eventId: event.id,
-        image: { imageURL: pendingImageURL, viewOnce: pendingImageViewOnce },
+        image: { imageURL, viewOnce },
         senderUid: me.uid,
         senderName: me.displayName,
         text: 'Imagem',
@@ -189,15 +254,13 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           senderName: me.displayName,
           text: 'Imagem',
           messageType: 'image',
-          imageURL: pendingImageURL,
+          imageURL,
           imagePath: '',
-          viewOnce: pendingImageViewOnce,
+          viewOnce,
           viewedBy: [],
           createdAt: new Date().toISOString(),
         },
       ]);
-      setPendingImageURL('');
-      setPendingImageViewOnce(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui enviar a imagem.');
     } finally {
@@ -266,18 +329,28 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }
 
   async function handleApprove(profile: UserProfile) {
+    setRequestActionUid(profile.uid);
     try {
       await approveMapEventRequest(event.id, profile.uid);
+      setHandledJoinRequestIds((current) => new Set(current).add(profile.uid));
+      setError(`${profile.displayName} foi aprovado para entrar no chat.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui aprovar a entrada.');
+    } finally {
+      setRequestActionUid('');
     }
   }
 
   async function handleReject(profile: UserProfile) {
+    setRequestActionUid(profile.uid);
     try {
       await rejectMapEventRequest(event.id, profile.uid);
+      setHandledJoinRequestIds((current) => new Set(current).add(profile.uid));
+      setError(`Pedido de ${profile.displayName} recusado.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui recusar a entrada.');
+    } finally {
+      setRequestActionUid('');
     }
   }
 
@@ -488,7 +561,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                 onClick={() => setManagementView('requests')}
                 type="button"
               >
-                Pedidos ({joinRequests.length})
+                Pedidos ({visibleJoinRequests.length})
               </button>
             </div>
           )}
@@ -536,6 +609,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                         mine={mine}
                         onViewed={() => markMapEventMessageImageViewed(message, me.uid)}
                         viewed={message.viewedBy.includes(me.uid)}
+                        viewedStorageKey={`raddo:view-once:map:${me.uid}:${message.imageURL || message.id}`}
                         viewOnce={message.viewOnce}
                       />
                     ) : (
@@ -564,7 +638,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                     {managementView === 'people' && `${participants.length} pessoas participando`}
                     {managementView === 'moderators' && `${moderatorProfiles.length} moderadores escolhidos`}
                     {managementView === 'banned' && `${bannedUsers.length} pessoas banidas`}
-                    {managementView === 'requests' && `${joinRequests.length} pedidos aguardando`}
+                    {managementView === 'requests' && `${visibleJoinRequests.length} pedidos aguardando`}
                   </p>
                 </div>
                 <button
@@ -672,11 +746,11 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                     </article>
                   ))}
 
-                {managementView === 'requests' && joinRequests.length === 0 && (
+                {managementView === 'requests' && visibleJoinRequests.length === 0 && (
                   <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhum pedido pendente.</p>
                 )}
                 {managementView === 'requests' &&
-                  joinRequests.map((profile) => (
+                  visibleJoinRequests.map((profile) => (
                     <article className="rounded-lg bg-slate-950/60 p-3" key={profile.uid}>
                       <div className="flex items-center gap-3">
                         <ProfileAvatar profile={profile} />
@@ -687,18 +761,20 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2">
                         <button
-                          className="h-10 rounded-lg bg-teal-300 text-xs font-semibold text-slate-950"
+                          className="h-10 rounded-lg bg-teal-300 text-xs font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-60"
+                          disabled={requestActionUid === profile.uid}
                           onClick={() => handleApprove(profile)}
                           type="button"
                         >
-                          Aprovar
+                          {requestActionUid === profile.uid ? 'Processando...' : 'Aprovar'}
                         </button>
                         <button
-                          className="h-10 rounded-lg bg-rose-400 text-xs font-semibold text-white"
+                          className="h-10 rounded-lg bg-rose-400 text-xs font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+                          disabled={requestActionUid === profile.uid}
                           onClick={() => handleReject(profile)}
                           type="button"
                         >
-                          Recusar
+                          {requestActionUid === profile.uid ? 'Processando...' : 'Recusar'}
                         </button>
                       </div>
                     </article>

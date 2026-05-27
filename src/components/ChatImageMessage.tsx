@@ -5,14 +5,27 @@ type Props = {
   mine: boolean;
   onViewed?: () => Promise<void> | void;
   viewed: boolean;
+  viewedStorageKey?: string;
   viewOnce: boolean;
 };
 
-export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, viewOnce }: Props) {
+export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, viewedStorageKey, viewOnce }: Props) {
   const [open, setOpen] = useState(false);
   const [expiredHere, setExpiredHere] = useState(false);
+  const [viewedLocally, setViewedLocally] = useState(() =>
+    viewedStorageKey ? window.localStorage.getItem(viewedStorageKey) === 'yes' : false,
+  );
   const [secondsLeft, setSecondsLeft] = useState(10);
-  const expired = viewOnce && (expiredHere || (!open && !mine && viewed));
+  const expired = viewOnce && !open && (expiredHere || viewed || viewedLocally);
+
+  useEffect(() => {
+    if (!viewedStorageKey) {
+      setViewedLocally(false);
+      return;
+    }
+
+    setViewedLocally(window.localStorage.getItem(viewedStorageKey) === 'yes');
+  }, [viewedStorageKey]);
 
   useEffect(() => {
     if (!open || !viewOnce) return undefined;
@@ -33,6 +46,10 @@ export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, vie
     setOpen(true);
     if (!viewOnce) return;
 
+    if (viewedStorageKey) {
+      window.localStorage.setItem(viewedStorageKey, 'yes');
+      setViewedLocally(true);
+    }
     void onViewed?.();
   }
 

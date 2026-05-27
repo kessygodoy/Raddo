@@ -157,10 +157,39 @@ Deno.serve(async (req) => {
     return jsonResponse({ sent: 0 });
   }
 
+  const { data: preferenceRows, error: preferenceError } = await admin
+    .from('notification_preferences')
+    .select('user_uid,enabled,map_chats')
+    .in('user_uid', recipientIds);
+  if (preferenceError) return jsonResponse({ error: preferenceError.message }, 500);
+
+  const preferencesByUid = new Map(
+    (preferenceRows ?? []).map((row) => [
+      row.user_uid as string,
+      {
+        enabled: row.enabled as boolean,
+        mapChats: row.map_chats as boolean,
+      },
+    ]),
+  );
+  const allowedRecipientIds = recipientIds.filter((uid) => {
+    const preferences = preferencesByUid.get(uid);
+    return !preferences || (preferences.enabled && preferences.mapChats);
+  });
+  if (allowedRecipientIds.length === 0) {
+    await writePushLog(admin, {
+      kind: 'map_event',
+      recipientCount: allowedRecipientIds.length,
+      senderUid: body.senderUid,
+      status: 'disabled_by_preferences',
+    });
+    return jsonResponse({ sent: 0 });
+  }
+
   const { data: tokenRows, error: tokenError } = await admin
     .from('device_push_tokens')
     .select('token,user_uid')
-    .in('user_uid', recipientIds)
+    .in('user_uid', allowedRecipientIds)
     .neq('user_uid', body.senderUid);
   if (tokenError) return jsonResponse({ error: tokenError.message }, 500);
 

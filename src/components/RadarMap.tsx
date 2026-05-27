@@ -37,7 +37,8 @@ type Props = {
 type MapPointSetter = (point: LatLng) => void;
 
 const MAP_MAX_ZOOM = 19;
-const MAP_SPREAD_MARKERS_ZOOM = MAP_MAX_ZOOM - 4;
+const MAP_SPREAD_MARKERS_ZOOM = MAP_MAX_ZOOM - 3;
+const MAP_SPREAD_OVERLAP_DISTANCE_PX = 30;
 
 const meIcon = L.divIcon({
   className: '',
@@ -55,7 +56,7 @@ const personIcon = L.divIcon({
 
 const personGroupIcon = L.divIcon({
   className: '',
-  html: '<div class="map-group-marker">ðŸ‘¥</div>',
+  html: '<div class="map-group-marker">\u{1F465}</div>',
   iconAnchor: [18, 18],
   iconSize: [36, 36],
 });
@@ -208,7 +209,7 @@ function eventEmojiIcon(emoji: string, highlighted = false) {
     });
   }
 
-  const visibleEmoji = eventEmojiOptions.includes(emoji) ? emoji : 'ðŸ’¬';
+  const visibleEmoji = eventEmojiOptions.includes(emoji) ? emoji : '\u{1F4AC}';
   return L.divIcon({
     className: '',
     html: `<div class="${emojiClassName}">${visibleEmoji}</div>`,
@@ -243,7 +244,7 @@ const draftIcon = L.divIcon({
 
 const eventGroupIcon = L.divIcon({
   className: '',
-  html: '<div class="map-group-marker">ðŸ’¬</div>',
+  html: '<div class="map-group-marker">\u{1F4AC}</div>',
   iconAnchor: [18, 18],
   iconSize: [36, 36],
 });
@@ -343,8 +344,8 @@ function spreadClusterPositions<T extends { position: LatLng }>(cluster: { items
 
   const zoom = map.getZoom();
   const centerPoint = map.project(L.latLng(cluster.position.lat, cluster.position.lng), zoom);
-  const spacingPx = 18;
-  const verticalSpacingPx = 8;
+  const spacingPx = 38;
+  const verticalSpacingPx = 0;
   const startOffset = -((cluster.items.length - 1) * spacingPx) / 2;
   const startVerticalOffset = -((cluster.items.length - 1) * verticalSpacingPx) / 2;
 
@@ -382,12 +383,11 @@ function edgePointForPosition(map: L.Map, position: LatLng) {
   };
 }
 
-function edgeOverlayForPosition(map: L.Map, position: LatLng) {
+function edgeOverlayForPosition(map: L.Map, position: LatLng, margin = 30) {
   const size = map.getSize();
   const center = L.point(size.x / 2, size.y / 2);
   const target = map.latLngToContainerPoint(L.latLng(position.lat, position.lng));
   const delta = target.subtract(center);
-  const margin = 30;
   const availableX = Math.max(1, size.x / 2 - margin);
   const availableY = Math.max(1, size.y / 2 - margin);
   const scaleX = delta.x === 0 ? Number.POSITIVE_INFINITY : availableX / Math.abs(delta.x);
@@ -400,6 +400,58 @@ function edgeOverlayForPosition(map: L.Map, position: LatLng) {
     x: Math.min(size.x - margin, Math.max(margin, edge.x)),
     y: Math.min(size.y - margin, Math.max(margin, edge.y)),
   };
+}
+
+function MyLocationArrow({ me }: { me: UserProfile }) {
+  const map = useMap();
+  const [arrow, setArrow] = useState<{ angle: number; x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!me.location) {
+      setArrow(null);
+      return undefined;
+    }
+
+    let frame = 0;
+
+    function updateArrow() {
+      frame = 0;
+      if (!me.location || isPositionInView(map, me.location)) {
+        setArrow(null);
+        return;
+      }
+
+      setArrow(edgeOverlayForPosition(map, me.location, 96));
+    }
+
+    function scheduleUpdate() {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateArrow);
+    }
+
+    updateArrow();
+    map.on('move zoom moveend zoomend resize', scheduleUpdate);
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      map.off('move zoom moveend zoomend resize', scheduleUpdate);
+    };
+  }, [map, me.location]);
+
+  if (!arrow || !me.location) return null;
+
+  return createPortal(
+    <button
+      className="map-my-location-arrow"
+      onClick={() => me.location && map.flyTo([me.location.lat, me.location.lng], Math.max(map.getZoom(), 15))}
+      style={{ left: `${arrow.x}px`, top: `${arrow.y}px` }}
+      type="button"
+    >
+      <span className="map-my-location-arrow-label">Minha localização</span>
+      <span className="map-my-location-arrow-chevron" style={{ transform: `rotate(${arrow.angle - 45}deg)` }} />
+    </button>,
+    map.getContainer(),
+  );
 }
 
 function OwnerEventArrows({ events, me }: { events: MapEvent[]; me: UserProfile }) {
@@ -536,7 +588,7 @@ function ClusteredEventMarkers({
   const maxZoomClusters = clusterMapItems(
     visibleInBounds.map((event) => ({ event, position: event.location })),
     map,
-    4,
+    MAP_SPREAD_OVERLAP_DISTANCE_PX,
   );
   const permanentEvents = visibleInBounds.filter((event) => event.isPermanent);
   const expiringEvents = visibleInBounds.filter((event) => !event.isPermanent);
@@ -742,6 +794,85 @@ export default function RadarMap({ me, profiles, theme }: Props) {
       window.removeEventListener('raddo:open-people', openPeople);
     };
   }, []);
+
+  useEffect(() => {
+    const handleBack = (event: Event) => {
+      if (event.defaultPrevented) return;
+
+      if (gpsEvent) {
+        event.preventDefault();
+        setGpsEvent(null);
+        return;
+      }
+
+      if (previewProfile) {
+        event.preventDefault();
+        setPreviewProfile(null);
+        return;
+      }
+
+      if (activeEvent) {
+        event.preventDefault();
+        setActiveEvent(null);
+        return;
+      }
+
+      if (previewEvent) {
+        event.preventDefault();
+        setPreviewEvent(null);
+        return;
+      }
+
+      if (emojiPickerOpen) {
+        event.preventDefault();
+        setEmojiPickerOpen(false);
+        return;
+      }
+
+      if (createChatOpen) {
+        event.preventDefault();
+        setCreateChatOpen(false);
+        return;
+      }
+
+      if (clusteredEvents.length > 0) {
+        event.preventDefault();
+        setClusteredEvents([]);
+        return;
+      }
+
+      if (showChatsList || showMyChatsList || showNearbyChatsList) {
+        event.preventDefault();
+        setShowChatsList(false);
+        setShowMyChatsList(false);
+        setShowNearbyChatsList(false);
+        return;
+      }
+
+      if (showPeopleList) {
+        event.preventDefault();
+        setShowPeopleList(false);
+      }
+    };
+
+    window.addEventListener('raddo:android-back', handleBack);
+
+    return () => {
+      window.removeEventListener('raddo:android-back', handleBack);
+    };
+  }, [
+    activeEvent,
+    clusteredEvents.length,
+    createChatOpen,
+    emojiPickerOpen,
+    gpsEvent,
+    previewEvent,
+    previewProfile,
+    showChatsList,
+    showMyChatsList,
+    showNearbyChatsList,
+    showPeopleList,
+  ]);
 
   async function uploadEventCover(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -1057,7 +1188,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                     type="button"
                   >
                     <span className="flex items-start gap-3">
-                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8 text-xl">{event.emoji || 'ðŸ’¬'}</span>
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8 text-xl">{event.emoji || '\u{1F4AC}'}</span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-semibold text-white">{event.title}</span>
                         <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
@@ -1147,7 +1278,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                         }}
                         type="button"
                       >
-                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8 text-lg">{event.emoji || '??'}</span>
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8 text-lg">{event.emoji || '\u{1F4AC}'}</span>
                         {event.coverURL && <img alt="" className="h-9 w-9 shrink-0 rounded-lg object-cover" src={event.coverURL} />}
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2">
@@ -1495,6 +1626,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
               </Popup>
             </Marker>
           )}
+          <MyLocationArrow me={me} />
 
           {me.isPremium && selectedPoint && (
             <Marker icon={draftIcon} position={[selectedPoint.lat, selectedPoint.lng]}>

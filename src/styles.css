@@ -855,6 +855,42 @@ input[type="range"] {
   transform: rotate(-45deg);
 }
 
+.map-my-location-arrow {
+  position: absolute;
+  z-index: 670;
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.34);
+  border-radius: 999px;
+  background: rgba(7, 17, 31, 0.82);
+  padding: 6px 10px 6px 12px;
+  color: #dbeafe;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 18px rgba(59, 130, 246, 0.22),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.map-my-location-arrow-label {
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
+}
+
+.map-my-location-arrow-chevron {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-right: 4px solid rgba(96, 165, 250, 0.9);
+  border-bottom: 4px solid rgba(96, 165, 250, 0.9);
+  filter: drop-shadow(0 0 8px rgba(96, 165, 250, 0.65));
+}
+
 .map-pin-draft {
   background: #f59e0b;
   color: #f59e0b;

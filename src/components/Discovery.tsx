@@ -1,5 +1,6 @@
 ﻿import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Eye, Heart, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import {
@@ -63,6 +64,39 @@ export default function Discovery({ me, profiles }: Props) {
   const likedByTotalPages = Math.max(1, Math.ceil(visibleLikedBy.length / likedByPageSize));
   const safeLikedByPage = Math.min(likedByPage, likedByTotalPages - 1);
   const pagedLikedBy = visibleLikedBy.slice(safeLikedByPage * likedByPageSize, (safeLikedByPage + 1) * likedByPageSize);
+
+  useEffect(() => {
+    const handleBack = (event: Event) => {
+      if (previewProfile) {
+        event.preventDefault();
+        setPreviewProfile(null);
+        return;
+      }
+
+      if (matchProfile) {
+        event.preventDefault();
+        setMatchProfile(null);
+        return;
+      }
+
+      if (videoAdContext) {
+        event.preventDefault();
+        setVideoAdContext(null);
+        return;
+      }
+
+      if (likedByModalOpen) {
+        event.preventDefault();
+        setLikedByModalOpen(false);
+      }
+    };
+
+    window.addEventListener('raddo:android-back', handleBack);
+
+    return () => {
+      window.removeEventListener('raddo:android-back', handleBack);
+    };
+  }, [likedByModalOpen, matchProfile, previewProfile, videoAdContext]);
 
   async function finishVideoAd() {
     if (videoAdContext === 'likedBy') {

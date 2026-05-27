@@ -1,5 +1,4 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { App as CapacitorApp } from '@capacitor/app';
 import { ArrowLeft, Camera, Flag, ImagePlus, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX } from 'lucide-react';
 import type { Match, Message, UserProfile } from '../types';
 import {
@@ -46,8 +45,9 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
+  const handledOpenMatchIdRef = useRef('');
   const activeMatch = useMemo(
-    () => sortedMatches.find((match) => match.id === activeMatchId) ?? sortedMatches[0],
+    () => sortedMatches.find((match) => match.id === activeMatchId) ?? null,
     [activeMatchId, sortedMatches],
   );
   const messages = useMessages(activeMatch?.id);
@@ -68,7 +68,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     [activeMatch?.id, messages, optimisticMessages],
   );
   useEffect(() => {
-    if (openMatchId && sortedMatches.some((match) => match.id === openMatchId)) {
+    if (openMatchId && handledOpenMatchIdRef.current !== openMatchId && sortedMatches.some((match) => match.id === openMatchId)) {
+      handledOpenMatchIdRef.current = openMatchId;
       setActiveMatchId(openMatchId);
       setChatView('conversation');
       setMatchMenuOpen(false);
@@ -76,24 +77,44 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   }, [openMatchId, sortedMatches]);
 
   useEffect(() => {
-    if (chatView !== 'conversation') return undefined;
+    const handleBack = (event: Event) => {
+      if (uploadingImage || pendingImageURL) {
+        event.preventDefault();
+        cancelPendingImage();
+        return;
+      }
 
-    let removeListener: (() => void) | undefined;
-    CapacitorApp.addListener('backButton', () => {
       if (previewProfile) {
+        event.preventDefault();
         setPreviewProfile(null);
         return;
       }
-      setChatView('list');
-      setMatchMenuOpen(false);
-    }).then((handle) => {
-      removeListener = () => handle.remove();
-    });
+
+      if (openMessageMenuId) {
+        event.preventDefault();
+        setOpenMessageMenuId('');
+        return;
+      }
+
+      if (matchMenuOpen) {
+        event.preventDefault();
+        setMatchMenuOpen(false);
+        return;
+      }
+
+      if (chatView === 'conversation') {
+        event.preventDefault();
+        setChatView('list');
+        setMatchMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('raddo:android-back', handleBack);
 
     return () => {
-      removeListener?.();
+      window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [chatView, previewProfile]);
+  }, [chatView, matchMenuOpen, openMessageMenuId, pendingImageURL, previewProfile, uploadingImage]);
 
   useEffect(() => {
     const area = messageAreaRef.current;
@@ -131,7 +152,13 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     setOptimisticMessages((current) => [...current, nextMessage]);
     shouldStickToBottomRef.current = true;
     setText('');
-    await sendMessage(activeMatch.id, currentUid, cleanText, currentProfile.displayName);
+    try {
+      await sendMessage(activeMatch.id, currentUid, cleanText, currentProfile.displayName);
+    } catch (error) {
+      setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+      setText(cleanText);
+      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
+    }
   }
 
   async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -166,6 +193,10 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   async function confirmPendingImage() {
     if (!activeMatch || !pendingImageURL) return;
 
+    const imageURL = pendingImageURL;
+    const viewOnce = pendingImageViewOnce;
+    setPendingImageURL('');
+    setPendingImageViewOnce(false);
     setSendingImage(true);
     try {
       const nextMessage: Message = {
@@ -174,21 +205,20 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
         text: 'Imagem',
         matchId: activeMatch.id,
         messageType: 'image',
-        imageURL: pendingImageURL,
+        imageURL,
         imagePath: '',
-        viewOnce: pendingImageViewOnce,
+        viewOnce,
         viewedBy: [],
         createdAt: new Date().toISOString(),
       };
       setOptimisticMessages((current) => [...current, nextMessage]);
       shouldStickToBottomRef.current = true;
       await sendMessage(activeMatch.id, currentUid, 'Imagem', currentProfile.displayName, {
-        imageURL: pendingImageURL,
-        viewOnce: pendingImageViewOnce,
+        imageURL,
+        viewOnce,
       });
-      setPendingImageURL('');
-      setPendingImageViewOnce(false);
     } catch (error) {
+      setOptimisticMessages((current) => current.filter((message) => !message.id.startsWith('local-image-')));
       setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a imagem.');
     } finally {
       setSendingImage(false);
@@ -331,7 +361,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           {sortedMatches.map((match) => {
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
-            const isActive = activeMatch?.id === match.id;
+            const isActive = activeMatchId === match.id;
             const displayName = profile?.displayName ?? `Match ${otherUid.slice(-4)}`;
             const photoURL = profile?.photoURL;
 
@@ -534,6 +564,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                         mine={mine}
                         onViewed={() => markMessageImageViewed(message, currentUid)}
                         viewed={message.viewedBy.includes(currentUid)}
+                        viewedStorageKey={`raddo:view-once:match:${currentUid}:${message.imageURL || message.id}`}
                         viewOnce={message.viewOnce}
                       />
                     ) : (

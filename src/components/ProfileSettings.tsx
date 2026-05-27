@@ -46,6 +46,13 @@ import PremiumScreen from './PremiumScreen';
 import ProfilePreview from './ProfilePreview';
 import { getNotificationPermission, requestNativeNotifications, showAppNotification } from '../nativeNotifications';
 import { registerDeviceForPush } from '../pushNotifications';
+import {
+  loadNotificationPreferences,
+  saveNotificationPreferences,
+  saveNotificationPreferencesLocal,
+  syncNotificationPreferences,
+  type NotificationPreferences,
+} from '../notificationPreferences';
 import { moderateUploadedImage } from '../imageModeration';
 import { banAppUser, type ModerationCase, useAppModeratorRole, useModerationCases } from '../moderation';
 
@@ -88,6 +95,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [notificationStatus, setNotificationStatus] = useState(
     typeof Notification === 'undefined' ? 'indisponível' : Notification.permission,
   );
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(() => loadNotificationPreferences(profile.uid));
   const [safetyMessage, setSafetyMessage] = useState('');
   const [banUserUid, setBanUserUid] = useState('');
   const [banReason, setBanReason] = useState('');
@@ -109,6 +117,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   useEffect(() => {
     setDraft(profile);
     latestDraftRef.current = profile;
+    setNotificationPreferences(loadNotificationPreferences(profile.uid));
   }, [profile]);
 
   useEffect(
@@ -121,9 +130,44 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     [],
   );
 
+  useEffect(() => {
+    const handleBack = (event: Event) => {
+      if (showPublicPreview) {
+        event.preventDefault();
+        setShowPublicPreview(false);
+        return;
+      }
+
+      if (selectedModerationCase) {
+        event.preventDefault();
+        setSelectedModerationCase(null);
+        return;
+      }
+
+      if (termsOpen) {
+        event.preventDefault();
+        setTermsOpen(false);
+      }
+    };
+
+    window.addEventListener('raddo:android-back', handleBack);
+
+    return () => {
+      window.removeEventListener('raddo:android-back', handleBack);
+    };
+  }, [selectedModerationCase, showPublicPreview, termsOpen]);
+
   function updateDraft<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setDraft((prev) => {
       const nextDraft = { ...prev, [key]: value };
+      queueAutoSave(nextDraft);
+      return nextDraft;
+    });
+  }
+
+  function updateDraftPatch(patch: Partial<UserProfile>) {
+    setDraft((prev) => {
+      const nextDraft = { ...prev, ...patch };
       queueAutoSave(nextDraft);
       return nextDraft;
     });
@@ -269,8 +313,22 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const permission = await requestNativeNotifications();
     setNotificationStatus(permission);
     if (permission === 'granted') {
+      const nextPreferences = { ...notificationPreferences, enabled: true };
+      setNotificationPreferences(nextPreferences);
+      saveNotificationPreferencesLocal(profile.uid, nextPreferences);
+      await syncNotificationPreferences(profile.uid, nextPreferences);
       await registerDeviceForPush(profile.uid);
       await showAppNotification('Raddo', t('notificationEnabledBody'));
+    }
+  }
+
+  async function updateNotificationPreferences(patch: Partial<NotificationPreferences>) {
+    const nextPreferences = { ...notificationPreferences, ...patch };
+    setNotificationPreferences(nextPreferences);
+    try {
+      await saveNotificationPreferences(profile.uid, nextPreferences);
+    } catch (error) {
+      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui salvar as notificações.');
     }
   }
 
@@ -570,8 +628,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                       values={genderOptions}
                       onChange={(value) => {
                         const fallback = [value as GenderIdentity];
-                        updateDraft('genderIdentities', fallback);
-                        updateDraft('gender', primaryGender(fallback));
+                        updateDraftPatch({
+                          gender: primaryGender(fallback),
+                          genderIdentities: fallback,
+                        });
                       }}
                     />
                     <ModernChipGrid
@@ -600,61 +660,65 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               </div>
             </section>
 
-            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-                <MapPin className="h-4 w-4 text-teal-300" />
-                {t('reachRadius')}
-              </div>
-              <label className="grid gap-2 text-sm">
-                {t('radius', { radius: formatRadius(draft.visibilityRadius) })}
-                <input
-                  max={500}
-                  min={0.02}
-                  onChange={(event) => updateDraft('visibilityRadius', Number(event.target.value))}
-                  onKeyUp={flushAutoSave}
-                  onPointerUp={flushAutoSave}
-                  onTouchEnd={flushAutoSave}
-                  step={0.01}
-                  type="range"
-                  value={draft.visibilityRadius}
-                />
-              </label>
-            </section>
+            {preferenceStep === 'find' && (
+              <>
+                <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                    <MapPin className="h-4 w-4 text-teal-300" />
+                    {t('reachRadius')}
+                  </div>
+                  <label className="grid gap-2 text-sm">
+                    {t('radius', { radius: formatRadius(draft.visibilityRadius) })}
+                    <input
+                      max={500}
+                      min={0.02}
+                      onChange={(event) => updateDraft('visibilityRadius', Number(event.target.value))}
+                      onKeyUp={flushAutoSave}
+                      onPointerUp={flushAutoSave}
+                      onTouchEnd={flushAutoSave}
+                      step={0.01}
+                      type="range"
+                      value={draft.visibilityRadius}
+                    />
+                  </label>
+                </section>
 
-            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
-                <SlidersHorizontal className="h-4 w-4 text-teal-300" />
-                {t('agePreference')}
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="grid gap-2 text-sm">
-                  {t('minAge')}: {draft.minAgePreference ?? 18}
-                  <input
-                  max={Math.min(draft.maxAgePreference ?? 60, 99)}
-                    min={18}
-                    onChange={(event) => updateDraft('minAgePreference', Number(event.target.value))}
-                    onKeyUp={flushAutoSave}
-                    onPointerUp={flushAutoSave}
-                    onTouchEnd={flushAutoSave}
-                    type="range"
-                  value={draft.minAgePreference ?? 18}
-                  />
-                </label>
-                <label className="grid gap-2 text-sm">
-                  {t('maxAge')}: {draft.maxAgePreference ?? 60}
-                  <input
-                    max={99}
-                  min={Math.max(draft.minAgePreference ?? 18, 18)}
-                    onChange={(event) => updateDraft('maxAgePreference', Number(event.target.value))}
-                    onKeyUp={flushAutoSave}
-                    onPointerUp={flushAutoSave}
-                    onTouchEnd={flushAutoSave}
-                    type="range"
-                  value={draft.maxAgePreference ?? 60}
-                  />
-                </label>
-              </div>
-            </section>
+                <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                    <SlidersHorizontal className="h-4 w-4 text-teal-300" />
+                    {t('agePreference')}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="grid gap-2 text-sm">
+                      {t('minAge')}: {draft.minAgePreference ?? 18}
+                      <input
+                        max={Math.min(draft.maxAgePreference ?? 60, 99)}
+                        min={18}
+                        onChange={(event) => updateDraft('minAgePreference', Number(event.target.value))}
+                        onKeyUp={flushAutoSave}
+                        onPointerUp={flushAutoSave}
+                        onTouchEnd={flushAutoSave}
+                        type="range"
+                        value={draft.minAgePreference ?? 18}
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm">
+                      {t('maxAge')}: {draft.maxAgePreference ?? 60}
+                      <input
+                        max={99}
+                        min={Math.max(draft.minAgePreference ?? 18, 18)}
+                        onChange={(event) => updateDraft('maxAgePreference', Number(event.target.value))}
+                        onKeyUp={flushAutoSave}
+                        onPointerUp={flushAutoSave}
+                        onTouchEnd={flushAutoSave}
+                        type="range"
+                        value={draft.maxAgePreference ?? 60}
+                      />
+                    </label>
+                  </div>
+                </section>
+              </>
+            )}
           </div>
         )}
 
@@ -819,17 +883,51 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 <Bell className="h-4 w-4 text-teal-300" />
                 Notificações
               </div>
-              <p className="text-sm text-slate-300">
-                Ative para receber avisos de novos matches, mensagens e atividade em chats do mapa.
+              <p className="text-sm text-slate-300">Escolha quais avisos o Raddo pode mostrar no seu aparelho.</p>
+              <div className="mt-3 grid gap-2">
+                <PrivacyToggle
+                  checked={notificationPreferences.enabled}
+                  description="Desliga todos os avisos do Raddo sem alterar sua conta."
+                  label="Receber notificações"
+                  onChange={(checked) => {
+                    if (checked && notificationStatus !== 'granted') {
+                      void enableNotifications();
+                      return;
+                    }
+                    void updateNotificationPreferences({ enabled: checked });
+                  }}
+                />
+                <PrivacyToggle
+                  checked={notificationPreferences.connections}
+                  description="Avisos quando você receber uma nova conexão."
+                  label="Conexões"
+                  onChange={(checked) => void updateNotificationPreferences({ connections: checked })}
+                />
+                <PrivacyToggle
+                  checked={notificationPreferences.connectionMessages}
+                  description="Avisos de novas mensagens nas conversas de conexões."
+                  label="Conversas em conexões"
+                  onChange={(checked) => void updateNotificationPreferences({ connectionMessages: checked })}
+                />
+                <PrivacyToggle
+                  checked={notificationPreferences.mapChats}
+                  description="Avisos de mensagens nos chats do mapa em que você entrou."
+                  label="Chats do mapa"
+                  onChange={(checked) => void updateNotificationPreferences({ mapChats: checked })}
+                />
+              </div>
+              {notificationStatus !== 'granted' && (
+                <button
+                  className="mt-3 h-11 w-full rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+                  onClick={enableNotifications}
+                  type="button"
+                >
+                  Ativar permissão no Android
+                </button>
+              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Status do Android: {notificationStatus}. Para bloquear tudo pelo sistema, use as configurações do aparelho.
               </p>
-              <button
-                className="mt-3 h-11 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
-                onClick={enableNotifications}
-                type="button"
-              >
-                {notificationStatus === 'granted' ? 'Notificações ativadas' : 'Ativar notificações'}
-              </button>
-              <p className="mt-2 text-xs text-slate-400">Status: {notificationStatus}</p>
             </section>
 
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">

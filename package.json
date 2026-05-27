@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "android:sync": "npm run build && npx cap sync android",
+    "android:debug-apk": "npm run build && npx cap sync android && powershell -ExecutionPolicy Bypass -File scripts/build-debug-apk-with-version.ps1",
     "android:open": "npx cap open android",
     "ios:sync": "npm run build && npx cap sync ios",
     "ios:open": "npx cap open ios"

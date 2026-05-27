@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabase';
 import { demoLikedBy, demoMatches, demoProfiles, isDemoMode } from '../demoData';
 import type { Match, Message, UserProfile } from '../types';
@@ -126,6 +126,7 @@ async function fetchMatches(uid: string) {
 
 export function useMatches(uid?: string) {
   const [matches, setMatches] = useState<Match[]>([]);
+  const lastLoadedCountRef = useRef(0);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -143,11 +144,18 @@ export function useMatches(uid?: string) {
 
     async function loadMatches() {
       try {
-        const nextMatches = await fetchMatches(currentUid);
-        if (active) setMatches(nextMatches);
+        let nextMatches = await fetchMatches(currentUid);
+        if (nextMatches.length === 0 && lastLoadedCountRef.current > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+          if (!active) return;
+          nextMatches = await fetchMatches(currentUid);
+        }
+        if (active) {
+          lastLoadedCountRef.current = nextMatches.length;
+          setMatches(nextMatches);
+        }
       } catch (error) {
         console.error('Não consegui carregar matches', error);
-        if (active) setMatches([]);
       }
     }
 
@@ -814,8 +822,18 @@ export function useLikedBy(me: UserProfile | null) {
     const currentUid = me.uid;
 
     async function loadLikedBy() {
-      const { data: likes } = await supabase.from('likes').select('from_uid').eq('to_uid', currentUid);
-      const ids = (likes ?? []).map((like) => like.from_uid as string);
+      const [{ data: likes }, { data: outgoingLikes }, { data: outgoingPasses }] = await Promise.all([
+        supabase.from('likes').select('from_uid').eq('to_uid', currentUid),
+        supabase.from('likes').select('to_uid').eq('from_uid', currentUid),
+        supabase.from('passes').select('to_uid').eq('from_uid', currentUid),
+      ]);
+      const handledIds = new Set([
+        ...(outgoingLikes ?? []).map((like) => like.to_uid as string),
+        ...(outgoingPasses ?? []).map((pass) => pass.to_uid as string),
+      ]);
+      const ids = (likes ?? [])
+        .map((like) => like.from_uid as string)
+        .filter((uid) => !handledIds.has(uid));
 
       if (ids.length === 0) {
         if (active) setProfiles([]);
@@ -864,6 +882,8 @@ export function useLikedBy(me: UserProfile | null) {
     const channel = supabase
       .channel(`liked-by:${me.uid}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `to_uid=eq.${currentUid}` }, loadLikedBy)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${currentUid}` }, loadLikedBy)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${currentUid}` }, loadLikedBy)
       .subscribe();
 
     return () => {
@@ -888,36 +908,61 @@ export async function sendMessage(
   if (!cleanText) return;
 
   const now = new Date().toISOString();
-  const { data: messageData, error: messageError } = await supabase
-    .from('messages')
-    .insert({
-      sender_uid: senderUid,
-      text: cleanText,
-      match_id: matchId,
-      message_type: image ? 'image' : 'text',
-      image_url: image?.imageURL ?? '',
-      image_path: image?.imagePath ?? '',
-      view_once: image?.viewOnce ?? false,
-      viewed_by: [],
-      created_at: now,
-    })
-    .select('id')
-    .single<{ id: string }>();
+  let messageId = '';
+  const rpcResult = await supabase.rpc('send_match_message', {
+    target_match_id: matchId,
+    message_text: cleanText,
+    message_type_value: image ? 'image' : 'text',
+    image_url_value: image?.imageURL ?? '',
+    image_path_value: image?.imagePath ?? '',
+    view_once_value: image?.viewOnce ?? false,
+  });
 
-  if (messageError) throw new Error(messageError.message || 'Nao consegui enviar a mensagem.');
+  const missingRpc =
+    rpcResult.error &&
+    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('send_match_message'));
 
-  await supabase
-    .from('matches')
-    .update({
-      last_message: cleanText,
-      last_message_at: now,
-    })
-    .eq('id', matchId);
+  if (rpcResult.error && !missingRpc) {
+    throw new Error(rpcResult.error.message || 'Nao consegui enviar a mensagem.');
+  }
+
+  if (missingRpc) {
+    const { data: messageData, error: messageError } = await supabase
+      .from('messages')
+      .insert({
+        sender_uid: senderUid,
+        text: cleanText,
+        match_id: matchId,
+        message_type: image ? 'image' : 'text',
+        image_url: image?.imageURL ?? '',
+        image_path: image?.imagePath ?? '',
+        view_once: image?.viewOnce ?? false,
+        viewed_by: [],
+        created_at: now,
+      })
+      .select('id')
+      .single<{ id: string }>();
+
+    if (messageError) throw new Error(messageError.message || 'Nao consegui enviar a mensagem.');
+    messageId = messageData?.id ?? '';
+
+    await supabase
+      .from('matches')
+      .update({
+        last_message: cleanText,
+        last_message_at: now,
+      })
+      .eq('id', matchId);
+  } else {
+    const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
+    const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+    messageId = row?.id ?? '';
+  }
 
   const { error: pushError } = await supabase.functions.invoke('send-match-push', {
     body: {
       matchId,
-      messageId: messageData?.id,
+      messageId,
       senderName,
       senderUid,
       text: cleanText,
@@ -956,7 +1001,17 @@ export async function deleteMessage(message: Message, viewerUid: string) {
 }
 
 export async function markMessageImageViewed(message: Message, viewerUid: string) {
-  if (isDemoMode || message.senderUid === viewerUid || message.viewedBy.includes(viewerUid)) return;
+  if (isDemoMode || message.viewedBy.includes(viewerUid)) return;
+
+  const rpcResult = await supabase.rpc('mark_match_image_viewed', {
+    target_message_id: message.id,
+  });
+
+  if (!rpcResult.error) return;
+
+  const missingFunction =
+    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('mark_match_image_viewed');
+  if (!missingFunction) throw new Error(rpcResult.error.message || 'Não consegui marcar a imagem como vista.');
 
   const nextViewedBy = [...new Set([...message.viewedBy, viewerUid])];
   const { error } = await supabase.from('messages').update({ viewed_by: nextViewedBy }).eq('id', message.id);

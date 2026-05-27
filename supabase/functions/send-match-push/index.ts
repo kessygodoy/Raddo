@@ -150,10 +150,39 @@ Deno.serve(async (req) => {
     return jsonResponse({ sent: 0 });
   }
 
+  const { data: preferenceRows, error: preferenceError } = await admin
+    .from('notification_preferences')
+    .select('user_uid,enabled,connection_messages')
+    .in('user_uid', recipientIds);
+  if (preferenceError) return jsonResponse({ error: preferenceError.message }, 500);
+
+  const preferencesByUid = new Map(
+    (preferenceRows ?? []).map((row) => [
+      row.user_uid as string,
+      {
+        connectionMessages: row.connection_messages as boolean,
+        enabled: row.enabled as boolean,
+      },
+    ]),
+  );
+  const allowedRecipientIds = recipientIds.filter((uid) => {
+    const preferences = preferencesByUid.get(uid);
+    return !preferences || (preferences.enabled && preferences.connectionMessages);
+  });
+  if (allowedRecipientIds.length === 0) {
+    await writePushLog(admin, {
+      kind: 'match',
+      recipientCount: allowedRecipientIds.length,
+      senderUid: body.senderUid,
+      status: 'disabled_by_preferences',
+    });
+    return jsonResponse({ sent: 0 });
+  }
+
   const { data: tokenRows, error: tokenError } = await admin
     .from('device_push_tokens')
     .select('token,user_uid')
-    .in('user_uid', recipientIds);
+    .in('user_uid', allowedRecipientIds);
   if (tokenError) return jsonResponse({ error: tokenError.message }, 500);
 
   const tokens = [...new Set((tokenRows ?? []).map((row) => row.token as string).filter(Boolean))];

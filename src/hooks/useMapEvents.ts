@@ -669,23 +669,28 @@ export function useMapEventJoinRequests(eventId: string | undefined, me: UserPro
     let active = true;
 
     async function loadRequests() {
-      const { data, error } = await supabase
-        .from('map_event_join_requests')
-        .select('event_id,user_uid,created_at')
-        .eq('event_id', eventId)
-        .order('created_at', { ascending: true });
+      const [{ data, error }, { data: participantRows }] = await Promise.all([
+        supabase
+          .from('map_event_join_requests')
+          .select('event_id,user_uid,created_at')
+          .eq('event_id', eventId)
+          .order('created_at', { ascending: true }),
+        supabase.from('map_event_participants').select('user_uid').eq('event_id', eventId),
+      ]);
       if (error) {
         if (active) setRequests([]);
         return;
       }
+      const participantIds = new Set((participantRows ?? []).map((row) => row.user_uid as string));
       const profiles = await rowsToProfiles((data ?? []) as EventUserRow[], me);
-      if (active) setRequests(profiles.filter((profile) => profile.uid !== me.uid));
+      if (active) setRequests(profiles.filter((profile) => profile.uid !== me.uid && !participantIds.has(profile.uid)));
     }
 
     loadRequests();
     const channel = supabase
       .channel(`map-event-join-requests:${eventId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_join_requests', filter: `event_id=eq.${eventId}` }, loadRequests)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_participants', filter: `event_id=eq.${eventId}` }, loadRequests)
       .subscribe();
 
     return () => {
@@ -962,7 +967,11 @@ export async function rejectMapEventRequest(eventId: string, userUid: string) {
     return;
   }
 
-  const { error } = await supabase.from('map_event_join_requests').delete().eq('event_id', eventId).eq('user_uid', userUid);
+  const { error } = await supabase.rpc('reject_map_event_request', {
+    target_event_id: eventId,
+    target_user_uid: userUid,
+  });
+
   if (error) throw new Error(error.message);
 }
 
@@ -1112,10 +1121,20 @@ export async function sendMapEventMessage(input: {
 }
 
 export async function markMapEventMessageImageViewed(message: MapEventMessage, viewerUid: string) {
-  if (isDemoMode || message.senderUid === viewerUid || message.viewedBy.includes(viewerUid)) return;
+  if (isDemoMode || message.viewedBy.includes(viewerUid)) return;
+
+  const rpcResult = await supabase.rpc('mark_map_event_image_viewed', {
+    target_message_id: message.id,
+  });
+
+  if (!rpcResult.error) return;
+
+  const missingFunction =
+    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('mark_map_event_image_viewed');
+  if (!missingFunction) throw new Error(rpcResult.error.message || 'Não consegui marcar a imagem como vista.');
 
   const nextViewedBy = [...new Set([...message.viewedBy, viewerUid])];
   const { error } = await supabase.from('map_event_messages').update({ viewed_by: nextViewedBy }).eq('id', message.id);
-  if (error) throw new Error(error.message || 'NÃ£o consegui marcar a imagem como vista.');
+  if (error) throw new Error(error.message || 'Não consegui marcar a imagem como vista.');
 }
 

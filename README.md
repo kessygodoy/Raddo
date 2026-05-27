@@ -58,7 +58,32 @@ npm run dev
 - `npm run build`: valida TypeScript e gera `dist`.
 - `npm run preview`: previa do build.
 - `npm run android:sync`: gera build e sincroniza Capacitor.
+- `npm run android:debug-apk`: gera o APK debug, cria `raddo-VERSAO.apk` e `version.json` na pasta do APK.
 - `npm run android:open`: abre o projeto Android.
+
+## Atualizacao por APK fora da Play Store
+
+O app consulta `VITE_APP_UPDATE_URL` para saber se existe uma versao nova. Esse arquivo precisa estar online, fora do APK instalado.
+
+Sugestao no Supabase Storage:
+
+1. Crie um bucket publico chamado `raddo-updates`.
+2. Envie o APK novo com nome versionado, por exemplo `raddo-1.0.2.apk`.
+3. Envie um `version.json` publico no mesmo bucket, usando o modelo em `store-assets/update-version.example.json`.
+4. Aumente tambem `VITE_APP_VERSION`, `versionName` e `versionCode` antes de gerar o proximo APK.
+5. Para gerar o APK junto do manifest de update, rode `npm run android:debug-apk`.
+
+Exemplo de manifest remoto:
+
+```json
+{
+  "version": "1.0.2",
+  "message": "Nova versao do Raddo disponivel. Atualize para receber melhorias e correcoes.",
+  "apkUrl": "https://zsmfrfiemthftuiyursr.supabase.co/storage/v1/object/public/raddo-updates/raddo-1.0.2.apk"
+}
+```
+
+Observacao: esse fluxo serve para APK instalado fora da Play Store. Para distribuicao pela Play Store, use o mecanismo oficial de atualizacao da Google Play.
 
 ## Tabelas
 

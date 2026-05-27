@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Bell, Heart, LogOut, Map as MapIcon, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
@@ -18,6 +19,12 @@ import NotificationsPanel from './components/NotificationsPanel';
 import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
 import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
 import { installAndroidApkUpdate } from './androidUpdater';
+import {
+  defaultNotificationPreferences,
+  loadNotificationPreferences,
+  saveNotificationPreferences,
+  type NotificationPreferences,
+} from './notificationPreferences';
 
 const navItems = [
   { id: 'radar', labelKey: 'navRadar', icon: Radar },
@@ -26,8 +33,10 @@ const navItems = [
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
 
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || '0.1.0';
-const APP_UPDATE_URL = import.meta.env.VITE_APP_UPDATE_URL || '/version.json';
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.3';
+const APP_UPDATE_URL =
+  import.meta.env.VITE_APP_UPDATE_URL ||
+  'https://zsmfrfiemthftuiyursr.supabase.co/storage/v1/object/public/raddo-updates/version.json';
 
 type AppUpdateInfo = {
   version?: string;
@@ -38,6 +47,7 @@ type AppUpdateInfo = {
 
 export default function App() {
   const [view, setView] = useState<AppView>('radar');
+  const [viewHistory, setViewHistory] = useState<AppView[]>([]);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
@@ -45,6 +55,7 @@ export default function App() {
   const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
   const [updateInstallMessage, setUpdateInstallMessage] = useState('');
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
   const [theme, setTheme] = useState<AppTheme>(() => {
     const savedTheme = window.localStorage.getItem('radar-match-theme');
     return savedTheme === 'light' || savedTheme === 'pride' || savedTheme === 'dark' ? savedTheme : 'dark';
@@ -58,12 +69,38 @@ export default function App() {
   const matches = useMatches(user?.id);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
 
+  function navigateTo(nextView: AppView) {
+    setHeaderMenuOpen(false);
+    setView((currentView) => {
+      if (currentView === nextView) return currentView;
+      setViewHistory((currentHistory) => [...currentHistory, currentView].slice(-20));
+      return nextView;
+    });
+  }
+
+  function goBackOneScreen() {
+    setViewHistory((currentHistory) => {
+      const previousView = currentHistory[currentHistory.length - 1];
+      if (previousView) {
+        setView(previousView);
+        return currentHistory.slice(0, -1);
+      }
+
+      if (view !== 'radar') {
+        setView('radar');
+      } else {
+        void CapacitorApp.exitApp();
+      }
+      return currentHistory;
+    });
+  }
+
   function setLanguage(nextLanguage: AppLanguage) {
     setLanguageState(nextLanguage);
   }
 
   function openRadarPanel(panel: 'chats' | 'my-chats' | 'nearby-chats' | 'people') {
-    setView('radar');
+    navigateTo('radar');
     setHeaderMenuOpen(false);
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(`raddo:open-${panel}`));
@@ -118,11 +155,27 @@ export default function App() {
   useEffect(() => {
     if (!profile) {
       setReadNotificationIds(new Set());
+      setNotificationPreferences(defaultNotificationPreferences);
       return;
     }
 
     const saved = window.localStorage.getItem(`raddo-read-notifications:${profile.uid}`);
     setReadNotificationIds(new Set(saved ? JSON.parse(saved) as string[] : []));
+    setNotificationPreferences(loadNotificationPreferences(profile.uid));
+  }, [profile?.uid]);
+
+  useEffect(() => {
+    const handlePreferencesUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ preferences?: NotificationPreferences; uid?: string }>).detail;
+      if (!detail?.preferences || detail.uid !== profile?.uid) return;
+      setNotificationPreferences(detail.preferences);
+    };
+
+    window.addEventListener('raddo:notification-preferences-updated', handlePreferencesUpdate);
+
+    return () => {
+      window.removeEventListener('raddo:notification-preferences-updated', handlePreferencesUpdate);
+    };
   }, [profile?.uid]);
 
   useEffect(() => {
@@ -156,6 +209,7 @@ export default function App() {
     setShowNotificationPrompt(false);
     const permission = await requestNativeNotifications();
     if (permission === 'granted') {
+      await saveNotificationPreferences(profile.uid, { ...loadNotificationPreferences(profile.uid), enabled: true });
       await registerDeviceForPush(profile.uid);
       await showAppNotification('Raddo', t('notificationEnabledBody'));
     }
@@ -165,6 +219,40 @@ export default function App() {
     if (profile) window.localStorage.setItem(`raddo-notification-prompt:${profile.uid}`, 'done');
     setShowNotificationPrompt(false);
   }
+
+  useEffect(() => {
+    let removeListener: (() => void) | undefined;
+
+    CapacitorApp.addListener('backButton', () => {
+      if (availableUpdate) {
+        setAvailableUpdate(null);
+        setUpdateInstallMessage('');
+        return;
+      }
+
+      if (showNotificationPrompt) {
+        setShowNotificationPrompt(false);
+        return;
+      }
+
+      const backEvent = new CustomEvent('raddo:android-back', { cancelable: true });
+      window.dispatchEvent(backEvent);
+      if (backEvent.defaultPrevented) return;
+
+      if (headerMenuOpen) {
+        setHeaderMenuOpen(false);
+        return;
+      }
+
+      goBackOneScreen();
+    }).then((handle) => {
+      removeListener = () => handle.remove();
+    });
+
+    return () => {
+      removeListener?.();
+    };
+  }, [availableUpdate, showNotificationPrompt, headerMenuOpen, view, profile]);
 
   function notificationIdForMatch(match: (typeof matches)[number]) {
     return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
@@ -216,6 +304,11 @@ export default function App() {
           if (data?.sender_uid === currentProfileUid) continue;
         }
 
+        const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+        if (!notificationPreferences.enabled) continue;
+        if (hasMessage && !notificationPreferences.connectionMessages) continue;
+        if (!hasMessage && !notificationPreferences.connections) continue;
+
         const { body, title } = notificationTextForMatch(match);
         void showAppNotification(title, body, {
           matchId: match.id,
@@ -232,7 +325,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [matches, matchProfilesByUid, profile, t]);
+  }, [matches, matchProfilesByUid, notificationPreferences, profile, t]);
 
   useEffect(() => {
     let removeListener: (() => void) | undefined;
@@ -241,9 +334,9 @@ export default function App() {
       if (data.view === 'chat' && data.matchId) {
         if (data.notificationId) markNotificationAsRead(data.notificationId);
         setOpenMatchId(data.matchId);
-        setView('chat');
+        navigateTo('chat');
       } else if (data.view === 'radar') {
-        setView('radar');
+        navigateTo('radar');
       }
     }).then((remove) => {
       removeListener = remove;
@@ -259,10 +352,10 @@ export default function App() {
 
     onPushNotificationTap((data) => {
       if (data.view === 'radar') {
-        setView('radar');
+        navigateTo('radar');
       } else if (data.view === 'chat' && data.matchId) {
         setOpenMatchId(data.matchId);
-        setView('chat');
+        navigateTo('chat');
       }
     }).then((remove) => {
       removeListener = remove;
@@ -287,7 +380,7 @@ export default function App() {
   function openNotification(notificationId: string, matchId: string) {
     markNotificationAsRead(notificationId);
     setOpenMatchId(matchId);
-    setView('chat');
+    navigateTo('chat');
   }
 
   async function installAvailableUpdate() {
@@ -442,10 +535,10 @@ export default function App() {
                 className={`raddo-header-icon relative grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200 ${
                   view === 'notifications' ? 'text-[#ff3f68]' : ''
                 }`}
-                onClick={() => {
-                  setHeaderMenuOpen(false);
-                  setView('notifications');
-                }}
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    navigateTo('notifications');
+                  }}
                 type="button"
               >
                 <Bell className="h-5 w-5" />
@@ -525,6 +618,7 @@ export default function App() {
                 currentUid={profile.uid}
                 matches={matches}
                 onOpenNotification={openNotification}
+                preferences={notificationPreferences}
                 readNotificationIds={readNotificationIds}
               />
             )}
@@ -550,7 +644,7 @@ export default function App() {
                       isActive ? 'bg-teal-300 text-slate-950' : 'text-slate-300 hover:bg-white/8'
                     }`}
                     key={item.id}
-                    onClick={() => setView(item.id)}
+                    onClick={() => navigateTo(item.id)}
                     type="button"
                   >
                     <Icon className="h-5 w-5" />

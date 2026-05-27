@@ -1,12 +1,14 @@
 import { Bell, Heart, MessageCircle } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useMatchProfiles, useSortedMatches } from '../hooks/useMatches';
+import type { NotificationPreferences } from '../notificationPreferences';
 import type { Match } from '../types';
 
 type Props = {
   currentUid: string;
   matches: Match[];
   onOpenNotification: (notificationId: string, matchId: string) => void;
+  preferences: NotificationPreferences;
   readNotificationIds: Set<string>;
 };
 
@@ -33,12 +35,16 @@ function notificationIdForMatch(match: Match) {
   return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
 }
 
-export default function NotificationsPanel({ currentUid, matches, onOpenNotification, readNotificationIds }: Props) {
+export default function NotificationsPanel({ currentUid, matches, onOpenNotification, preferences, readNotificationIds }: Props) {
   const { t } = useI18n();
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
 
-  const notifications = sortedMatches.map((match) => {
+  const notifications = sortedMatches.filter((match) => {
+    const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+    if (!preferences.enabled) return false;
+    return hasMessage ? preferences.connectionMessages : preferences.connections;
+  }).map((match) => {
     const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
     const profile = profilesByUid[otherUid];
     const name = profile?.displayName ?? `Match ${otherUid.slice(-4)}`;
