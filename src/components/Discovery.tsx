@@ -1,7 +1,7 @@
 ﻿import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Eye, Heart, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, Heart, MapPin, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import {
   sendDislike,
@@ -9,12 +9,14 @@ import {
   unlockLikedBy,
   unlockLikeBonus,
   undoProfileInteraction,
+  useCrossedProfiles,
   useLikedBy,
   useSeenProfileIds,
 } from '../hooks/useMatches';
-import { distanceKm } from '../utils/geo';
+import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
 import { showRewardedVideoAd } from '../adMob';
 import ProfilePreview from './ProfilePreview';
+import { matchesGenderPreferences, profileQualityScore } from '../hooks/useNearbyProfiles';
 
 type Props = {
   me: UserProfile;
@@ -26,9 +28,11 @@ export default function Discovery({ me, profiles }: Props) {
   const [message, setMessage] = useState('');
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
-  const [videoAdContext, setVideoAdContext] = useState<'likes' | 'likedBy' | null>(null);
+  const [videoAdContext, setVideoAdContext] = useState<'likes' | 'likedBy' | 'resetCards' | null>(null);
   const [likedByAdUnlocked, setLikedByAdUnlocked] = useState(false);
   const [likedByModalOpen, setLikedByModalOpen] = useState(false);
+  const [crossedModalOpen, setCrossedModalOpen] = useState(false);
+  const [crossedPage, setCrossedPage] = useState(0);
   const [likedByPage, setLikedByPage] = useState(0);
   const [handledLikedByIds, setHandledLikedByIds] = useState<Set<string>>(new Set());
   const [maxDistanceKm, setMaxDistanceKm] = useState(me.visibilityRadius || 50);
@@ -36,6 +40,7 @@ export default function Discovery({ me, profiles }: Props) {
   const [withPhotoOnly, setWithPhotoOnly] = useState(true);
   const [newOnly, setNewOnly] = useState(false);
   const likedBy = useLikedBy(me);
+  const crossedProfiles = useCrossedProfiles(me, profiles);
   const seenIds = useSeenProfileIds(me.uid);
   const likedByUnlocked =
     me.isPremium || likedByAdUnlocked || (me.likedByUnlockUntil ? Date.parse(me.likedByUnlockUntil) > Date.now() : false);
@@ -43,6 +48,7 @@ export default function Discovery({ me, profiles }: Props) {
     () =>
       profiles
         .filter((profile) => !skipped.has(profile.uid) && !seenIds.has(profile.uid))
+        .filter((profile) => matchesGenderPreferences(me, profile))
         .filter((profile) => {
           if (!me.location || !profile.location) return true;
           return distanceKm(me.location, profile.location) <= maxDistanceKm;
@@ -55,8 +61,20 @@ export default function Discovery({ me, profiles }: Props) {
         .filter((profile) => {
           if (!newOnly) return true;
           return profile.lastSeen ? Date.now() - Date.parse(profile.lastSeen) < 7 * 24 * 60 * 60 * 1000 : true;
+        })
+        .sort((a, b) => {
+          const goalDiff = sharedRelationshipGoalCount(me, b) - sharedRelationshipGoalCount(me, a);
+          if (goalDiff !== 0) return goalDiff;
+          const interestDiff = sharedInterestCount(me, b) - sharedInterestCount(me, a);
+          if (interestDiff !== 0) return interestDiff;
+          const qualityDiff = profileQualityScore(b) - profileQualityScore(a);
+          if (qualityDiff !== 0) return qualityDiff;
+          if (!me.location) return 0;
+          const aDistance = a.location ? distanceKm(me.location, a.location) : Number.MAX_SAFE_INTEGER;
+          const bDistance = b.location ? distanceKm(me.location, b.location) : Number.MAX_SAFE_INTEGER;
+          return aDistance - bDistance;
         }),
-    [maxDistanceKm, me.location, newOnly, onlineOnly, profiles, seenIds, skipped, withPhotoOnly],
+    [maxDistanceKm, me, me.location, newOnly, onlineOnly, profiles, seenIds, skipped, withPhotoOnly],
   );
   const current = queue[0];
   const visibleLikedBy = likedByUnlocked ? likedBy.filter((profile) => !handledLikedByIds.has(profile.uid)) : [];
@@ -64,6 +82,10 @@ export default function Discovery({ me, profiles }: Props) {
   const likedByTotalPages = Math.max(1, Math.ceil(visibleLikedBy.length / likedByPageSize));
   const safeLikedByPage = Math.min(likedByPage, likedByTotalPages - 1);
   const pagedLikedBy = visibleLikedBy.slice(safeLikedByPage * likedByPageSize, (safeLikedByPage + 1) * likedByPageSize);
+  const crossedPageSize = 10;
+  const crossedTotalPages = Math.max(1, Math.ceil(crossedProfiles.length / crossedPageSize));
+  const safeCrossedPage = Math.min(crossedPage, crossedTotalPages - 1);
+  const pagedCrossedProfiles = crossedProfiles.slice(safeCrossedPage * crossedPageSize, (safeCrossedPage + 1) * crossedPageSize);
 
   useEffect(() => {
     const handleBack = (event: Event) => {
@@ -88,6 +110,12 @@ export default function Discovery({ me, profiles }: Props) {
       if (likedByModalOpen) {
         event.preventDefault();
         setLikedByModalOpen(false);
+        return;
+      }
+
+      if (crossedModalOpen) {
+        event.preventDefault();
+        setCrossedModalOpen(false);
       }
     };
 
@@ -96,7 +124,7 @@ export default function Discovery({ me, profiles }: Props) {
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [likedByModalOpen, matchProfile, previewProfile, videoAdContext]);
+  }, [crossedModalOpen, likedByModalOpen, matchProfile, previewProfile, videoAdContext]);
 
   async function finishVideoAd() {
     if (videoAdContext === 'likedBy') {
@@ -104,6 +132,8 @@ export default function Discovery({ me, profiles }: Props) {
       setLikedByAdUnlocked(true);
       setLikedByModalOpen(true);
       setLikedByPage(0);
+    } else if (videoAdContext === 'resetCards') {
+      await resetCardInteractions(true);
     }
     setVideoAdContext(null);
   }
@@ -133,6 +163,21 @@ export default function Discovery({ me, profiles }: Props) {
     }
 
     await handleUnlockLikedBy(true);
+  }
+
+  async function requireAdForResetCards() {
+    if (me.isPremium) {
+      await resetCardInteractions(true);
+      return;
+    }
+
+    const shownRealAd = await showRewardedVideoAd();
+    if (shownRealAd) {
+      await resetCardInteractions(true);
+      return;
+    }
+
+    setVideoAdContext('resetCards');
   }
 
   async function registerLikeForAds() {
@@ -184,6 +229,14 @@ export default function Discovery({ me, profiles }: Props) {
     setHandledLikedByIds((current) => new Set(current).add(profile.uid));
   }
 
+  async function likeCrossedProfile(profile: UserProfile) {
+    await likeProfile(profile);
+  }
+
+  async function dislikeCrossedProfile(profile: UserProfile) {
+    await dislikeProfile(profile);
+  }
+
   async function handleLike() {
     if (!current) return;
     await likeProfile(current);
@@ -194,7 +247,12 @@ export default function Discovery({ me, profiles }: Props) {
     await dislikeProfile(current);
   }
 
-  async function resetCardInteractions() {
+  async function resetCardInteractions(force = false) {
+    if (!force) {
+      await requireAdForResetCards();
+      return;
+    }
+
     setMessage('');
     try {
       await Promise.all([...seenIds].map((uid) => undoProfileInteraction(me.uid, uid)));
@@ -203,6 +261,18 @@ export default function Discovery({ me, profiles }: Props) {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Não consegui liberar os perfis agora.');
     }
+  }
+
+  function videoAdText() {
+    if (videoAdContext === 'likedBy') return 'Assista ao vídeo para liberar todas as pessoas que curtiram você.';
+    if (videoAdContext === 'resetCards') return 'Assista ao vídeo para liberar novamente os perfis que você já curtiu ou recusou.';
+    return 'Este espaço simula o vídeo que aparecerá a cada 30 curtidas. No app real, aqui entra o AdMob.';
+  }
+
+  function videoAdButtonLabel() {
+    if (videoAdContext === 'likedBy') return 'Liberar lista';
+    if (videoAdContext === 'resetCards') return 'Liberar perfis';
+    return 'Fechar anúncio';
   }
 
   return (
@@ -237,11 +307,7 @@ export default function Discovery({ me, profiles }: Props) {
               <div className="p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Anúncio</p>
                 <h2 className="mt-1 text-lg font-semibold">Video patrocinado</h2>
-                <p className="mt-2 text-sm text-slate-300">
-                  {videoAdContext === 'likedBy'
-                    ? 'Assista ao vídeo para liberar todas as pessoas que curtiram você.'
-                    : 'Este espaço simula o vídeo que aparecerá a cada 30 curtidas. No app real, aqui entra o AdMob.'}
-                </p>
+                <p className="mt-2 text-sm text-slate-300">{videoAdText()}</p>
                 <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10">
                   <motion.div
                     animate={{ width: '100%' }}
@@ -255,7 +321,7 @@ export default function Discovery({ me, profiles }: Props) {
                   onClick={finishVideoAd}
                   type="button"
                 >
-                  {videoAdContext === 'likedBy' ? 'Liberar lista' : 'Fechar anúncio'}
+                  {videoAdButtonLabel()}
                 </button>
               </div>
             </motion.section>
@@ -388,6 +454,113 @@ export default function Discovery({ me, profiles }: Props) {
             </motion.section>
           </motion.div>
         )}
+        {crossedModalOpen && (
+          <motion.div
+            animate={{ opacity: 1 }}
+            className="fixed inset-0 z-[65] grid place-items-center bg-black/70 p-4 backdrop-blur"
+            exit={{ opacity: 0 }}
+            initial={{ opacity: 0 }}
+          >
+            <motion.section
+              animate={{ scale: 1, y: 0 }}
+              className="flex max-h-[82dvh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-white/10 bg-[#07111f] text-white shadow-2xl"
+              initial={{ scale: 0.94, y: 18 }}
+            >
+              <header className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Pessoas que cruzei</h2>
+                  <p className="text-sm text-slate-300">
+                    {crossedProfiles.length} {crossedProfiles.length === 1 ? 'pessoa' : 'pessoas'}
+                  </p>
+                </div>
+                <button
+                  aria-label="Fechar pessoas que cruzei"
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white"
+                  onClick={() => setCrossedModalOpen(false)}
+                  type="button"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </header>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden">
+                {crossedProfiles.length === 0 ? (
+                  <p className="rounded-lg border border-white/10 bg-white/8 p-4 text-sm text-slate-300">
+                    Quando alguém compatível passar a até 250 metros de você, aparece aqui.
+                  </p>
+                ) : (
+                  <div className="grid gap-2">
+                    {pagedCrossedProfiles.map(({ distanceMeters, lastCrossedAt, profile }) => (
+                      <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={profile.uid}>
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          onClick={() => setPreviewProfile(profile)}
+                          type="button"
+                        >
+                          {profile.photoURL ? (
+                            <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
+                          ) : (
+                            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white/10 text-sm font-semibold text-white">
+                              {profile.displayName.slice(0, 2).toUpperCase()}
+                            </span>
+                          )}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-semibold">{profile.displayName}</span>
+                            <span className="block truncate text-xs text-slate-300">
+                              Cruzou a {formatPersonDistanceKm(distanceMeters / 1000)} - {formatCrossedTime(lastCrossedAt)}
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          aria-label={`Recusar ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 text-rose-100"
+                          onClick={() => dislikeCrossedProfile(profile)}
+                          type="button"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                        <button
+                          aria-label={`Curtir ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal-300 text-slate-950"
+                          onClick={() => likeCrossedProfile(profile)}
+                          type="button"
+                        >
+                          <Heart className="h-4 w-4" />
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {crossedProfiles.length > crossedPageSize && (
+                <footer className="flex items-center justify-between gap-3 border-t border-white/10 p-4">
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm font-semibold disabled:opacity-40"
+                    disabled={safeCrossedPage === 0}
+                    onClick={() => setCrossedPage((page) => Math.max(0, page - 1))}
+                    type="button"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Anterior
+                  </button>
+                  <span className="text-sm text-slate-300">
+                    {safeCrossedPage + 1} / {crossedTotalPages}
+                  </span>
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-sm font-semibold disabled:opacity-40"
+                    disabled={safeCrossedPage >= crossedTotalPages - 1}
+                    onClick={() => setCrossedPage((page) => Math.min(crossedTotalPages - 1, page + 1))}
+                    type="button"
+                  >
+                    Próxima
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </footer>
+              )}
+            </motion.section>
+          </motion.div>
+        )}
       </AnimatePresence>
       <div className="relative h-[68dvh] min-h-[480px] overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <AnimatePresence mode="popLayout">
@@ -407,7 +580,7 @@ export default function Discovery({ me, profiles }: Props) {
                       <h1 className="truncate text-3xl font-semibold">{current.displayName}</h1>
                       <p className="mt-1 text-sm text-slate-200">
                         {me.location && current.location
-                          ? `${distanceKm(me.location, current.location).toFixed(1)} km de distância`
+                          ? `${formatPersonDistanceKm(distanceKm(me.location, current.location))} de distância`
                           : 'Distância indisponível'}
                       </p>
                     </div>
@@ -437,10 +610,10 @@ export default function Discovery({ me, profiles }: Props) {
                 {seenIds.size > 0 && (
                   <button
                     className="mt-4 h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
-                    onClick={resetCardInteractions}
+                    onClick={() => resetCardInteractions()}
                     type="button"
                   >
-                    Liberar perfis novamente
+                    {me.isPremium ? 'Liberar perfis novamente' : 'Ver anúncio para liberar perfis novamente'}
                   </button>
                 )}
               </div>
@@ -511,7 +684,7 @@ export default function Discovery({ me, profiles }: Props) {
             onClick={openLikedByList}
             type="button"
           >
-            Ver lista
+            {likedByUnlocked ? 'Ver lista' : 'Ver anúncio'}
           </button>
         </div>
         {false && (
@@ -549,6 +722,34 @@ export default function Discovery({ me, profiles }: Props) {
         )}
       </section>
 
+      <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-rose-300" />
+              <h2 className="text-sm font-semibold">Pessoas que cruzei</h2>
+            </div>
+            <p className="text-2xl font-semibold">{crossedProfiles.length}</p>
+            <p className="text-xs text-slate-300">Disponível para todos, respeitando suas preferências</p>
+          </div>
+          <button
+            className="h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+            onClick={() => {
+              setCrossedPage(0);
+              setCrossedModalOpen(true);
+            }}
+            type="button"
+          >
+            Ver lista
+          </button>
+        </div>
+        {crossedProfiles.length === 0 && (
+          <p className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-3 text-sm text-slate-300">
+            Quando alguém compatível passar a até 250 metros de você, aparece aqui.
+          </p>
+        )}
+      </section>
+
       {message && (
         <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-50">
           <p>{message}</p>
@@ -567,6 +768,28 @@ export default function Discovery({ me, profiles }: Props) {
 
     </section>
   );
+}
+
+function formatCrossedTime(value: string) {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return 'agora';
+  const diffMinutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (diffMinutes < 1) return 'agora';
+  if (diffMinutes < 60) return `há ${diffMinutes} min`;
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `há ${diffHours} h`;
+  const diffDays = Math.round(diffHours / 24);
+  return `há ${diffDays} d`;
+}
+
+function sharedInterestCount(me: UserProfile, profile: UserProfile) {
+  if (me.interests.length === 0 || profile.interests.length === 0) return 0;
+  return profile.interests.filter((interest) => me.interests.includes(interest)).length;
+}
+
+function sharedRelationshipGoalCount(me: UserProfile, profile: UserProfile) {
+  if (me.relationshipGoals.length === 0 || profile.relationshipGoals.length === 0) return 0;
+  return profile.relationshipGoals.filter((goal) => me.relationshipGoals.includes(goal)).length;
 }
 
 function ToggleButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {

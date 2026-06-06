@@ -110,15 +110,14 @@ async function createGoogleAccessToken() {
   return data.access_token;
 }
 
-function blockedReasons(safeSearch: SafeSearchAnnotation) {
+function blockedReasons(safeSearch: SafeSearchAnnotation, context = 'image') {
   const blocks: string[] = [];
   const adult = likelihoodRank[safeSearch.adult ?? 'UNKNOWN'] ?? 0;
   const racy = likelihoodRank[safeSearch.racy ?? 'UNKNOWN'] ?? 0;
   const violence = likelihoodRank[safeSearch.violence ?? 'UNKNOWN'] ?? 0;
-
   if (adult >= likelihoodRank.LIKELY) blocks.push('conteúdo adulto');
-  if (racy >= likelihoodRank.LIKELY) blocks.push('conteúdo sexualizado');
-  if (violence >= likelihoodRank.LIKELY) blocks.push('violência explícita');
+  if (adult >= likelihoodRank.POSSIBLE && racy >= likelihoodRank.VERY_LIKELY) blocks.push('conteúdo sexualizado');
+  if (violence >= likelihoodRank.VERY_LIKELY) blocks.push('violência explícita');
 
   return blocks;
 }
@@ -237,6 +236,35 @@ async function loadRecentMessagesForImage(
     .slice(0, 5);
 }
 
+async function validateImageContext(
+  admin: ReturnType<typeof createClient>,
+  values: { context?: string; contextId?: string; ownerUid: string },
+) {
+  if (!values.contextId) return true;
+
+  if (values.context === 'match-chat-image') {
+    const { data, error } = await admin
+      .from('matches')
+      .select('users')
+      .eq('id', values.contextId)
+      .maybeSingle<{ users: string[] }>();
+    if (error || !data) return false;
+    return data.users.includes(values.ownerUid);
+  }
+
+  if (values.context === 'map-chat-image') {
+    const { data, error } = await admin
+      .from('map_event_participants')
+      .select('user_uid')
+      .eq('event_id', values.contextId)
+      .eq('user_uid', values.ownerUid)
+      .maybeSingle<{ user_uid: string }>();
+    return !error && Boolean(data);
+  }
+
+  return true;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405);
@@ -265,6 +293,13 @@ Deno.serve(async (req) => {
     if (!body.path || !body.path.startsWith(`${userData.user.id}/`)) return jsonResponse({ error: 'Invalid image path' }, 403);
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const validContext = await validateImageContext(admin, {
+      context: body.context,
+      contextId: body.contextId,
+      ownerUid: userData.user.id,
+    });
+    if (!validContext) return jsonResponse({ error: 'Invalid image context' }, 403);
+
     const imageUrl = body.imageUrl || admin.storage.from(bucket).getPublicUrl(body.path).data.publicUrl;
     const recentMessages = await loadRecentMessagesForImage(admin, {
       context: body.context,
@@ -330,7 +365,7 @@ Deno.serve(async (req) => {
     }
 
     const safeSearch = response?.safeSearchAnnotation ?? {};
-    const reasons = blockedReasons(safeSearch);
+    const reasons = blockedReasons(safeSearch, body.context);
     const allowed = reasons.length === 0;
     let reportCreated = false;
     let reportError = '';

@@ -1,6 +1,6 @@
 import { isDemoMode } from './demoData';
 import { moderateUploadedImage } from './imageModeration';
-import { supabase } from './supabase';
+import { uploadProfilePhoto } from './storageImages';
 
 export type ChatImageContext = 'map-chat-image' | 'match-chat-image';
 
@@ -15,20 +15,13 @@ export async function uploadChatImage(input: {
 
   const safeName = input.file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
   const path = `${input.ownerUid}/chat-images/${Date.now()}-${safeName}`;
-  const { error } = await supabase.storage.from('profile-photos').upload(path, input.file, {
-    cacheControl: '3600',
-    upsert: false,
-  });
-
-  if (error) throw new Error(error.message || 'Não consegui enviar a imagem.');
-
-  const { data } = supabase.storage.from('profile-photos').getPublicUrl(path);
+  const signedUrl = await uploadProfilePhoto(path, input.file);
   await moderateUploadedImage({
     allowRejected: input.allowRejected ?? false,
     context: input.context,
     contextId: input.contextId,
     path,
-    publicUrl: data.publicUrl,
+    publicUrl: signedUrl,
   });
-  return data.publicUrl;
+  return signedUrl;
 }

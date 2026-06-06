@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronLeft, ChevronRight, Flag, Heart, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
-import { distanceKm } from '../utils/geo';
+import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
 import { reportProfile } from '../hooks/useMatches';
 import { reportReasons, type ReportReason } from '../reportOptions';
 
@@ -16,7 +16,7 @@ type Props = {
   overlayClassName?: string;
 };
 
-export default function ProfilePreview({ me, profile, onClose, onDislike, onLike, showReport = true, overlayClassName = 'z-40' }: Props) {
+export default function ProfilePreview({ me, profile, onClose, onDislike, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
   const { t } = useI18n();
   const photos = profile.photos.length ? profile.photos : [profile.photoURL];
   const [photoIndex, setPhotoIndex] = useState(0);
@@ -90,11 +90,11 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
             <h1 className="text-2xl font-semibold">{profile.displayName}</h1>
             <p className="mt-1 text-sm text-slate-300">
               {profile.showDistance && me.location && profile.location
-                ? t('distanceKm', { distance: distanceKm(me.location, profile.location).toFixed(1) })
+                ? t('distanceKm', { distance: formatPersonDistanceKm(distanceKm(me.location, profile.location)).replace(' km', '') })
                 : t('distanceUnavailable')}
             </p>
           </div>
-          {profile.bio && <p className="text-sm leading-6 text-slate-200">{profile.bio}</p>}
+          {profile.bio && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{profile.bio}</p>}
           <div className="grid gap-3 text-sm">
             <div>
               <span className="text-slate-400">{t('gender')}</span>

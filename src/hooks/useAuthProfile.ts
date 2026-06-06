@@ -3,6 +3,7 @@ import type { User } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { demoProfile, demoUser, isDemoMode } from '../demoData';
 import type { GenderIdentity, LatLng, PrivacyMode, Sexuality, UserProfile } from '../types';
+import { withSignedProfilePhotos } from '../storageImages';
 
 type ProfileRow = {
   id: string;
@@ -33,13 +34,8 @@ type ProfileRow = {
   likes_quota_date: string | null;
   likes_bonus: number | null;
   liked_by_unlock_until: string | null;
+  created_at: string | null;
 };
-
-const fallbackPhotos = [
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=700&q=80',
-  'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=700&q=80',
-];
 
 function rowToProfile(row: ProfileRow): UserProfile {
   const location: LatLng | null =
@@ -47,11 +43,11 @@ function rowToProfile(row: ProfileRow): UserProfile {
       ? { lat: row.lat, lng: row.lng }
       : null;
 
-  return {
+  const profile = {
     uid: row.id,
     displayName: row.display_name,
     photoURL: row.photo_url,
-    photos: row.photos ?? [row.photo_url],
+    photos: row.photos?.filter(Boolean) ?? (row.photo_url ? [row.photo_url] : []),
     location,
     privacyMode: row.privacy_mode,
     appearInCards: row.appear_in_cards ?? true,
@@ -75,7 +71,9 @@ function rowToProfile(row: ProfileRow): UserProfile {
     likesQuotaDate: row.likes_quota_date,
     likesBonus: row.likes_bonus ?? 0,
     likedByUnlockUntil: row.liked_by_unlock_until,
+    createdAt: row.created_at,
   };
+  return profile;
 }
 
 function createEmptyProfile(user: User) {
@@ -84,16 +82,13 @@ function createEmptyProfile(user: User) {
   const googleName = typeof metadata.full_name === 'string' ? metadata.full_name : metadata.name;
   const googlePhoto = typeof metadata.avatar_url === 'string' ? metadata.avatar_url : metadata.picture;
   const displayName = typeof googleName === 'string' && googleName.trim() ? googleName : emailName;
-  const photoURL =
-    typeof googlePhoto === 'string' && googlePhoto.trim()
-      ? googlePhoto
-      : fallbackPhotos[user.id.charCodeAt(0) % fallbackPhotos.length];
+  const photoURL = typeof googlePhoto === 'string' && googlePhoto.trim() ? googlePhoto : '';
 
   return {
     id: user.id,
     display_name: displayName,
     photo_url: photoURL,
-    photos: [photoURL],
+    photos: photoURL ? [photoURL] : [],
     privacy_mode: 'nearby' as PrivacyMode,
     appear_in_cards: true,
     show_distance: true,
@@ -150,7 +145,7 @@ async function loadOrCreateProfile(user: User) {
     .maybeSingle<ProfileRow>();
 
   if (error) throw error;
-  if (data) return rowToProfile(data);
+  if (data) return withSignedProfilePhotos(rowToProfile(data));
 
   const { data: created, error: createError } = await supabase
     .from('profiles')
@@ -161,10 +156,10 @@ async function loadOrCreateProfile(user: User) {
   if (createError) {
     const { data: ensured, error: ensureError } = await supabase.rpc('ensure_profile').single<ProfileRow>();
     if (ensureError) throw ensureError;
-    return rowToProfile(ensured);
+    return withSignedProfilePhotos(rowToProfile(ensured));
   }
 
-  return rowToProfile(created);
+  return withSignedProfilePhotos(rowToProfile(created));
 }
 
 export function useAuthProfile() {
@@ -237,7 +232,9 @@ export function useAuthProfile() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
         (payload) => {
-          if (payload.new) setProfile(rowToProfile(payload.new as ProfileRow));
+          if (payload.new) {
+            withSignedProfilePhotos(rowToProfile(payload.new as ProfileRow)).then((nextProfile) => setProfile(nextProfile));
+          }
         },
       )
       .subscribe();

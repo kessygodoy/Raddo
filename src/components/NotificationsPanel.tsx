@@ -47,7 +47,7 @@ export default function NotificationsPanel({ currentUid, matches, onOpenNotifica
   }).map((match) => {
     const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
     const profile = profilesByUid[otherUid];
-    const name = profile?.displayName ?? `Match ${otherUid.slice(-4)}`;
+    const name = profile?.displayName ?? 'Alguém';
     const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
 
     return {

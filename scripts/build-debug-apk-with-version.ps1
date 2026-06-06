@@ -27,15 +27,29 @@ Set-Location $androidDir
 if (Test-Path "C:\Program Files\Java\jdk-21.0.10") {
   $env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.10"
   $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+} elseif (Test-Path "C:\Program Files\Java\latest") {
+  $env:JAVA_HOME = "C:\Program Files\Java\latest"
+  $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 }
 
-.\gradlew.bat assembleDebug
-
-if (-not (Test-Path -LiteralPath $apkPath)) {
-  throw "APK nao encontrado em $apkPath."
+.\gradlew.bat --stop | Out-Null
+.\gradlew.bat assembleDebug --no-daemon
+if ($LASTEXITCODE -ne 0) {
+  throw "Falha ao gerar APK Android. Verifique JAVA_HOME/JDK e tente novamente."
 }
 
-Copy-Item -LiteralPath $apkPath -Destination $versionedApkPath -Force
+$builtApkPath = Join-Path $apkDir $versionedApkName
+if (-not (Test-Path -LiteralPath $builtApkPath)) {
+  $builtApkPath = $apkPath
+}
+
+if (-not (Test-Path -LiteralPath $builtApkPath)) {
+  throw "APK nao encontrado em $apkDir."
+}
+
+if ($builtApkPath -ne $versionedApkPath) {
+  Copy-Item -LiteralPath $builtApkPath -Destination $versionedApkPath -Force
+}
 
 $manifest = [ordered]@{
   version = $versionName
@@ -46,6 +60,6 @@ $manifest = [ordered]@{
 $manifestPath = Join-Path $apkDir "version.json"
 $manifest | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-Write-Host "APK gerado: $apkPath"
+Write-Host "APK gerado: $builtApkPath"
 Write-Host "APK versionado: $versionedApkPath"
 Write-Host "Manifest gerado: $manifestPath"

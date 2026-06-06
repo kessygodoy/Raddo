@@ -1,6 +1,7 @@
 export type PrivacyMode = 'exact' | 'nearby';
 export type AppView = 'radar' | 'discover' | 'chat' | 'profile' | 'notifications';
-export type AppTheme = 'dark' | 'light' | 'pride';
+export type AppTheme = 'dark' | 'light' | 'pride' | 'system';
+export type ResolvedAppTheme = 'dark' | 'light' | 'pride';
 export type AppLanguage = 'pt-BR' | 'en-US' | 'es';
 export type MapEventAccessMode = 'open' | 'approval' | 'password';
 
@@ -54,6 +55,7 @@ export type UserProfile = {
   likesQuotaDate: string | null;
   likesBonus: number;
   likedByUnlockUntil: string | null;
+  createdAt?: string | null;
 };
 
 export type Like = {

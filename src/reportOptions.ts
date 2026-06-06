@@ -16,4 +16,3 @@ export const reportReasons: Array<{ value: ReportReason; label: string }> = [
   { value: 'illegal_content', label: 'Conteúdo ilegal' },
   { value: 'other', label: 'Outro' },
 ];
-

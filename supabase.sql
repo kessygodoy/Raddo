@@ -747,8 +747,8 @@ begin
   values (
     viewer_uid,
     coalesce(split_part(viewer_email, '@', 1), 'Novo radar'),
-    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80',
-    array['https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=700&q=80'],
+    '',
+    '{}',
     'nearby',
     true,
     true,
@@ -790,25 +790,45 @@ set search_path = public, auth, storage
 as $$
 declare
   viewer_uid uuid := auth.uid();
+  owner_event_filter text := ' or event_id in (select id from public.map_events where creator_uid = $1)';
 begin
   if viewer_uid is null then
     raise exception 'not authenticated';
   end if;
 
-  delete from public.map_event_messages
-  where sender_uid = viewer_uid
-     or event_id in (
-       select id from public.map_events where creator_uid = viewer_uid
-     );
-
-  delete from public.map_event_participants
-  where user_uid = viewer_uid
-     or event_id in (
-       select id from public.map_events where creator_uid = viewer_uid
-     );
-
-  delete from public.map_events
-  where creator_uid = viewer_uid;
+  if to_regclass('public.device_push_tokens') is not null then
+    execute 'delete from public.device_push_tokens where user_uid = $1' using viewer_uid;
+  end if;
+  if to_regclass('public.push_delivery_logs') is not null then
+    execute 'delete from public.push_delivery_logs where sender_uid = $1' using viewer_uid;
+  end if;
+  if to_regclass('public.image_moderation_reports') is not null then
+    execute 'delete from public.image_moderation_reports where owner_uid = $1' using viewer_uid;
+  end if;
+  if to_regclass('public.app_moderators') is not null then
+    execute 'delete from public.app_moderators where user_uid = $1' using viewer_uid;
+  end if;
+  if to_regclass('public.app_bans') is not null then
+    execute 'delete from public.app_bans where banned_uid = $1 or banned_by_uid = $1' using viewer_uid;
+  end if;
+  if to_regclass('public.map_event_bans') is not null then
+    execute 'delete from public.map_event_bans where user_uid = $1 or banned_by_uid = $1' || owner_event_filter using viewer_uid;
+  end if;
+  if to_regclass('public.map_event_join_requests') is not null then
+    execute 'delete from public.map_event_join_requests where user_uid = $1' || owner_event_filter using viewer_uid;
+  end if;
+  if to_regclass('public.map_event_moderators') is not null then
+    execute 'delete from public.map_event_moderators where user_uid = $1' || owner_event_filter using viewer_uid;
+  end if;
+  if to_regclass('public.map_event_messages') is not null then
+    execute 'delete from public.map_event_messages where sender_uid = $1' || owner_event_filter using viewer_uid;
+  end if;
+  if to_regclass('public.map_event_participants') is not null then
+    execute 'delete from public.map_event_participants where user_uid = $1' || owner_event_filter using viewer_uid;
+  end if;
+  if to_regclass('public.map_events') is not null then
+    execute 'delete from public.map_events where creator_uid = $1' using viewer_uid;
+  end if;
 
   delete from public.messages
   where sender_uid = viewer_uid
@@ -828,12 +848,12 @@ begin
   delete from public.blocks
   where blocker_uid = viewer_uid or blocked_uid = viewer_uid;
 
+  if to_regclass('public.profile_crossings') is not null then
+    execute 'delete from public.profile_crossings where user_uid = $1 or crossed_uid = $1' using viewer_uid;
+  end if;
+
   delete from public.reports
   where reporter_uid = viewer_uid or reported_uid = viewer_uid;
-
-  delete from storage.objects
-  where bucket_id = 'profile-photos'
-    and name like viewer_uid::text || '/%';
 
   delete from public.profiles
   where id = viewer_uid;

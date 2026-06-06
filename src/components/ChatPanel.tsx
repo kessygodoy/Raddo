@@ -34,6 +34,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [activeMatchId, setActiveMatchId] = useState('');
   const [chatView, setChatView] = useState<'list' | 'conversation'>('list');
   const [text, setText] = useState('');
+  const [sendingText, setSendingText] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
@@ -134,7 +135,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const cleanText = text.trim();
-    if (!activeMatch || !cleanText) return;
+    if (sendingText || !activeMatch || !cleanText) return;
 
     const nextMessage: Message = {
       id: `local-${Date.now()}`,
@@ -152,12 +153,15 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     setOptimisticMessages((current) => [...current, nextMessage]);
     shouldStickToBottomRef.current = true;
     setText('');
+    setSendingText(true);
     try {
       await sendMessage(activeMatch.id, currentUid, cleanText, currentProfile.displayName);
     } catch (error) {
       setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
       setText(cleanText);
       setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
+    } finally {
+      setSendingText(false);
     }
   }
 
@@ -362,7 +366,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
             const isActive = activeMatchId === match.id;
-            const displayName = profile?.displayName ?? `Match ${otherUid.slice(-4)}`;
+            const displayName = profile?.displayName ?? 'Carregando perfil';
             const photoURL = profile?.photoURL;
 
             return (
@@ -463,13 +467,13 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                     />
                   ) : (
                     <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-900 text-xs text-teal-200">
-                      {(profilesByUid[activeOtherUid]?.displayName ?? `M${activeOtherUid.slice(-1)}`).slice(0, 2).toUpperCase()}
+                      {(profilesByUid[activeOtherUid]?.displayName ?? '...').slice(0, 2).toUpperCase()}
                     </div>
                   )}
                 </button>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">
-                    {profilesByUid[activeOtherUid]?.displayName ?? `Match ${activeOtherUid.slice(-4)}`}
+                    {profilesByUid[activeOtherUid]?.displayName ?? 'Carregando perfil'}
                   </p>
                   {actionMessage && <p className="truncate text-xs text-slate-300">{actionMessage}</p>}
                 </div>
@@ -530,6 +534,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
             const downloadFilename = message.imagePath.split('/').pop() || `raddo-imagem-${message.id}.jpg`;
+            const senderProfile = message.senderUid === currentUid ? currentProfile : profilesByUid[message.senderUid];
 
             return (
               <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`} key={message.id}>
@@ -554,7 +559,9 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                     onDelete={() => handleDeleteMessage(message)}
                     onEdit={() => handleEditMessage(message)}
                     onFeedback={setActionMessage}
+                    onReportProfile={!mine && activeOtherUid ? handleReport : undefined}
                     onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
+                    onViewProfile={senderProfile ? () => setPreviewProfile(senderProfile) : undefined}
                     open={openMessageMenuId === message.id}
                   />
                   <div className="pr-6">
@@ -597,7 +604,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           />
           <button
             aria-label="Enviar"
-            className="grid h-11 w-11 place-items-center rounded-full bg-teal-300 text-slate-950"
+            className="grid h-11 w-11 place-items-center rounded-full bg-teal-300 text-slate-950 disabled:cursor-wait disabled:opacity-60"
+            disabled={sendingText || !text.trim()}
             type="submit"
           >
             <Send className="h-5 w-5" />

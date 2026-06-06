@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     registerPlugin(RaddoUpdaterPlugin.class);
+    registerPlugin(RaddoBillingPlugin.class);
     super.onCreate(savedInstanceState);
     getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
     createPushNotificationChannel();

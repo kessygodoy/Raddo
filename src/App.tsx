@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Bell, Heart, LogOut, Map as MapIcon, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
+import { Bell, Heart, LogOut, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
@@ -8,7 +8,7 @@ import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
 import { useMatchProfiles, useMatches } from './hooks/useMatches';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
-import type { AppLanguage, AppTheme, AppView } from './types';
+import type { AppLanguage, AppTheme, AppView, ResolvedAppTheme } from './types';
 import AuthOverlay from './components/AuthOverlay';
 import ChatPanel from './components/ChatPanel';
 import Discovery from './components/Discovery';
@@ -33,18 +33,6 @@ const navItems = [
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
 
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || '1.0.3';
-const APP_UPDATE_URL =
-  import.meta.env.VITE_APP_UPDATE_URL ||
-  'https://zsmfrfiemthftuiyursr.supabase.co/storage/v1/object/public/raddo-updates/version.json';
-
-type AppUpdateInfo = {
-  version?: string;
-  message?: string;
-  url?: string;
-  apkUrl?: string;
-};
-
 export default function App() {
   const [view, setView] = useState<AppView>('radar');
   const [viewHistory, setViewHistory] = useState<AppView[]>([]);
@@ -52,18 +40,28 @@ export default function App() {
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [openMatchId, setOpenMatchId] = useState('');
-  const [availableUpdate, setAvailableUpdate] = useState<AppUpdateInfo | null>(null);
+  const [availableUpdate, setAvailableUpdate] = useState<{
+    version?: string;
+    message?: string;
+    url?: string;
+    apkUrl?: string;
+  } | null>(null);
   const [updateInstallMessage, setUpdateInstallMessage] = useState('');
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
   const [theme, setTheme] = useState<AppTheme>(() => {
     const savedTheme = window.localStorage.getItem('radar-match-theme');
-    return savedTheme === 'light' || savedTheme === 'pride' || savedTheme === 'dark' ? savedTheme : 'dark';
+    return savedTheme === 'light' || savedTheme === 'pride' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
   });
-  const [language, setLanguageState] = useState<AppLanguage>(() =>
-    normalizeLanguage(window.localStorage.getItem('raddo-language') || navigator.language),
+  const [systemTheme, setSystemTheme] = useState<ResolvedAppTheme>(() =>
+    window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
   );
+  const [language, setLanguageState] = useState<AppLanguage>(() => {
+    const savedLanguage = window.localStorage.getItem('raddo-language');
+    return savedLanguage ? normalizeLanguage(savedLanguage) : normalizeLanguage(navigator.language);
+  });
   const t = createTranslator(language);
+  const resolvedTheme: ResolvedAppTheme = theme === 'system' ? systemTheme : theme;
   const { user, profile, loading, profileLoading, profileError } = useAuthProfile();
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
@@ -109,8 +107,18 @@ export default function App() {
 
   useEffect(() => {
     window.localStorage.setItem('radar-match-theme', theme);
-    document.documentElement.dataset.appTheme = theme;
-  }, [theme]);
+    document.documentElement.dataset.appTheme = theme === 'system' ? systemTheme : theme;
+  }, [systemTheme, theme]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-color-scheme: light)');
+    if (!media) return;
+
+    const updateSystemTheme = () => setSystemTheme(media.matches ? 'light' : 'dark');
+    updateSystemTheme();
+    media.addEventListener('change', updateSystemTheme);
+    return () => media.removeEventListener('change', updateSystemTheme);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem('raddo-language', language);
@@ -119,37 +127,6 @@ export default function App() {
 
   useEffect(() => {
     hideAdMobBanner();
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function checkForUpdate() {
-      try {
-        const response = await fetch(`${APP_UPDATE_URL}?t=${Date.now()}`, { cache: 'no-store' });
-        if (!response.ok) return;
-
-        const info = await response.json() as AppUpdateInfo;
-        if (!info.version || info.version === APP_VERSION) return;
-        if (window.localStorage.getItem(`raddo-update-dismissed:${info.version}`) === 'yes') return;
-        if (!cancelled) setAvailableUpdate(info);
-      } catch {
-        // Update checks are opportunistic; the app must keep working offline.
-      }
-    }
-
-    void checkForUpdate();
-    const timer = window.setInterval(checkForUpdate, 10 * 60 * 1000);
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') void checkForUpdate();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
   }, []);
 
   useEffect(() => {
@@ -224,12 +201,6 @@ export default function App() {
     let removeListener: (() => void) | undefined;
 
     CapacitorApp.addListener('backButton', () => {
-      if (availableUpdate) {
-        setAvailableUpdate(null);
-        setUpdateInstallMessage('');
-        return;
-      }
-
       if (showNotificationPrompt) {
         setShowNotificationPrompt(false);
         return;
@@ -252,7 +223,7 @@ export default function App() {
     return () => {
       removeListener?.();
     };
-  }, [availableUpdate, showNotificationPrompt, headerMenuOpen, view, profile]);
+  }, [showNotificationPrompt, headerMenuOpen, view, profile]);
 
   function notificationIdForMatch(match: (typeof matches)[number]) {
     return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
@@ -405,7 +376,7 @@ export default function App() {
 
   if (!hasSupabaseConfig && !isDemoMode) {
     content = (
-      <main className="grid min-h-dvh place-items-center bg-slate-950 p-6 text-white">
+      <main className={`app-shell theme-${resolvedTheme} grid min-h-dvh place-items-center p-6 text-white`}>
         <section className="w-full max-w-md rounded-lg border border-rose-300/30 bg-rose-300/10 p-5">
           <h1 className="text-xl font-semibold">Raddo</h1>
           <p className="mt-3 text-sm text-rose-50/80">
@@ -416,13 +387,13 @@ export default function App() {
     );
   } else if (loading || (user && profileLoading)) {
     content = (
-      <main className="grid min-h-dvh place-items-center bg-slate-950 text-white">
+      <main className={`app-shell theme-${resolvedTheme} grid min-h-dvh place-items-center text-white`}>
         <div className="h-11 w-11 animate-spin rounded-full border-2 border-teal-300 border-t-transparent" />
       </main>
     );
   } else if (user && !profile) {
     content = (
-      <main className="grid min-h-dvh place-items-center bg-slate-950 p-6 text-white">
+      <main className={`app-shell theme-${resolvedTheme} grid min-h-dvh place-items-center p-6 text-white`}>
         <section className="w-full max-w-md rounded-lg border border-rose-300/30 bg-rose-300/10 p-5">
           <h1 className="text-xl font-semibold">{t('loadingProfileTitle')}</h1>
           <p className="mt-3 text-sm text-rose-50/80">{profileError || t('loadingProfileFallback')}</p>
@@ -440,7 +411,7 @@ export default function App() {
       </main>
     );
   } else if (!user || !profile) {
-    content = <AuthOverlay />;
+    content = <AuthOverlay theme={resolvedTheme} />;
   } else {
     const needsOnboarding =
       !onboardingDone &&
@@ -448,9 +419,9 @@ export default function App() {
       (!profile.bio || profile.sexualities.length === 0 || profile.lookingFor.length === 0);
 
     content = needsOnboarding ? (
-      <Onboarding profile={profile} onDone={() => setOnboardingDone(true)} />
+      <Onboarding profile={profile} theme={resolvedTheme} onDone={() => setOnboardingDone(true)} />
     ) : (
-      <main className={`app-shell theme-${theme} h-dvh overflow-hidden text-white`}>
+      <main className={`app-shell theme-${resolvedTheme} h-dvh overflow-hidden text-white`}>
         {showNotificationPrompt && (
           <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
             <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
@@ -522,7 +493,7 @@ export default function App() {
                 onClick={() => openRadarPanel('people')}
                 type="button"
               >
-                <MapIcon className="h-5 w-5 text-teal-300" />
+                <img alt="" className="h-6 w-6 rounded-md object-contain" src="/raddo-icon.png" />
                 <span className="leading-tight">
                   <strong className="block text-sm">Raddo</strong>
                   <span className="text-xs text-slate-300">{t('nearbyCount', { count: nearbyProfiles.length })}</span>
@@ -601,14 +572,14 @@ export default function App() {
                 ? 'min-h-0 flex-1 overflow-hidden'
                 : view === 'chat'
                   ? 'min-h-0 flex-1 overflow-hidden px-0 pb-[calc(var(--raddo-bottom-safe)+92px)] pt-2'
-                  : 'scrollbar-hidden min-h-0 flex-1 overflow-auto px-4 pb-[calc(var(--raddo-bottom-safe)+128px)] sm:px-6'
+                  : 'scrollbar-hidden min-h-0 flex-1 overflow-auto px-4 pb-[calc(var(--raddo-bottom-safe)+220px)] sm:px-6'
             }
           >
             {view === 'radar' && (
               <RadarMap
                 me={profile}
                 profiles={nearbyProfiles}
-                theme={theme}
+                theme={resolvedTheme}
               />
             )}
             {view === 'discover' && <Discovery me={profile} profiles={nearbyProfiles} />}

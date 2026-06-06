@@ -4,6 +4,7 @@ import { demoProfiles, isDemoMode } from '../demoData';
 import type { GenderFilter, GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
 import { isWithinRadius } from '../utils/geo';
 import { useBlockedProfileIds, useSeenProfileIds } from './useMatches';
+import { withSignedProfilePhotos } from '../storageImages';
 
 type ProfileRow = {
   id: string;
@@ -34,6 +35,7 @@ type ProfileRow = {
   likes_quota_date: string | null;
   likes_bonus: number | null;
   liked_by_unlock_until: string | null;
+  created_at: string | null;
 };
 
 function rowToProfile(row: ProfileRow): UserProfile {
@@ -68,23 +70,41 @@ function rowToProfile(row: ProfileRow): UserProfile {
     likesQuotaDate: row.likes_quota_date,
     likesBonus: row.likes_bonus ?? 0,
     likedByUnlockUntil: row.liked_by_unlock_until,
+    createdAt: row.created_at,
   };
 }
 
-function hasAnyOverlap(a: string[], b: string[]) {
-  if (a.length === 0 || b.length === 0) return true;
-  return a.some((item) => b.includes(item));
+export function profileQualityScore(profile: UserProfile) {
+  let score = 0;
+  if (profile.photoURL) score += 2;
+  if (profile.photos.length >= 3) score += 1;
+  if (profile.bio.trim().length >= 40) score += 1;
+  if (profile.sexualities.length > 0) score += 1;
+  if (profile.lookingFor.length > 0) score += 1;
+  if (profile.interests.length >= 3) score += 1;
+  if (profile.relationshipGoals.length > 0) score += 1;
+  if (profile.createdAt) {
+    const accountAgeDays = (Date.now() - Date.parse(profile.createdAt)) / (24 * 60 * 60 * 1000);
+    if (accountAgeDays >= 7) score += 1;
+    if (accountAgeDays >= 30) score += 1;
+  }
+  return score;
 }
 
-function isAgeCompatible(me: UserProfile, profile: UserProfile) {
-  const meAge = me.age ?? 18;
-  const profileAge = profile.age ?? 18;
-  const myMin = me.minAgePreference ?? 18;
-  const myMax = me.maxAgePreference ?? 99;
-  const theirMin = profile.minAgePreference ?? 18;
-  const theirMax = profile.maxAgePreference ?? 99;
+function profileGenderIdentities(profile: UserProfile) {
+  return profile.genderIdentities.length ? profile.genderIdentities : [profile.gender];
+}
 
-  return profileAge >= myMin && profileAge <= myMax && meAge >= theirMin && meAge <= theirMax;
+export function matchesGenderPreferences(me: UserProfile, profile: UserProfile, genderFilter: GenderFilter = me.lookingFor) {
+  const wantedByMe = genderFilter.length ? genderFilter : me.lookingFor;
+  const targetGenders = profileGenderIdentities(profile);
+  const myGenders = profileGenderIdentities(me);
+
+  return (
+    wantedByMe.length > 0 &&
+    wantedByMe.some((gender) => targetGenders.includes(gender)) &&
+    profile.lookingFor.some((gender) => myGenders.includes(gender))
+  );
 }
 
 export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFilter) {
@@ -105,7 +125,8 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
 
     async function loadProfiles() {
       const { data } = await supabase.from('profiles').select('*').neq('id', currentUid);
-      if (active) setProfiles(((data ?? []) as ProfileRow[]).map(rowToProfile));
+      const nextProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      if (active) setProfiles(nextProfiles);
     }
 
     loadProfiles();
@@ -158,18 +179,12 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
       .filter((profile) => {
         const isOverride = overrideProfileIds.has(profile.uid);
         if (blockedIds.has(profile.uid)) return false;
-        if (isOverride) return true;
 
         return (
-          isWithinRadius(me, profile) &&
+          (isOverride || isWithinRadius(me, profile)) &&
           profile.appearInCards &&
           !seenIds.has(profile.uid) &&
-          (genderFilter.length === 0 || profile.genderIdentities.some((gender) => genderFilter.includes(gender))) &&
-          isAgeCompatible(me, profile) &&
-          profile.lookingFor.some((gender) => me.genderIdentities.includes(gender)) &&
-          me.lookingFor.some((gender) => profile.genderIdentities.includes(gender)) &&
-          hasAnyOverlap(profile.interestedSexualities, me.sexualities) &&
-          hasAnyOverlap(me.interestedSexualities, profile.sexualities)
+          matchesGenderPreferences(me, profile, genderFilter)
         );
       });
   }, [blockedIds, genderFilter, me, overrideProfileIds, profiles, seenIds]);

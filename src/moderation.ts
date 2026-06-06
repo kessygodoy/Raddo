@@ -30,6 +30,23 @@ export type ModerationCase = {
   userPhotoURL: string;
 };
 
+export type ModerationDashboard = {
+  activeBans: number;
+  pushFailures24h: number;
+  reports24h: number;
+  spamEvents24h: number;
+  repeatedReportedUsers: Array<{ count: number; uid: string }>;
+};
+
+export type AppBannedUser = {
+  bannedAt: string;
+  bannedByUid: string;
+  displayName: string;
+  photoURL: string;
+  reason: string;
+  uid: string;
+};
+
 export function useAppModeratorRole(uid: string | undefined) {
   const [role, setRole] = useState<AppModeratorRole>(null);
 
@@ -79,8 +96,18 @@ export async function banAppUser(input: {
 }) {
   if (isDemoMode) return;
   if (!input.bannedUid || input.bannedUid === input.bannedByUid) {
-    throw new Error('UID invÃ¡lido para banimento.');
+    throw new Error('UID inválido para banimento.');
   }
+
+  const rpcResult = await supabase.rpc('ban_app_user', {
+    target_banned_uid: input.bannedUid,
+    target_reason: input.reason.trim() || 'violacao_das_regras',
+  });
+  const missingRpc =
+    rpcResult.error &&
+    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('ban_app_user'));
+  if (rpcResult.error && !missingRpc) throw new Error(rpcResult.error.message || 'Não consegui banir este usuário.');
+  if (!missingRpc) return;
 
   const { error } = await supabase.from('app_bans').upsert(
     {
@@ -91,14 +118,23 @@ export async function banAppUser(input: {
     { onConflict: 'banned_uid' },
   );
 
-  if (error) throw new Error(error.message || 'NÃ£o consegui banir este usuÃ¡rio.');
+  if (error) throw new Error(error.message || 'Não consegui banir este usuário.');
 }
 
 export async function unbanAppUser(bannedUid: string) {
   if (isDemoMode) return;
 
+  const rpcResult = await supabase.rpc('unban_app_user', {
+    target_banned_uid: bannedUid,
+  });
+  const missingRpc =
+    rpcResult.error &&
+    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('unban_app_user'));
+  if (rpcResult.error && !missingRpc) throw new Error(rpcResult.error.message || 'Não consegui remover este banimento.');
+  if (!missingRpc) return;
+
   const { error } = await supabase.from('app_bans').delete().eq('banned_uid', bannedUid);
-  if (error) throw new Error(error.message || 'NÃ£o consegui remover este banimento.');
+  if (error) throw new Error(error.message || 'Não consegui remover este banimento.');
 }
 
 export function useModerationCases(enabled: boolean) {
@@ -112,9 +148,9 @@ export function useModerationCases(enabled: boolean) {
           id: 'demo-report-1',
           createdAt: new Date().toISOString(),
           recentMessages: [
-            { id: '1', messageType: 'text', senderName: 'UsuÃ¡rio denunciado', text: 'Mensagem salva para anÃ¡lise', createdAt: new Date().toISOString() },
+            { id: '1', messageType: 'text', senderName: 'Usuário denunciado', text: 'Mensagem salva para análise', createdAt: new Date().toISOString() },
           ],
-          reason: 'assÃ©dio',
+          reason: 'assédio',
           reportedUid: 'demo-user',
           reporterUid: 'demo-reporter',
           source: 'report',
@@ -241,5 +277,159 @@ export function useModerationCases(enabled: boolean) {
   }, [enabled]);
 
   return { cases, loading };
+}
+
+export function useModerationDashboard(enabled: boolean) {
+  const [dashboard, setDashboard] = useState<ModerationDashboard>({
+    activeBans: 0,
+    pushFailures24h: 0,
+    reports24h: 0,
+    spamEvents24h: 0,
+    repeatedReportedUsers: [],
+  });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      setDashboard({ activeBans: 0, pushFailures24h: 0, reports24h: 0, spamEvents24h: 0, repeatedReportedUsers: [] });
+      return undefined;
+    }
+
+    if (isDemoMode) {
+      setDashboard({
+        activeBans: 1,
+        pushFailures24h: 0,
+        reports24h: 2,
+        spamEvents24h: 3,
+        repeatedReportedUsers: [{ count: 2, uid: 'demo-user' }],
+      });
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadDashboard() {
+      setLoading(true);
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const [reportsResult, bansResult, pushResult, spamResult] = await Promise.all([
+        supabase.from('reports').select('reported_uid,created_at').gte('created_at', since24h).limit(500),
+        supabase.from('app_bans').select('banned_uid', { count: 'exact', head: true }),
+        supabase.from('push_delivery_logs').select('status,created_at').gte('created_at', since24h).limit(500),
+        supabase.from('anti_spam_events').select('created_at').gte('created_at', since24h).limit(500),
+      ]);
+
+      if (!active) return;
+
+      const reportedCounts = new Map<string, number>();
+      ((reportsResult.data ?? []) as Array<{ reported_uid: string }>).forEach((row) => {
+        reportedCounts.set(row.reported_uid, (reportedCounts.get(row.reported_uid) ?? 0) + 1);
+      });
+
+      setDashboard({
+        activeBans: bansResult.count ?? 0,
+        pushFailures24h: ((pushResult.data ?? []) as Array<{ status: string }>).filter((row) => row.status !== 'sent').length,
+        reports24h: reportsResult.data?.length ?? 0,
+        spamEvents24h: spamResult.error ? 0 : (spamResult.data?.length ?? 0),
+        repeatedReportedUsers: [...reportedCounts.entries()]
+          .filter(([, count]) => count >= 2)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([uid, count]) => ({ count, uid })),
+      });
+      setLoading(false);
+    }
+
+    loadDashboard();
+    const timer = window.setInterval(loadDashboard, 30000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
+
+  return { dashboard, loading };
+}
+
+export function useAppBannedUsers(enabled: boolean) {
+  const [bannedUsers, setBannedUsers] = useState<AppBannedUser[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      setBannedUsers([]);
+      return undefined;
+    }
+
+    if (isDemoMode) {
+      setBannedUsers([
+        {
+          bannedAt: new Date().toISOString(),
+          bannedByUid: 'demo-admin',
+          displayName: 'Usuário banido',
+          photoURL: '',
+          reason: 'spam',
+          uid: 'demo-user',
+        },
+      ]);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadBannedUsers() {
+      setLoading(true);
+      const { data: bans } = await supabase
+        .from('app_bans')
+        .select('banned_uid,banned_by_uid,reason,created_at')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      const rows = (bans ?? []) as Array<{
+        banned_by_uid: string;
+        banned_uid: string;
+        created_at: string;
+        reason: string;
+      }>;
+      const ids = rows.map((row) => row.banned_uid);
+      const { data: profiles } = ids.length
+        ? await supabase.from('profiles').select('id,display_name,photo_url').in('id', ids)
+        : { data: [] };
+      const profileById = new Map(
+        ((profiles ?? []) as Array<{ display_name: string | null; id: string; photo_url: string | null }>).map((row) => [
+          row.id,
+          row,
+        ]),
+      );
+
+      if (!active) return;
+      setBannedUsers(
+        rows.map((row) => {
+          const bannedProfile = profileById.get(row.banned_uid);
+          return {
+            bannedAt: row.created_at,
+            bannedByUid: row.banned_by_uid,
+            displayName: bannedProfile?.display_name || `Usuário ${row.banned_uid.slice(0, 8)}`,
+            photoURL: bannedProfile?.photo_url || '',
+            reason: row.reason,
+            uid: row.banned_uid,
+          };
+        }),
+      );
+      setLoading(false);
+    }
+
+    loadBannedUsers();
+    const channel = supabase
+      .channel('app-bans-list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_bans' }, loadBannedUsers)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [enabled]);
+
+  return { bannedUsers, loading };
 }
 

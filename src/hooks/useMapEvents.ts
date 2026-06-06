@@ -3,6 +3,7 @@ import { demoMapEventMessages, demoMapEvents, isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
 import type { LatLng, MapEvent, MapEventMessage, UserProfile } from '../types';
 import { distanceKm } from '../utils/geo';
+import { signedProfilePhotoUrl, withSignedProfilePhotos } from '../storageImages';
 
 let demoEventsState = [...demoMapEvents];
 let demoMessagesState = [...demoMapEventMessages];
@@ -81,6 +82,7 @@ type ProfileRow = {
   likes_quota_date: string | null;
   likes_bonus: number | null;
   liked_by_unlock_until: string | null;
+  created_at: string | null;
 };
 
 function rowToEvent(row: EventRow): MapEvent {
@@ -100,6 +102,18 @@ function rowToEvent(row: EventRow): MapEvent {
   };
 }
 
+async function withSignedEventImages(event: MapEvent) {
+  return {
+    ...event,
+    coverURL: await signedProfilePhotoUrl(event.coverURL),
+  };
+}
+
+async function withSignedMapEventMessageImage(message: MapEventMessage) {
+  if (message.messageType !== 'image' || !message.imageURL) return message;
+  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL) };
+}
+
 export async function editMapEventMessage(message: MapEventMessage, viewerUid: string, nextText: string) {
   const cleanText = nextText.trim();
   if (isDemoMode || message.senderUid !== viewerUid || message.messageType !== 'text' || !cleanText) return;
@@ -109,7 +123,7 @@ export async function editMapEventMessage(message: MapEventMessage, viewerUid: s
     .update({ text: cleanText })
     .eq('id', message.id)
     .eq('sender_uid', viewerUid);
-  if (error) throw new Error(error.message || 'NÃ£o consegui editar a mensagem.');
+  if (error) throw new Error(error.message || 'Não consegui editar a mensagem.');
 }
 
 export async function deleteMapEventMessage(message: MapEventMessage, viewerUid: string, canManage: boolean) {
@@ -128,7 +142,7 @@ export async function deleteMapEventMessage(message: MapEventMessage, viewerUid:
 
   const query = supabase.from('map_event_messages').delete().eq('id', message.id);
   const { error } = canManage ? await query : await query.eq('sender_uid', viewerUid);
-  if (error) throw new Error(error.message || 'NÃ£o consegui excluir a mensagem.');
+  if (error) throw new Error(error.message || 'Não consegui excluir a mensagem.');
 }
 
 async function rowsToProfiles(rows: EventUserRow[], me: UserProfile) {
@@ -138,7 +152,7 @@ async function rowsToProfiles(rows: EventUserRow[], me: UserProfile) {
   const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
   const byUid = new Map(((profiles ?? []) as ProfileRow[]).map((row) => [row.id, rowToProfile(row)]));
   byUid.set(me.uid, me);
-  return ids.map((uid) => byUid.get(uid) ?? { ...me, uid, displayName: `Pessoa ${uid.slice(-4)}` });
+  return Promise.all(ids.map((uid) => withSignedProfilePhotos(byUid.get(uid) ?? { ...me, uid, displayName: `Pessoa ${uid.slice(-4)}` })));
 }
 
 export async function hashMapEventPassword(password: string) {
@@ -194,16 +208,22 @@ function rowToProfile(row: ProfileRow): UserProfile {
     likesQuotaDate: row.likes_quota_date,
     likesBonus: row.likes_bonus ?? 0,
     likedByUnlockUntil: row.liked_by_unlock_until,
+    createdAt: row.created_at,
   };
 }
 
 function schemaCacheMessage(tableName: string) {
-  return `A tabela ${tableName} ainda nÃ£o existe no Supabase. Rode novamente o arquivo supabase_create_map_events_first.sql no SQL Editor.`;
+  return `A tabela ${tableName} ainda não existe no Supabase. Rode novamente o arquivo supabase_create_map_events_first.sql no SQL Editor.`;
 }
 
 function isMissingTableError(error: { code?: string; message?: string }) {
   const message = error.message?.toLowerCase() ?? '';
   return error.code === '42P01' || message.includes('schema cache') || message.includes('could not find the table');
+}
+
+function isPolicyBlockedError(error: { code?: string; message?: string }) {
+  const message = error.message?.toLowerCase() ?? '';
+  return error.code === '42501' || message.includes('row-level security policy') || message.includes('permission denied');
 }
 
 export function useMapEvents(me: UserProfile | null) {
@@ -221,7 +241,8 @@ export function useMapEvents(me: UserProfile | null) {
 
     async function loadEvents() {
       const { data } = await supabase.from('map_events').select('*').order('created_at', { ascending: false });
-      if (active) setEvents(((data ?? []) as EventRow[]).map(rowToEvent));
+      const nextEvents = await Promise.all(((data ?? []) as EventRow[]).map((row) => withSignedEventImages(rowToEvent(row))));
+      if (active) setEvents(nextEvents);
     }
 
     loadEvents();
@@ -342,7 +363,8 @@ export function useJoinedMapEvents(uid: string | undefined) {
         return;
       }
 
-      if (active) setEvents(((data ?? []) as EventRow[]).map(rowToEvent));
+      const nextEvents = await Promise.all(((data ?? []) as EventRow[]).map((row) => withSignedEventImages(rowToEvent(row))));
+      if (active) setEvents(nextEvents);
     }
 
     loadEvents();
@@ -420,17 +442,20 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
         .gte('created_at', joinedAt)
         .order('created_at', { ascending: true });
 
-      if (active) setMessages(((data ?? []) as EventMessageRow[]).map(rowToMessage));
+      const nextMessages = await Promise.all(((data ?? []) as EventMessageRow[]).map((row) => withSignedMapEventMessageImage(rowToMessage(row))));
+      if (active) setMessages(nextMessages);
     }
 
     loadMessages();
 
     function upsertMessage(row: EventMessageRow) {
       const nextMessage = rowToMessage(row);
+      withSignedMapEventMessageImage(nextMessage).then((signedMessage) => {
       setMessages((current) => {
         const byId = new Map(current.map((message) => [message.id, message]));
-        byId.set(nextMessage.id, nextMessage);
+        byId.set(signedMessage.id, signedMessage);
         return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      });
       });
     }
 
@@ -768,13 +793,13 @@ export async function createMapEvent(input: {
     ).length;
     const limit = input.isPremium ? 5 : 1;
     if (!input.isPremium && input.coverURL) {
-      throw new Error('Apenas usuÃ¡rios Premium podem adicionar capa ao chat.');
+      throw new Error('Apenas usuários Premium podem adicionar capa ao chat.');
     }
     if (input.isPremium && input.isPermanent && demoEventsState.some((event) => event.creatorUid === input.creatorUid && event.isPermanent)) {
-      throw new Error('VocÃª pode criar apenas 1 chat permanente no Premium.');
+      throw new Error('Você pode criar apenas 1 chat permanente no Premium.');
     }
     if (ownEvents >= limit) {
-      throw new Error(input.isPremium ? 'VocÃª pode criar atÃ© 5 chats no Premium.' : 'VocÃª pode criar apenas 1 chat. Assine o Premium para criar atÃ© 5.');
+      throw new Error(input.isPremium ? 'Você pode criar até 5 chats no Premium.' : 'Você pode criar apenas 1 chat. Assine o Premium para criar até 5.');
     }
 
     const event: MapEvent = {
@@ -812,16 +837,16 @@ export async function createMapEvent(input: {
 
     if (permanentCountError) throw new Error(permanentCountError.message);
     if ((permanentCount ?? 0) >= 1) {
-      throw new Error('VocÃª pode criar apenas 1 chat permanente no Premium.');
+      throw new Error('Você pode criar apenas 1 chat permanente no Premium.');
     }
   }
 
   const limit = input.isPremium ? 5 : 1;
   if (!input.isPremium && input.coverURL) {
-    throw new Error('Apenas usuÃ¡rios Premium podem adicionar capa ao chat.');
+    throw new Error('Apenas usuários Premium podem adicionar capa ao chat.');
   }
   if ((count ?? 0) >= limit) {
-    throw new Error(input.isPremium ? 'VocÃª pode criar atÃ© 5 chats no Premium.' : 'VocÃª pode criar apenas 1 chat. Assine o Premium para criar atÃ© 5.');
+    throw new Error(input.isPremium ? 'Você pode criar até 5 chats no Premium.' : 'Você pode criar apenas 1 chat. Assine o Premium para criar até 5.');
   }
 
   const { data, error } = await supabase
@@ -844,9 +869,54 @@ export async function createMapEvent(input: {
     .single<EventRow>();
 
   if (error) throw new Error(error.message);
-  const created = rowToEvent(data);
+  const created = await withSignedEventImages(rowToEvent(data));
   await joinMapEvent(created.id, input.creatorUid);
   return created;
+}
+
+export async function isMapEventParticipant(eventId: string, userUid: string) {
+  if (isDemoMode) return Boolean(demoParticipantsState[eventId]?.has(userUid));
+
+  const rpcResult = await supabase.rpc('is_map_event_participant', {
+    target_event_id: eventId,
+    target_user_uid: userUid,
+  });
+  if (!rpcResult.error) return Boolean(rpcResult.data);
+
+  const missingFunction =
+    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('is_map_event_participant');
+  if (!missingFunction) throw new Error(rpcResult.error.message);
+
+  const { data, error } = await supabase
+    .from('map_event_participants')
+    .select('user_uid')
+    .eq('event_id', eventId)
+    .eq('user_uid', userUid)
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return (data ?? []).length > 0;
+}
+
+export async function updateMapEventPassword(eventId: string, passwordHash: string) {
+  if (isDemoMode) {
+    demoEventsState = demoEventsState.map((event) =>
+      event.id === eventId ? { ...event, accessMode: 'password', passwordHash } : event,
+    );
+    return;
+  }
+
+  const rpcResult = await supabase.rpc('update_map_event_password', {
+    target_event_id: eventId,
+    target_password_hash: passwordHash,
+  });
+  if (!rpcResult.error) return;
+
+  const missingFunction =
+    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('update_map_event_password');
+  if (!missingFunction) throw new Error(rpcResult.error.message);
+
+  const { error } = await supabase.from('map_events').update({ access_mode: 'password', password_hash: passwordHash }).eq('id', eventId);
+  if (error) throw new Error(error.message);
 }
 
 async function loadRecentMapEventMessages(eventId: string, reportedUid?: string, limit = 5) {
@@ -879,7 +949,7 @@ export async function reportMapEvent(event: MapEvent, reporterUid: string, reaso
 
   const isUserReport = reportedUid !== event.creatorUid || reason === 'reported_chat_user';
   const recentMessages = isUserReport
-    ? await loadRecentMapEventMessages(event.id, reportedUid, 5)
+    ? await loadRecentMapEventMessages(event.id, reportedUid, 10)
     : await loadRecentMapEventMessages(event.id, undefined, 20);
   const { error } = await supabase.from('reports').insert({
     context_id: event.id,
@@ -896,7 +966,7 @@ export async function reportMapEvent(event: MapEvent, reporterUid: string, reaso
 
 export async function joinMapEvent(eventId: string, userUid: string) {
   if (isDemoMode) {
-    if (demoBansState[eventId]?.has(userUid)) throw new Error('VocÃª foi banido deste chat.');
+    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste chat.');
     if (!demoParticipantsState[eventId]) demoParticipantsState[eventId] = new Set();
     if (!demoParticipantJoinedAtState[eventId]) demoParticipantJoinedAtState[eventId] = {};
     if (!demoParticipantsState[eventId].has(userUid)) demoParticipantJoinedAtState[eventId][userUid] = new Date().toISOString();
@@ -912,7 +982,7 @@ export async function joinMapEvent(eventId: string, userUid: string) {
     .eq('user_uid', userUid)
     .limit(1);
   if (banError && !isMissingTableError(banError)) throw new Error(banError.message);
-  if ((banRows ?? []).length > 0) throw new Error('VocÃª foi banido deste chat.');
+  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste chat.');
 
   const { error } = await supabase.from('map_event_participants').upsert(
     {
@@ -930,11 +1000,21 @@ export async function joinMapEvent(eventId: string, userUid: string) {
 
 export async function requestMapEventEntry(eventId: string, userUid: string) {
   if (isDemoMode) {
-    if (demoBansState[eventId]?.has(userUid)) throw new Error('VocÃª foi banido deste chat.');
+    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste chat.');
+    if (demoParticipantsState[eventId]?.has(userUid)) return { alreadyJoined: true };
     if (!demoJoinRequestsState[eventId]) demoJoinRequestsState[eventId] = new Set();
     demoJoinRequestsState[eventId].add(userUid);
-    return;
+    return { alreadyJoined: false };
   }
+
+  const { data: participantRows, error: participantError } = await supabase
+    .from('map_event_participants')
+    .select('user_uid')
+    .eq('event_id', eventId)
+    .eq('user_uid', userUid)
+    .limit(1);
+  if (participantError && !isMissingTableError(participantError)) throw new Error(participantError.message);
+  if ((participantRows ?? []).length > 0) return { alreadyJoined: true };
 
   const { error } = await supabase.from('map_event_join_requests').upsert(
     {
@@ -944,7 +1024,11 @@ export async function requestMapEventEntry(eventId: string, userUid: string) {
     },
     { ignoreDuplicates: true, onConflict: 'event_id,user_uid' },
   );
-  if (error) throw new Error(isMissingTableError(error) ? schemaCacheMessage('map_event_join_requests') : error.message);
+  if (error) {
+    if (isPolicyBlockedError(error)) throw new Error('Você foi banido deste chat.');
+    throw new Error(isMissingTableError(error) ? schemaCacheMessage('map_event_join_requests') : error.message);
+  }
+  return { alreadyJoined: false };
 }
 
 export async function approveMapEventRequest(eventId: string, userUid: string) {
@@ -1055,7 +1139,7 @@ export async function deleteMapEvent(eventId: string, creatorUid: string) {
   }
 
   const { error } = await supabase.from('map_events').delete().eq('id', eventId).eq('creator_uid', creatorUid);
-  if (error) throw new Error(error.message || 'NÃ£o consegui excluir o chat.');
+  if (error) throw new Error(error.message || 'Não consegui excluir o chat.');
 }
 
 export async function sendMapEventMessage(input: {
@@ -1070,6 +1154,7 @@ export async function sendMapEventMessage(input: {
   const now = new Date().toISOString();
 
   if (isDemoMode) {
+    if (demoBansState[input.eventId]?.has(input.senderUid)) throw new Error('Você foi banido deste chat.');
     demoMessagesState = [
       ...demoMessagesState,
       {
@@ -1089,29 +1174,65 @@ export async function sendMapEventMessage(input: {
     return;
   }
 
-  const { data, error } = await supabase
-    .from('map_event_messages')
-    .insert({
-    event_id: input.eventId,
-    sender_uid: input.senderUid,
-    sender_name: input.senderName,
-    text: cleanText,
-    message_type: input.image ? 'image' : 'text',
-    image_url: input.image?.imageURL ?? '',
-    image_path: input.image?.imagePath ?? '',
-    view_once: input.image?.viewOnce ?? false,
-    viewed_by: [],
-    created_at: now,
-    })
-    .select('id')
-    .single<{ id: string }>();
+  const { data: banRows, error: banError } = await supabase
+    .from('map_event_bans')
+    .select('user_uid')
+    .eq('event_id', input.eventId)
+    .eq('user_uid', input.senderUid)
+    .limit(1);
+  if (banError && !isMissingTableError(banError) && !isPolicyBlockedError(banError)) throw new Error(banError.message);
+  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste chat.');
 
-  if (error) throw new Error(error.message);
+  let messageId = '';
+  const rpcResult = await supabase.rpc('send_map_event_message_secure', {
+    target_event_id: input.eventId,
+    message_text: cleanText,
+    message_type_value: input.image ? 'image' : 'text',
+    image_url_value: input.image?.imageURL ?? '',
+    image_path_value: input.image?.imagePath ?? '',
+    view_once_value: input.image?.viewOnce ?? false,
+  });
+  const missingRpc =
+    rpcResult.error &&
+    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('send_map_event_message_secure'));
+
+  if (rpcResult.error && !missingRpc) {
+    throw new Error(rpcResult.error.message || 'Não consegui enviar a mensagem.');
+  }
+
+  if (missingRpc) {
+    const { data, error } = await supabase
+      .from('map_event_messages')
+      .insert({
+      event_id: input.eventId,
+      sender_uid: input.senderUid,
+      sender_name: input.senderName,
+      text: cleanText,
+      message_type: input.image ? 'image' : 'text',
+      image_url: input.image?.imageURL ?? '',
+      image_path: input.image?.imagePath ?? '',
+      view_once: input.image?.viewOnce ?? false,
+      viewed_by: [],
+      created_at: now,
+      })
+      .select('id')
+      .single<{ id: string }>();
+
+    if (error) {
+      if (isPolicyBlockedError(error)) throw new Error('Você não pode enviar mensagens neste chat.');
+      throw new Error(error.message);
+    }
+    messageId = data?.id ?? '';
+  } else {
+    const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
+    const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+    messageId = row?.id ?? '';
+  }
 
   const { error: pushError } = await supabase.functions.invoke('send-map-event-push', {
     body: {
       eventId: input.eventId,
-      messageId: data?.id,
+      messageId,
       senderName: input.senderName,
       senderUid: input.senderUid,
       text: cleanText,

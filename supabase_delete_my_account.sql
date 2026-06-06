@@ -44,12 +44,12 @@ begin
   delete from public.blocks
   where blocker_uid = viewer_uid or blocked_uid = viewer_uid;
 
+  if to_regclass('public.profile_crossings') is not null then
+    execute 'delete from public.profile_crossings where user_uid = $1 or crossed_uid = $1' using viewer_uid;
+  end if;
+
   delete from public.reports
   where reporter_uid = viewer_uid or reported_uid = viewer_uid;
-
-  delete from storage.objects
-  where bucket_id = 'profile-photos'
-    and name like viewer_uid::text || '/%';
 
   delete from public.profiles
   where id = viewer_uid;

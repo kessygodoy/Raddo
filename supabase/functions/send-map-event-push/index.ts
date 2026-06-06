@@ -144,6 +144,15 @@ Deno.serve(async (req) => {
     .maybeSingle<{ id: string; title: string }>();
   if (eventError || !eventData) return jsonResponse({ error: 'Event not found' }, 404);
 
+  const { data: senderParticipant, error: senderParticipantError } = await admin
+    .from('map_event_participants')
+    .select('user_uid')
+    .eq('event_id', body.eventId)
+    .eq('user_uid', body.senderUid)
+    .maybeSingle<{ user_uid: string }>();
+  if (senderParticipantError) return jsonResponse({ error: senderParticipantError.message }, 500);
+  if (!senderParticipant) return jsonResponse({ error: 'Sender is not in event' }, 403);
+
   const { data: participantRows, error: participantError } = await admin
     .from('map_event_participants')
     .select('user_uid')

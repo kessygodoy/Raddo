@@ -22,6 +22,12 @@ export function distanceKm(a: LatLng, b: LatLng) {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(h));
 }
 
+export function formatPersonDistanceKm(distance: number) {
+  if (!Number.isFinite(distance)) return 'Distância indisponível';
+  const safeDistanceKm = Math.max(1, Math.ceil(distance));
+  return `${safeDistanceKm.toLocaleString('pt-BR')} km`;
+}
+
 export function offsetLocation(origin: LatLng, radiusKm: number, seed: string) {
   const clampedRadius = Math.max(0.02, Math.min(radiusKm, 500));
   const hash = [...seed].reduce((acc, char) => acc + char.charCodeAt(0), 0);

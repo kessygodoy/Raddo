@@ -9,6 +9,7 @@ import {
   createMapEvent,
   deleteMapEvent,
   hashMapEventPassword,
+  isMapEventParticipant,
   joinMapEvent,
   leaveMapEvent,
   reportMapEvent,
@@ -19,7 +20,7 @@ import {
   useMapEvents as useLocalMapEvents,
 } from '../hooks/useMapEvents';
 import type { AppTheme, LatLng, MapEvent, UserProfile } from '../types';
-import { distanceKm, visibleLocation } from '../utils/geo';
+import { distanceKm, formatPersonDistanceKm, visibleLocation } from '../utils/geo';
 import MapEventChat from './MapEventChat';
 import { isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
@@ -27,12 +28,34 @@ import ProfilePreview from './ProfilePreview';
 import { sendDislike, trySendLike } from '../hooks/useMatches';
 import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
+import { uploadProfilePhoto } from '../storageImages';
 
 type Props = {
   me: UserProfile;
   profiles: UserProfile[];
   theme: AppTheme;
 };
+type AppDialog =
+  | {
+      confirmLabel?: string;
+      destructive?: boolean;
+      message: string;
+      onConfirm: () => void | Promise<void>;
+      title: string;
+      type: 'confirm';
+    }
+  | {
+      confirmLabel?: string;
+      initialValue: string;
+      message?: string;
+      onConfirm: (value: string) => void | Promise<void>;
+      title: string;
+      type: 'prompt';
+    };
+
+function rememberedMapEventPasswordKey(eventId: string, userUid: string) {
+  return `raddo:map-event-password:${userUid}:${eventId}`;
+}
 
 type MapPointSetter = (point: LatLng) => void;
 
@@ -73,18 +96,29 @@ const eventEmojiOptions: string[] = [];
 const modernEventEmojiOptions = [
   '\u{1F4AC}',
   '\u{1F4CD}',
+  '\u{2764}\u{FE0F}',
+  '\u{1F495}',
+  '\u{1F496}',
   '\u{1F389}',
   '\u{2728}',
   '\u{1F525}',
+  '\u{1F44D}',
+  '\u{1F44C}',
   '\u{1FAE1}',
   '\u{1F60E}',
   '\u{1F929}',
   '\u{1F970}',
+  '\u{1F60D}',
+  '\u{1F618}',
+  '\u{1F60A}',
   '\u{1F44B}',
   '\u{1F91D}',
   '\u{1F64C}',
+  '\u{1F64F}',
+  '\u{1F440}',
   '\u{1F483}',
   '\u{1F57A}',
+  '\u{1F46F}',
   '\u{1F3A7}',
   '\u{1F3A4}',
   '\u{1F3B8}',
@@ -96,7 +130,10 @@ const modernEventEmojiOptions = [
   '\u{1F579}\u{FE0F}',
   '\u{2615}',
   '\u{1F964}',
+  '\u{1F376}',
   '\u{1F379}',
+  '\u{1F378}',
+  '\u{1F943}',
   '\u{1F37B}',
   '\u{1F377}',
   '\u{1F942}',
@@ -109,6 +146,7 @@ const modernEventEmojiOptions = [
   '\u{1F36A}',
   '\u{1F366}',
   '\u{1F382}',
+  '\u{1F370}',
   '\u{26BD}',
   '\u{1F3C0}',
   '\u{1F3D0}',
@@ -196,7 +234,7 @@ const modernEventEmojiOptions = [
 ];
 
 eventEmojiOptions.splice(0, eventEmojiOptions.length, ...modernEventEmojiOptions);
-const eventEmojiQuickOptions = eventEmojiOptions.slice(0, 15);
+const eventEmojiQuickOptions = eventEmojiOptions.slice(0, 24);
 
 function eventEmojiIcon(emoji: string, highlighted = false) {
   const emojiClassName = highlighted ? 'map-pin-emoji map-pin-emoji-own' : 'map-pin-emoji';
@@ -224,6 +262,16 @@ function escapeHtml(value: string) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function sharedInterestCount(me: UserProfile, profile: UserProfile) {
+  if (me.interests.length === 0 || profile.interests.length === 0) return 0;
+  return profile.interests.filter((interest) => me.interests.includes(interest)).length;
+}
+
+function sharedRelationshipGoalCount(me: UserProfile, profile: UserProfile) {
+  if (me.relationshipGoals.length === 0 || profile.relationshipGoals.length === 0) return 0;
+  return profile.relationshipGoals.filter((goal) => me.relationshipGoals.includes(goal)).length;
 }
 
 function profilePhotoIcon(photoURL: string) {
@@ -454,9 +502,80 @@ function MyLocationArrow({ me }: { me: UserProfile }) {
   );
 }
 
-function OwnerEventArrows({ events, me }: { events: MapEvent[]; me: UserProfile }) {
+function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () => void }) {
+  const [value, setValue] = useState(dialog.type === 'prompt' ? dialog.initialValue : '');
+  const [busy, setBusy] = useState(false);
+
+  async function handleConfirm() {
+    const nextValue = value.trim();
+    if (dialog.type === 'prompt' && !nextValue) return;
+    setBusy(true);
+    try {
+      if (dialog.type === 'prompt') await dialog.onConfirm(nextValue);
+      else await dialog.onConfirm();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[1800] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">{dialog.title}</h2>
+            {dialog.message && <p className="mt-1 text-sm text-slate-300">{dialog.message}</p>}
+          </div>
+          <button aria-label="Fechar" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8" onClick={onClose} type="button">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {dialog.type === 'prompt' && (
+          <input
+            autoFocus
+            className="h-11 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
+            onChange={(inputEvent) => setValue(inputEvent.target.value)}
+            type="password"
+            value={value}
+          />
+        )}
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100" disabled={busy} onClick={onClose} type="button">
+            Cancelar
+          </button>
+          <button
+            className={`h-11 rounded-lg text-sm font-semibold disabled:cursor-wait disabled:opacity-60 ${
+              dialog.type === 'confirm' && dialog.destructive ? 'bg-rose-400 text-white' : 'bg-teal-300 text-slate-950'
+            }`}
+            disabled={busy}
+            onClick={handleConfirm}
+            type="button"
+          >
+            {busy ? 'Processando...' : dialog.confirmLabel ?? 'Confirmar'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MapFocusController({ target }: { target: { event: MapEvent; nonce: number } | null }) {
   const map = useMap();
-  const [arrows, setArrows] = useState<Array<{ angle: number; id: string; x: number; y: number }>>([]);
+
+  useEffect(() => {
+    if (!target) return;
+    map.flyTo([target.event.location.lat, target.event.location.lng], Math.max(map.getZoom(), 16), {
+      duration: 0.8,
+    });
+  }, [map, target]);
+
+  return null;
+}
+
+function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me: UserProfile; onFocusEvent: (event: MapEvent) => void }) {
+  const map = useMap();
+  const [arrows, setArrows] = useState<Array<{ angle: number; event: MapEvent; id: string; x: number; y: number }>>([]);
 
   const ownerEvents = useMemo(
     () => events.filter((event) => event.creatorUid === me.uid),
@@ -471,6 +590,7 @@ function OwnerEventArrows({ events, me }: { events: MapEvent[]; me: UserProfile 
       const next = ownerEvents
         .filter((event) => !isPositionInView(map, event.location))
         .map((event) => ({
+          event,
           id: event.id,
           ...edgeOverlayForPosition(map, event.location),
         }));
@@ -496,18 +616,81 @@ function OwnerEventArrows({ events, me }: { events: MapEvent[]; me: UserProfile 
   return createPortal(
     <div className="map-owner-event-arrow-layer">
       {arrows.map((arrow) => (
-        <div
-          aria-hidden="true"
+        <button
+          aria-label={`Focar chat ${arrow.event.title}`}
           className="map-owner-event-arrow"
           key={arrow.id}
+          onClick={() => onFocusEvent(arrow.event)}
           style={{
             left: `${arrow.x}px`,
             top: `${arrow.y}px`,
             transform: `translate(-50%, -50%) rotate(${arrow.angle}deg)`,
           }}
+          type="button"
         >
           <span className="map-owner-event-arrow-chevron" />
-        </div>
+        </button>
+      ))}
+    </div>,
+    map.getContainer(),
+  );
+}
+
+function JoinedEventDots({ events, me, onFocusEvent }: { events: MapEvent[]; me: UserProfile; onFocusEvent: (event: MapEvent) => void }) {
+  const map = useMap();
+  const [dots, setDots] = useState<Array<{ event: MapEvent; id: string; x: number; y: number }>>([]);
+
+  const joinedEvents = useMemo(
+    () => events.filter((event) => event.creatorUid !== me.uid),
+    [events, me.uid],
+  );
+
+  useEffect(() => {
+    let frame = 0;
+
+    function updateDots() {
+      frame = 0;
+      const next = joinedEvents
+        .filter((event) => !isPositionInView(map, event.location))
+        .map((event) => ({
+          event,
+          id: event.id,
+          ...edgeOverlayForPosition(map, event.location),
+        }));
+      setDots(next);
+    }
+
+    function scheduleUpdate() {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateDots);
+    }
+
+    updateDots();
+    map.on('move zoom moveend zoomend resize', scheduleUpdate);
+
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      map.off('move zoom moveend zoomend resize', scheduleUpdate);
+    };
+  }, [joinedEvents, map]);
+
+  if (dots.length === 0) return null;
+
+  return createPortal(
+    <div className="map-joined-event-dot-layer">
+      {dots.map((dot) => (
+        <button
+          aria-label={`Focar chat ${dot.event.title}`}
+          className="map-joined-event-dot"
+          key={dot.id}
+          onClick={() => onFocusEvent(dot.event)}
+          style={{
+            left: `${dot.x}px`,
+            top: `${dot.y}px`,
+          }}
+          title={dot.event.title}
+          type="button"
+        />
       ))}
     </div>,
     map.getContainer(),
@@ -552,7 +735,7 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
-              {me.location ? `${distanceKm(me.location, position).toFixed(1)} km de você` : 'Distância indisponível'}
+              {me.location ? `${formatPersonDistanceKm(distanceKm(me.location, position))} de você` : 'Distância indisponível'}
             </Popup>
           </Marker>
         );
@@ -690,7 +873,6 @@ function ClusteredEventMarkers({
       })}
         </>
       )}
-      <OwnerEventArrows events={events} me={me} />
     </>
   );
 }
@@ -719,7 +901,9 @@ export default function RadarMap({ me, profiles, theme }: Props) {
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [gpsEvent, setGpsEvent] = useState<MapEvent | null>(null);
   const [localEvents, setLocalEvents] = useState<MapEvent[]>([]);
+  const [focusTarget, setFocusTarget] = useState<{ event: MapEvent; nonce: number } | null>(null);
   const [eventError, setEventError] = useState('');
+  const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [profileActionMessage, setProfileActionMessage] = useState('');
   const mapEvents = useLocalMapEvents(me);
   const joinedMapEvents = useJoinedMapEvents(me.uid);
@@ -759,11 +943,20 @@ export default function RadarMap({ me, profiles, theme }: Props) {
     ],
     [joinedActiveEvents, visibleEvents],
   );
-  const sortedProfiles = [...profiles].sort((a, b) => profileDistance(a) - profileDistance(b));
+  const sortedProfiles = [...profiles].sort((a, b) => {
+    const goalDiff = sharedRelationshipGoalCount(me, b) - sharedRelationshipGoalCount(me, a);
+    if (goalDiff !== 0) return goalDiff;
+    const interestDiff = sharedInterestCount(me, b) - sharedInterestCount(me, a);
+    if (interestDiff !== 0) return interestDiff;
+    return profileDistance(a) - profileDistance(b);
+  });
   const tileLayer = tileLayerForTheme(theme);
   const eventParticipantCounts = useMapEventParticipantCounts(eventContextList);
   const eventCreatorNames = useMapEventCreatorNames(eventContextList, me);
   const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do chat');
+  const focusChatOnMap = (event: MapEvent) => {
+    setFocusTarget({ event, nonce: Date.now() });
+  };
 
   useEffect(() => {
     const openMyChats = () => {
@@ -895,21 +1088,12 @@ export default function RadarMap({ me, profiles, theme }: Props) {
 
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
     const path = `${me.uid}/map-events/${Date.now()}-${safeName}`;
-    const { error } = await supabase.storage.from('profile-photos').upload(path, file, {
-      cacheControl: '3600',
-      upsert: false,
-    });
-
-    if (!error) {
-      const { data } = supabase.storage.from('profile-photos').getPublicUrl(path);
-      try {
-        await moderateUploadedImage({ context: 'chat-cover', path, publicUrl: data.publicUrl });
-        setEventCoverURL(data.publicUrl);
-      } catch (moderationError) {
-        setEventError(moderationError instanceof Error ? moderationError.message : 'Imagem recusada pela verificação de segurança.');
-      }
-    } else {
-      setEventError(error.message || 'Não consegui enviar a capa.');
+    try {
+      const signedUrl = await uploadProfilePhoto(path, file);
+      await moderateUploadedImage({ context: 'chat-cover', path, publicUrl: signedUrl });
+      setEventCoverURL(signedUrl);
+    } catch (uploadError) {
+      setEventError(uploadError instanceof Error ? uploadError.message : 'Não consegui enviar a capa.');
     }
 
     setUploadingCover(false);
@@ -976,20 +1160,53 @@ export default function RadarMap({ me, profiles, theme }: Props) {
     }
 
     try {
+      const joinedEvent = joinedActiveEvents.find((joined) => joined.id === event.id);
+      const isAlreadyParticipant = Boolean(joinedEvent) || event.creatorUid === me.uid || await isMapEventParticipant(event.id, me.uid);
+      if (isAlreadyParticipant) {
+        setPreviewEvent(null);
+        setActiveEvent(joinedEvent ?? event);
+        return;
+      }
+
       if (event.accessMode === 'approval' && event.creatorUid !== me.uid) {
-        await requestMapEventEntry(event.id, me.uid);
+        const result = await requestMapEventEntry(event.id, me.uid);
+        if (result.alreadyJoined) {
+          setPreviewEvent(null);
+          setActiveEvent(event);
+          return;
+        }
         setEventError('Pedido enviado. Aguarde o dono ou moderador liberar sua entrada.');
         return;
       }
 
       if (event.accessMode === 'password' && event.creatorUid !== me.uid) {
-        const password = window.prompt('Digite a senha deste chat.');
-        if (!password) return;
-        const passwordHash = await hashMapEventPassword(password);
-        if (passwordHash !== event.passwordHash) {
-          setEventError('Senha incorreta.');
+        const rememberedPasswordHash = window.localStorage.getItem(rememberedMapEventPasswordKey(event.id, me.uid));
+        if (rememberedPasswordHash && rememberedPasswordHash === event.passwordHash) {
+          await joinMapEvent(event.id, me.uid);
+          setPreviewEvent(null);
+          setActiveEvent(event);
           return;
         }
+
+        setDialog({
+          confirmLabel: 'Entrar',
+          initialValue: '',
+          message: 'Digite a senha deste chat.',
+          onConfirm: async (password) => {
+            const passwordHash = await hashMapEventPassword(password);
+            if (passwordHash !== event.passwordHash) {
+              setEventError('Senha incorreta.');
+              return;
+            }
+            await joinMapEvent(event.id, me.uid);
+            window.localStorage.setItem(rememberedMapEventPasswordKey(event.id, me.uid), passwordHash);
+            setPreviewEvent(null);
+            setActiveEvent(event);
+          },
+          title: 'Chat com senha',
+          type: 'prompt',
+        });
+        return;
       }
 
       await joinMapEvent(event.id, me.uid);
@@ -1002,42 +1219,59 @@ export default function RadarMap({ me, profiles, theme }: Props) {
 
   async function handleLeaveEventFromList(event: MapEvent) {
     setEventError('');
-    const confirmed = window.confirm(`Sair do chat "${event.title}"?`);
-    if (!confirmed) return;
-
-    try {
-      await leaveMapEvent(event.id, me.uid);
-      if (activeEvent?.id === event.id) setActiveEvent(null);
-      if (previewEvent?.id === event.id) setPreviewEvent(null);
-    } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui sair do chat.');
-    }
+    setDialog({
+      confirmLabel: 'Sair',
+      destructive: true,
+      message: `Você deixará de participar de "${event.title}".`,
+      onConfirm: async () => {
+        try {
+          await leaveMapEvent(event.id, me.uid);
+          if (activeEvent?.id === event.id) setActiveEvent(null);
+          if (previewEvent?.id === event.id) setPreviewEvent(null);
+        } catch (error) {
+          setEventError(error instanceof Error ? error.message : 'Não consegui sair do chat.');
+        }
+      },
+      title: 'Sair do chat?',
+      type: 'confirm',
+    });
   }
 
   async function handleDeleteEvent(event: MapEvent) {
-    const confirmed = window.confirm('Excluir este chat do mapa? Todas as mensagens dele serão removidas.');
-    if (!confirmed) return;
-
-    try {
-      await deleteMapEvent(event.id, me.uid);
-      setLocalEvents((current) => current.filter((localEvent) => localEvent.id !== event.id));
-      setPreviewEvent(null);
-      if (activeEvent?.id === event.id) setActiveEvent(null);
-    } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui excluir o chat.');
-    }
+    setDialog({
+      confirmLabel: 'Excluir',
+      destructive: true,
+      message: 'Todas as mensagens dele serão removidas.',
+      onConfirm: async () => {
+        try {
+          await deleteMapEvent(event.id, me.uid);
+          setLocalEvents((current) => current.filter((localEvent) => localEvent.id !== event.id));
+          setPreviewEvent(null);
+          if (activeEvent?.id === event.id) setActiveEvent(null);
+        } catch (error) {
+          setEventError(error instanceof Error ? error.message : 'Não consegui excluir o chat.');
+        }
+      },
+      title: 'Excluir este chat?',
+      type: 'confirm',
+    });
   }
 
   async function handleReportEvent(event: MapEvent) {
-    const confirmed = window.confirm('Denunciar este chat para revisão?');
-    if (!confirmed) return;
-
-    try {
-      await reportMapEvent(event, me.uid);
-      setEventError('Denúncia enviada. Obrigado por ajudar a manter o Raddo seguro.');
-    } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui enviar a denúncia.');
-    }
+    setDialog({
+      confirmLabel: 'Denunciar',
+      message: 'Enviar este chat para análise da moderação?',
+      onConfirm: async () => {
+        try {
+          await reportMapEvent(event, me.uid);
+          setEventError('Denúncia enviada. Obrigado por ajudar a manter o Raddo seguro.');
+        } catch (error) {
+          setEventError(error instanceof Error ? error.message : 'Não consegui enviar a denúncia.');
+        }
+      },
+      title: 'Denunciar chat',
+      type: 'confirm',
+    });
   }
 
   async function likeNearbyProfile(profile: UserProfile) {
@@ -1058,6 +1292,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
+      {dialog && <AppDialogModal dialog={dialog} onClose={() => setDialog(null)} />}
       {previewProfile && (
         <ProfilePreview
           me={me}
@@ -1078,7 +1313,9 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="truncate text-xl font-semibold">{previewEvent.title}</h1>
-                <p className="mt-1 text-xs font-semibold text-teal-200">Criado por {creatorLabel(previewEvent)}</p>
+                <p className="raddo-event-creator-label mt-1 text-xs font-semibold text-teal-200">
+                  Criado por {creatorLabel(previewEvent)}
+                </p>
                 <p className="mt-1 text-sm text-slate-300">{previewEvent.description || 'Chat local do mapa'}</p>
               </div>
               <button
@@ -1117,7 +1354,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
 
             {previewEvent.creatorUid !== me.uid && (
               <button
-                className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 text-sm font-semibold text-amber-100"
+                className="raddo-report-chat-button mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-300/30 bg-amber-300/10 text-sm font-semibold text-amber-100"
                 onClick={() => handleReportEvent(previewEvent)}
                 type="button"
               >
@@ -1183,6 +1420,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                     key={event.id}
                     onClick={() => {
                       setClusteredEvents([]);
+                      focusChatOnMap(event);
                       setPreviewEvent(event);
                     }}
                     type="button"
@@ -1274,6 +1512,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                           setShowChatsList(false);
                           setShowMyChatsList(false);
                           setShowNearbyChatsList(false);
+                          focusChatOnMap(event);
                           setPreviewEvent(event);
                         }}
                         type="button"
@@ -1303,6 +1542,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                             setShowChatsList(false);
                             setShowMyChatsList(false);
                             setShowNearbyChatsList(false);
+                            focusChatOnMap(event);
                             handleEnterEvent(event);
                           }}
                           type="button"
@@ -1371,7 +1611,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                       <h3 className="truncate text-sm font-semibold">{profile.displayName}</h3>
                       <p className="text-xs text-slate-300">
                         {me.location && profile.location
-                          ? `${distanceKm(me.location, profile.location).toFixed(1)} km`
+                          ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
                           : 'Distância indisponível'}
                       </p>
                     </button>
@@ -1415,7 +1655,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
       )}
       {createChatOpen && (
         <div className="fixed inset-0 z-[1200] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-          <section className="max-h-[92dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+          <section className="scrollbar-hidden max-h-[92dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-semibold">
                 <Plus className="h-4 w-4 text-teal-300" />
@@ -1615,6 +1855,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             key={theme}
             url={tileLayer.url}
           />
+          <MapFocusController target={focusTarget} />
           {me.isPremium && <MapClickTarget onPick={setSelectedPoint} />}
 
           {me.location && (
@@ -1641,8 +1882,13 @@ export default function RadarMap({ me, profiles, theme }: Props) {
             events={visibleEvents}
             me={me}
             onOpenCluster={setClusteredEvents}
-            onPreviewEvent={setPreviewEvent}
+            onPreviewEvent={(event) => {
+              focusChatOnMap(event);
+              setPreviewEvent(event);
+            }}
           />
+          <OwnerEventArrows events={visibleEvents} me={me} onFocusEvent={focusChatOnMap} />
+          <JoinedEventDots events={joinedActiveEvents} me={me} onFocusEvent={focusChatOnMap} />
 
           {false && profiles.map((profile) => {
             const position = visibleLocation(profile);
@@ -1653,7 +1899,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                 <Popup>
                   <strong>{profile.displayName}</strong>
                   <br />
-                  {me.location ? `${distanceKm(me.location, position).toFixed(1)} km de você` : 'Distância indisponível'}
+                  {me.location ? `${formatPersonDistanceKm(distanceKm(me.location, position))} de você` : 'Distância indisponível'}
                   <br />
                   {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                 </Popup>
@@ -1782,7 +2028,7 @@ export default function RadarMap({ me, profiles, theme }: Props) {
                   <h3 className="truncate text-sm font-semibold">{profile.displayName}</h3>
                   <p className="text-xs text-slate-300">
                     {me.location && profile.location
-                      ? `${distanceKm(me.location, profile.location).toFixed(1)} km`
+                      ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
                       : 'Distância indisponível'}
                   </p>
                 </button>

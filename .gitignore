@@ -5,6 +5,7 @@ dist
 supabase/.edge-secrets*.env
 .DS_Store
 *.log
+*.uploading.cfg
 *.tsbuildinfo
 *.config.js
 *.config.d.ts

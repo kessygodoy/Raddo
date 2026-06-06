@@ -15,11 +15,13 @@ import {
   Palette,
   PawPrint,
   Plane,
+  Play,
   RotateCcw,
   Search,
   Shield,
   SlidersHorizontal,
   Sparkles,
+  Star,
   Upload,
   UserRound,
   UserX,
@@ -54,7 +56,17 @@ import {
   type NotificationPreferences,
 } from '../notificationPreferences';
 import { moderateUploadedImage } from '../imageModeration';
-import { banAppUser, type ModerationCase, useAppModeratorRole, useModerationCases } from '../moderation';
+import { uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
+import {
+  banAppUser,
+  type ModerationCase,
+  unbanAppUser,
+  useAppBannedUsers,
+  useAppModeratorRole,
+  useModerationCases,
+  useModerationDashboard,
+} from '../moderation';
+import { showRewardedVideoAd } from '../adMob';
 
 type Props = {
   profile: UserProfile;
@@ -65,6 +77,7 @@ type Props = {
 };
 
 const themeOptions: Array<{ value: AppTheme; label: string }> = [
+  { value: 'system', label: 'systemTheme' },
   { value: 'dark', label: 'darkTheme' },
   { value: 'light', label: 'lightTheme' },
   { value: 'pride', label: 'colorfulTheme' },
@@ -82,9 +95,13 @@ const settingsSections: Array<{ value: SettingsSection; label: string }> = [
   { value: 'safety', label: 'safetyTab' },
 ];
 
+const BIO_MAX_LENGTH = 300;
+const CAROUSEL_PHOTO_MAX = 10;
+const GALLERY_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+
 export default function ProfileSettings({ currentLanguage, currentTheme, profile, setLanguage, setTheme }: Props) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState(profile);
+  const [draft, setDraft] = useState({ ...profile, bio: profile.bio.slice(0, BIO_MAX_LENGTH) });
   const [saveStatus, setSaveStatus] = useState(t('savedAutomatically'));
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
   const [uploadingCarouselPhotos, setUploadingCarouselPhotos] = useState(false);
@@ -100,24 +117,38 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [banUserUid, setBanUserUid] = useState('');
   const [banReason, setBanReason] = useState('');
   const [selectedModerationCase, setSelectedModerationCase] = useState<ModerationCase | null>(null);
+  const [moderationOpen, setModerationOpen] = useState(false);
+  const [moderationTab, setModerationTab] = useState<'reports' | 'bans'>('reports');
   const [termsOpen, setTermsOpen] = useState(false);
   const [interactionsMessage, setInteractionsMessage] = useState('');
+  const [interactionsAdOpen, setInteractionsAdOpen] = useState(false);
+  const [interactionsUnlockUntil, setInteractionsUnlockUntil] = useState(() => {
+    const saved = window.localStorage.getItem(`raddo-interactions-unlock-until:${profile.uid}`);
+    return saved ? Number(saved) : 0;
+  });
   const [deletingAccount, setDeletingAccount] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
   const latestDraftRef = useRef(profile);
   const blockedProfiles = useBlockedProfiles(profile.uid);
   const interactions = useProfileInteractions(profile.uid);
+  const interactionsUnlocked = profile.isPremium || interactionsUnlockUntil > Date.now();
+  const interactionUnlockMinutes = Math.max(0, Math.ceil((interactionsUnlockUntil - Date.now()) / 60000));
   const appModeratorRole = useAppModeratorRole(profile.uid);
   const moderationCases = useModerationCases(Boolean(appModeratorRole));
+  const moderationDashboard = useModerationDashboard(Boolean(appModeratorRole));
+  const appBannedUsers = useAppBannedUsers(Boolean(appModeratorRole));
 
   useEffect(() => {
     getNotificationPermission().then(setNotificationStatus);
   }, []);
 
   useEffect(() => {
-    setDraft(profile);
-    latestDraftRef.current = profile;
+    const nextProfile = { ...profile, bio: profile.bio.slice(0, BIO_MAX_LENGTH) };
+    setDraft(nextProfile);
+    latestDraftRef.current = nextProfile;
     setNotificationPreferences(loadNotificationPreferences(profile.uid));
+    const savedInteractionsUnlock = window.localStorage.getItem(`raddo-interactions-unlock-until:${profile.uid}`);
+    setInteractionsUnlockUntil(savedInteractionsUnlock ? Number(savedInteractionsUnlock) : 0);
   }, [profile]);
 
   useEffect(
@@ -144,6 +175,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         return;
       }
 
+      if (moderationOpen) {
+        event.preventDefault();
+        setModerationOpen(false);
+        return;
+      }
+
       if (termsOpen) {
         event.preventDefault();
         setTermsOpen(false);
@@ -155,7 +192,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [selectedModerationCase, showPublicPreview, termsOpen]);
+  }, [moderationOpen, selectedModerationCase, showPublicPreview, termsOpen]);
 
   function updateDraft<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setDraft((prev) => {
@@ -191,16 +228,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
     const path = `${profile.uid}/${Date.now()}-${safeName}`;
-    const { error } = await supabase.storage.from('profile-photos').upload(path, file, {
-      cacheControl: '3600',
-      upsert: false,
-    });
-
-    if (error) return '';
-
-    const { data } = supabase.storage.from('profile-photos').getPublicUrl(path);
-    await moderateUploadedImage({ context, path, publicUrl: data.publicUrl });
-    return data.publicUrl;
+    const signedUrl = await uploadProfilePhotoToStorage(path, file);
+    await moderateUploadedImage({ context, path, publicUrl: signedUrl });
+    return signedUrl;
   }
 
   async function uploadProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -235,7 +265,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     }
 
     if (uploadedUrls.length > 0) {
-      const nextPhotos = [...draft.photos, ...uploadedUrls].slice(0, 9);
+      const nextPhotos = [...draft.photos, ...uploadedUrls].slice(0, CAROUSEL_PHOTO_MAX);
       updateDraft('photos', nextPhotos);
     }
 
@@ -277,7 +307,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         relationship_goals: nextDraft.relationshipGoals,
         min_age_preference: nextDraft.minAgePreference ?? 18,
         max_age_preference: nextDraft.maxAgePreference ?? 60,
-        bio: nextDraft.bio,
+        bio: nextDraft.bio.slice(0, BIO_MAX_LENGTH),
         is_premium: nextDraft.isPremium,
         last_seen: new Date().toISOString(),
       })
@@ -350,6 +380,29 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     }
   }
 
+  function unlockInteractionsForFiveMinutes() {
+    const unlockUntil = Date.now() + 5 * 60 * 1000;
+    setInteractionsUnlockUntil(unlockUntil);
+    window.localStorage.setItem(`raddo-interactions-unlock-until:${profile.uid}`, String(unlockUntil));
+  }
+
+  async function openInteractionsWithAd() {
+    if (interactionsUnlocked) return;
+
+    const shownRealAd = await showRewardedVideoAd();
+    if (shownRealAd) {
+      unlockInteractionsForFiveMinutes();
+      return;
+    }
+
+    setInteractionsAdOpen(true);
+  }
+
+  function finishInteractionsAd() {
+    unlockInteractionsForFiveMinutes();
+    setInteractionsAdOpen(false);
+  }
+
   async function handleDeleteAccount() {
     const firstConfirm = window.confirm(t('deleteConfirm1'));
     if (!firstConfirm) return;
@@ -366,6 +419,11 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       setSafetyMessage(error instanceof Error ? error.message : t('deleteAccountError'));
       setDeletingAccount(false);
     }
+  }
+
+  function openAppRating() {
+    const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.raddo.app';
+    window.open(playStoreUrl, '_blank', 'noopener,noreferrer');
   }
 
   async function handleBanAppUser() {
@@ -392,6 +450,18 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     }
   }
 
+  async function handleUnbanAppUser(uid: string) {
+    const confirmed = window.confirm('Desbanir este usuário do app?');
+    if (!confirmed) return;
+
+    try {
+      await unbanAppUser(uid);
+      setSafetyMessage('Usuário desbanido do app.');
+    } catch (error) {
+      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui desbanir o usuário.');
+    }
+  }
+
   return (
     <section className="mx-auto grid max-w-4xl gap-4 md:grid-cols-[280px_1fr]">
       {showPublicPreview && (
@@ -401,6 +471,37 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           profile={draft}
           showReport={false}
         />
+      )}
+      {interactionsAdOpen && (
+        <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/75 p-6 backdrop-blur">
+          <section className="w-full max-w-sm overflow-hidden rounded-lg border border-white/10 bg-[#07111f] text-white shadow-2xl">
+            <div className="grid aspect-video place-items-center bg-[linear-gradient(135deg,#0f172a,#1d4ed8_55%,#ec4899)]">
+              <div className="grid h-16 w-16 place-items-center rounded-full bg-white/20 backdrop-blur">
+                <Play className="ml-1 h-8 w-8 fill-white text-white" />
+              </div>
+            </div>
+            <div className="p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Anúncio</p>
+              <h2 className="mt-1 text-lg font-semibold">Vídeo patrocinado</h2>
+              <p className="mt-2 text-sm text-slate-300">Assista ao vídeo para ver suas interações por 5 minutos.</p>
+              <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10">
+                <div className="h-full w-full rounded-full bg-teal-300" />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="h-11 rounded-lg border border-white/10 bg-white/8 font-semibold text-slate-100"
+                  onClick={() => setInteractionsAdOpen(false)}
+                  type="button"
+                >
+                  Agora não
+                </button>
+                <button className="h-11 rounded-lg bg-teal-300 font-semibold text-slate-950" onClick={finishInteractionsAd} type="button">
+                  Ver interações
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
       )}
       <aside className="overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <div className="grid place-items-center bg-slate-950/60 p-5">
@@ -421,7 +522,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         </div>
         <div className="p-4">
           <h1 className="truncate text-2xl font-semibold">{draft.displayName}</h1>
-          <p className="mt-1 text-sm text-slate-300">{draft.bio || 'Bio vazia'}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-300">{draft.bio || 'Bio vazia'}</p>
           <button
             className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold text-slate-100"
             onClick={() => setShowPublicPreview(true)}
@@ -476,21 +577,21 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     value={draft.age ?? 18}
                   />
                 </label>
-                <label className="grid gap-2 text-sm">
-                  Foto de perfil
+                <div className="grid gap-2 text-sm">
+                  <span>Foto de perfil</span>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Camera className="h-4 w-4 text-teal-300" />
                       {uploadingProfilePhoto ? 'Enviando...' : 'Abrir câmera'}
                       <input accept="image/*" capture="environment" className="hidden" onChange={uploadProfilePhoto} type="file" />
-                    </span>
-                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                    </label>
+                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Upload className="h-4 w-4 text-teal-300" />
                       {uploadingProfilePhoto ? 'Enviando...' : 'Escolher foto'}
-                      <input accept="image/*" className="hidden" onChange={uploadProfilePhoto} type="file" />
-                    </span>
+                      <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" onChange={uploadProfilePhoto} type="file" />
+                    </label>
                   </div>
-                </label>
+                </div>
                 {draft.photoURL && (
                   <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2">
                     <img alt="" className="h-12 w-12 rounded-lg object-cover" src={draft.photoURL} />
@@ -500,21 +601,21 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     </div>
                   </div>
                 )}
-                <label className="grid gap-2 text-sm">
-                  Fotos do carrossel
+                <div className="grid gap-2 text-sm">
+                  <span>Fotos do carrossel</span>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Camera className="h-4 w-4 text-teal-300" />
                       {uploadingCarouselPhotos ? 'Enviando...' : 'Abrir câmera'}
                       <input accept="image/*" capture="environment" className="hidden" onChange={uploadCarouselPhotos} type="file" />
-                    </span>
-                    <span className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
+                    </label>
+                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Upload className="h-4 w-4 text-teal-300" />
                       {uploadingCarouselPhotos ? 'Enviando...' : 'Escolher fotos'}
-                      <input accept="image/*" className="hidden" multiple onChange={uploadCarouselPhotos} type="file" />
-                    </span>
+                      <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" multiple onChange={uploadCarouselPhotos} type="file" />
+                    </label>
                   </div>
-                </label>
+                </div>
                 {draft.photos.length > 0 && (
                   <div className="grid gap-2">
                     {draft.photos.map((photo) => (
@@ -536,9 +637,13 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   Bio
                   <textarea
                     className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 outline-none"
-                    onChange={(event) => updateDraft('bio', event.target.value)}
+                    maxLength={BIO_MAX_LENGTH}
+                    onChange={(event) => updateDraft('bio', event.target.value.slice(0, BIO_MAX_LENGTH))}
                     value={draft.bio}
                   />
+                  <span className="text-right text-xs text-slate-400">
+                    {draft.bio.length}/{BIO_MAX_LENGTH}
+                  </span>
                 </label>
               </div>
             </section>
@@ -567,7 +672,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     onClick={() => setPreferenceStep('identity')}
                     type="button"
                   >
-                    Identidade
+                    Eu sou
                   </button>
                 </div>
               </div>
@@ -624,7 +729,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                       query={preferenceSearch}
                       selected={draft.genderIdentities.length ? draft.genderIdentities : [draft.gender]}
                       single
-                      title="Como você se identifica?"
+                      title="Eu sou"
                       values={genderOptions}
                       onChange={(value) => {
                         const fallback = [value as GenderIdentity];
@@ -778,44 +883,70 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <p className="mb-4 text-sm text-slate-300">
                 Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem no Descobrir. Desfaça para liberar o perfil outra vez.
               </p>
-              {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma interação registrada ainda.</p>}
-              <div className="grid gap-2">
-                {interactions.map((interaction) => (
-                  <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
-                    <img alt="" className="h-12 w-12 rounded-lg object-cover" src={interaction.profile.photoURL} />
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate text-sm font-semibold">{interaction.profile.displayName}</h3>
-                      <p className="mt-1 flex items-center gap-1 text-xs text-slate-300">
-                        {interaction.type === 'like' ? (
-                          <>
-                            <Heart className="h-3.5 w-3.5 text-[#ff3f68]" />
-                            Curtido
-                          </>
-                        ) : (
-                          <>
-                            <X className="h-3.5 w-3.5 text-rose-200" />
-                            Recusado
-                          </>
-                        )}
-                      </p>
-                    </div>
-                    <button
-                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
-                      onClick={() => handleUndoInteraction(interaction.profile.uid)}
-                      type="button"
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Desfazer
-                    </button>
-                  </article>
-                ))}
-              </div>
+              {!interactionsUnlocked ? (
+                <div className="rounded-lg border border-white/10 bg-slate-950/60 p-4">
+                  <p className="text-sm text-slate-300">Usuários grátis podem ver as interações após assistir a um anúncio.</p>
+                  <button
+                    className="mt-3 h-11 w-full rounded-lg bg-teal-300 text-sm font-semibold text-slate-950"
+                    onClick={openInteractionsWithAd}
+                    type="button"
+                  >
+                    Ver anúncio
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {!profile.isPremium && interactionUnlockMinutes > 0 && (
+                    <p className="mb-3 rounded-lg bg-teal-300/10 p-2 text-xs text-teal-100">Interações liberadas por {interactionUnlockMinutes} min.</p>
+                  )}
+                  {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma interação registrada ainda.</p>}
+                  <div className="grid gap-2">
+                    {interactions.map((interaction) => (
+                      <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
+                        <img alt="" className="h-12 w-12 rounded-lg object-cover" src={interaction.profile.photoURL} />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="truncate text-sm font-semibold">{interaction.profile.displayName}</h3>
+                          <p className="mt-1 flex items-center gap-1 text-xs text-slate-300">
+                            {interaction.type === 'like' ? (
+                              <>
+                                <Heart className="h-3.5 w-3.5 text-[#ff3f68]" />
+                                Curtido
+                              </>
+                            ) : (
+                              <>
+                                <X className="h-3.5 w-3.5 text-rose-200" />
+                                Recusado
+                              </>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
+                          onClick={() => handleUndoInteraction(interaction.profile.uid)}
+                          type="button"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          Desfazer
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
               {interactionsMessage && <p className="mt-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{interactionsMessage}</p>}
             </section>
           </div>
         )}
 
-        {activeSection === 'premium' && <PremiumScreen profile={draft} />}
+        {activeSection === 'premium' && (
+          <PremiumScreen
+            profile={draft}
+            onPremiumActivated={() => {
+              setDraft((current) => ({ ...current, isPremium: true }));
+              latestDraftRef.current = { ...latestDraftRef.current, isPremium: true };
+            }}
+          />
+        )}
 
         {activeSection === 'safety' && (
           <div className="space-y-4">
@@ -955,14 +1086,91 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
             </section>
 
             {appModeratorRole && (
-              <section className="rounded-lg border border-amber-300/30 bg-slate-950/60 p-4">
-                <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-amber-100">
+              <section className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4">
+                <button
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-amber-300 px-4 text-sm font-semibold text-slate-950"
+                  onClick={() => {
+                    setModerationTab('reports');
+                    setModerationOpen(true);
+                  }}
+                  type="button"
+                >
                   <Shield className="h-4 w-4" />
                   Moderação do app
+                </button>
+              </section>
+            )}
+
+            {appModeratorRole && moderationOpen && (
+              <div className="fixed inset-0 z-[1700] grid place-items-center bg-black/70 p-3 backdrop-blur-sm">
+              <section className="max-h-[92dvh] w-full max-w-3xl overflow-auto rounded-lg border border-amber-300/30 bg-[#0b1724] p-4 text-white shadow-2xl">
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-amber-100">
+                    <Shield className="h-4 w-4" />
+                    Moderação do app
+                  </div>
+                  <button
+                    aria-label="Fechar moderação"
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8 text-slate-100"
+                    onClick={() => setModerationOpen(false)}
+                    type="button"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
                 <p className="mb-3 text-sm text-amber-50/80">
                   Você está como {appModeratorRole === 'admin' ? 'administrador' : 'moderador'}. Use banimento apenas para contas com violação clara das regras.
                 </p>
+                {safetyMessage && <p className="mb-3 rounded-lg bg-white/8 p-3 text-sm text-slate-100">{safetyMessage}</p>}
+                <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg bg-slate-950/50 p-1 text-xs">
+                  <button
+                    className={`h-10 rounded-md font-semibold ${moderationTab === 'reports' ? 'bg-[#ff3f68] text-white' : 'text-slate-200'}`}
+                    onClick={() => setModerationTab('reports')}
+                    type="button"
+                  >
+                    Denúncias
+                  </button>
+                  <button
+                    className={`h-10 rounded-md font-semibold ${moderationTab === 'bans' ? 'bg-[#ff3f68] text-white' : 'text-slate-200'}`}
+                    onClick={() => setModerationTab('bans')}
+                    type="button"
+                  >
+                    Banidos
+                  </button>
+                </div>
+                {moderationTab === 'reports' && (
+                <>
+                <div className="mb-4 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  {[
+                    { label: 'Denúncias 24h', value: moderationDashboard.loading ? '...' : moderationDashboard.dashboard.reports24h },
+                    { label: 'Spam bloqueado', value: moderationDashboard.loading ? '...' : moderationDashboard.dashboard.spamEvents24h },
+                    { label: 'Banidos', value: moderationDashboard.loading ? '...' : moderationDashboard.dashboard.activeBans },
+                    { label: 'Push com falha', value: moderationDashboard.loading ? '...' : moderationDashboard.dashboard.pushFailures24h },
+                  ].map((item) => (
+                    <article className="rounded-lg border border-white/10 bg-[#07111f] p-3" key={item.label}>
+                      <p className="text-slate-400">{item.label}</p>
+                      <p className="mt-1 text-lg font-semibold text-white">{item.value}</p>
+                    </article>
+                  ))}
+                </div>
+                {moderationDashboard.dashboard.repeatedReportedUsers.length > 0 && (
+                  <div className="mb-4 rounded-lg border border-rose-300/20 bg-rose-300/10 p-3">
+                    <p className="mb-2 text-xs font-semibold text-rose-100">Usuários reincidentes em denúncias nas últimas 24h</p>
+                    <div className="grid gap-1">
+                      {moderationDashboard.dashboard.repeatedReportedUsers.map((item) => (
+                        <button
+                          className="flex items-center justify-between gap-3 rounded-lg bg-slate-950/50 px-3 py-2 text-left text-xs text-slate-100"
+                          key={item.uid}
+                          onClick={() => setBanUserUid(item.uid)}
+                          type="button"
+                        >
+                          <span className="truncate font-mono">{item.uid}</span>
+                          <span className="rounded-full bg-rose-400 px-2 py-1 text-white">{item.count} denúncias</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="mb-4 overflow-hidden rounded-xl border border-white/10 bg-[#07111f]">
                   <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
                     <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
@@ -1093,7 +1301,51 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     Banir usuário do app
                   </button>
                 </div>
+                </>
+                )}
+                {moderationTab === 'bans' && (
+                  <div className="grid gap-3">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#07111f] p-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">Usuários banidos</p>
+                        <p className="text-xs text-slate-400">Veja contas removidas do app e libere quando necessário.</p>
+                      </div>
+                      <span className="rounded-full bg-white/8 px-2 py-1 text-xs text-slate-300">
+                        {appBannedUsers.loading ? 'Carregando' : `${appBannedUsers.bannedUsers.length} banidos`}
+                      </span>
+                    </div>
+                    {!appBannedUsers.loading && appBannedUsers.bannedUsers.length === 0 && (
+                      <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhum usuário banido no app.</p>
+                    )}
+                    {appBannedUsers.bannedUsers.map((bannedUser) => (
+                      <article className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#07111f] p-3" key={bannedUser.uid}>
+                        {bannedUser.photoURL ? (
+                          <img alt="" className="h-11 w-11 rounded-full object-cover" src={bannedUser.photoURL} />
+                        ) : (
+                          <div className="grid h-11 w-11 place-items-center rounded-full bg-rose-300 text-sm font-bold text-slate-950">
+                            {bannedUser.displayName.slice(0, 1).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-white">{bannedUser.displayName}</p>
+                          <p className="truncate text-xs text-slate-400">
+                            UID: <span className="font-mono">{bannedUser.uid}</span>
+                          </p>
+                          <p className="truncate text-xs text-rose-100">{bannedUser.reason}</p>
+                        </div>
+                        <button
+                          className="h-10 shrink-0 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-100"
+                          onClick={() => handleUnbanAppUser(bannedUser.uid)}
+                          type="button"
+                        >
+                          Desbanir
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
+              </div>
             )}
 
             <section className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4">
@@ -1136,6 +1388,22 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               )}
               {termsOpen && <TermsAndPrivacyContent />}
             </section>
+
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <Star className="h-4 w-4 text-teal-300" />
+                {t('rateAppTitle')}
+              </div>
+              <p className="mb-4 text-sm text-slate-300">{t('rateAppHelp')}</p>
+              <button
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+                onClick={openAppRating}
+                type="button"
+              >
+                <Star className="h-4 w-4" />
+                {t('rateAppButton')}
+              </button>
+            </section>
           </div>
         )}
       </div>
@@ -1166,7 +1434,7 @@ function PreferenceSummary({ draft }: { draft: UserProfile }) {
   return (
     <div className="mb-4 grid gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
       <div className="flex flex-wrap gap-2">
-        <SummaryPill label="Identidade" value={identities || formatGender(draft.gender)} />
+        <SummaryPill label="Eu sou" value={identities || formatGender(draft.gender)} />
         <SummaryPill label="Quero ver" value={visibleTo} />
         <SummaryPill label="Interesses" value={interestSummary} />
         <SummaryPill label="Objetivo" value={goalSummary} />

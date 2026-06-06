@@ -1,11 +1,12 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Eye, ImagePlus, LogOut, MapPin, Megaphone, MoreVertical, Send, Shield, Trash2, Users, X } from 'lucide-react';
+import { Camera, Eye, ImagePlus, LogOut, MapPin, Megaphone, MoreVertical, Send, Shield, Trash2, UserMinus, Users, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
   deleteMapEvent,
   deleteMapEventMessage,
   editMapEventMessage,
+  hashMapEventPassword,
   leaveMapEvent,
   markMapEventMessageImageViewed,
   reportMapEvent,
@@ -13,6 +14,7 @@ import {
   sendMapEventMessage,
   setMapEventModerator,
   unbanMapEventUser,
+  updateMapEventPassword,
   useMapEventBans,
   useMapEventJoinRequests,
   useMapEventMessages,
@@ -37,6 +39,23 @@ type Props = {
 };
 
 type ManagementView = 'people' | 'moderators' | 'banned' | 'requests' | null;
+type AppDialog =
+  | {
+      confirmLabel?: string;
+      destructive?: boolean;
+      message: string;
+      onConfirm: () => void | Promise<void>;
+      title: string;
+      type: 'confirm';
+    }
+  | {
+      confirmLabel?: string;
+      initialValue: string;
+      message?: string;
+      onConfirm: (value: string) => void | Promise<void>;
+      title: string;
+      type: 'prompt';
+    };
 
 function ProfileAvatar({ profile }: { profile: UserProfile }) {
   return profile.photoURL ? (
@@ -44,6 +63,63 @@ function ProfileAvatar({ profile }: { profile: UserProfile }) {
   ) : (
     <div className="grid h-12 w-12 place-items-center rounded-lg bg-teal-300 text-sm font-bold text-slate-950">
       {profile.displayName.slice(0, 1).toUpperCase()}
+    </div>
+  );
+}
+
+function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () => void }) {
+  const [value, setValue] = useState(dialog.type === 'prompt' ? dialog.initialValue : '');
+  const [busy, setBusy] = useState(false);
+
+  async function handleConfirm() {
+    const nextValue = value.trim();
+    if (dialog.type === 'prompt' && !nextValue) return;
+    setBusy(true);
+    try {
+      if (dialog.type === 'prompt') await dialog.onConfirm(nextValue);
+      else await dialog.onConfirm();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[1700] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">{dialog.title}</h2>
+            {dialog.message && <p className="mt-1 text-sm text-slate-300">{dialog.message}</p>}
+          </div>
+          <button aria-label="Fechar" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8" onClick={onClose} type="button">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        {dialog.type === 'prompt' && (
+          <textarea
+            autoFocus
+            className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm outline-none"
+            onChange={(inputEvent) => setValue(inputEvent.target.value)}
+            value={value}
+          />
+        )}
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100" disabled={busy} onClick={onClose} type="button">
+            Cancelar
+          </button>
+          <button
+            className={`h-11 rounded-lg text-sm font-semibold disabled:cursor-wait disabled:opacity-60 ${
+              dialog.type === 'confirm' && dialog.destructive ? 'bg-rose-400 text-white' : 'bg-teal-300 text-slate-950'
+            }`}
+            disabled={busy}
+            onClick={handleConfirm}
+            type="button"
+          >
+            {busy ? 'Processando...' : dialog.confirmLabel ?? 'Confirmar'}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -60,6 +136,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [handledJoinRequestIds, setHandledJoinRequestIds] = useState<Set<string>>(new Set());
   const [optimisticMessages, setOptimisticMessages] = useState<typeof messages>([]);
   const [text, setText] = useState('');
+  const [sendingText, setSendingText] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
@@ -69,10 +146,15 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [managementView, setManagementView] = useState<ManagementView>(null);
   const [actionProfile, setActionProfile] = useState<UserProfile | null>(null);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
+  const [reportProfile, setReportProfile] = useState<UserProfile | null>(null);
+  const [reportingProfile, setReportingProfile] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const [gpsOpen, setGpsOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [requestActionUid, setRequestActionUid] = useState('');
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
@@ -100,6 +182,12 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }, [event.id]);
 
   useEffect(() => {
+    if (!error) return undefined;
+    const timer = window.setTimeout(() => setError(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  useEffect(() => {
     const handleBack = (backEvent: Event) => {
       if (uploadingImage || pendingImageURL) {
         backEvent.preventDefault();
@@ -116,6 +204,24 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
       if (reportOpen) {
         backEvent.preventDefault();
         setReportOpen(false);
+        return;
+      }
+
+      if (reportProfile) {
+        backEvent.preventDefault();
+        setReportProfile(null);
+        return;
+      }
+
+      if (dialog) {
+        backEvent.preventDefault();
+        setDialog(null);
+        return;
+      }
+
+      if (headerMenuOpen) {
+        backEvent.preventDefault();
+        setHeaderMenuOpen(false);
         return;
       }
 
@@ -148,7 +254,23 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     return () => {
       window.removeEventListener('raddo:android-back', handleBack, { capture: true });
     };
-  }, [actionProfile, gpsOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, uploadingImage]);
+  }, [actionProfile, dialog, gpsOpen, headerMenuOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, reportProfile, uploadingImage]);
+
+  useEffect(() => {
+    if (!headerMenuOpen) return undefined;
+
+    const closeMenuOnOutsideClick = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && headerMenuRef.current?.contains(target)) return;
+      setHeaderMenuOpen(false);
+    };
+
+    window.addEventListener('pointerdown', closeMenuOnOutsideClick, { capture: true });
+
+    return () => {
+      window.removeEventListener('pointerdown', closeMenuOnOutsideClick, { capture: true });
+    };
+  }, [headerMenuOpen]);
 
   useEffect(() => {
     const area = messageAreaRef.current;
@@ -166,14 +288,17 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
 
   async function handleSubmit(submitEvent: FormEvent) {
     submitEvent.preventDefault();
+    const cleanText = text.trim();
+    if (sendingText || !cleanText) return;
     setError('');
+    setSendingText(true);
 
     try {
       await sendMapEventMessage({
         eventId: event.id,
         senderUid: me.uid,
         senderName: me.displayName,
-        text,
+        text: cleanText,
       });
       shouldStickToBottomRef.current = true;
       setOptimisticMessages((current) => [
@@ -183,7 +308,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           eventId: event.id,
           senderUid: me.uid,
           senderName: me.displayName,
-          text: text.trim(),
+          text: cleanText,
           messageType: 'text',
           imageURL: '',
           imagePath: '',
@@ -195,6 +320,8 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
       setText('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+    } finally {
+      setSendingText(false);
     }
   }
 
@@ -278,23 +405,41 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }
 
   async function handleReport() {
-    const confirmed = window.confirm('Denunciar este chat para revisão?');
-    if (!confirmed) return;
-
-    try {
-      await reportMapEvent(event, me.uid, reportReason);
-      setError('Denúncia enviada para revisão.');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui denunciar o chat.');
-    }
+    setDialog({
+      confirmLabel: 'Denunciar',
+      message: 'Enviar este chat para análise da moderação?',
+      onConfirm: async () => {
+        try {
+          await reportMapEvent(event, me.uid, reportReason);
+          setReportOpen(false);
+          setError('Denúncia enviada para revisão.');
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui denunciar o chat.');
+        }
+      },
+      title: 'Denunciar chat',
+      type: 'confirm',
+    });
   }
 
-  async function handleReportProfile(profile: UserProfile) {
+  function handleReportProfile(profile: UserProfile) {
+    setReportReason('harassment');
+    setActionProfile(null);
+    setReportProfile(profile);
+  }
+
+  async function confirmReportProfile() {
+    if (!reportProfile || reportingProfile) return;
+    setReportingProfile(true);
+
     try {
-      await reportMapEvent(event, me.uid, 'reported_chat_user', profile.uid);
-      setError(`${profile.displayName} foi denunciado para revisão.`);
+      await reportMapEvent(event, me.uid, reportReason, reportProfile.uid);
+      setError(`${reportProfile.displayName} foi denunciado para revisão.`);
+      setReportProfile(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Não consegui denunciar essa pessoa.');
+    } finally {
+      setReportingProfile(false);
     }
   }
 
@@ -316,16 +461,22 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
 
 
   async function handleDelete() {
-    const confirmed = window.confirm('Excluir este chat do mapa? Todas as mensagens dele serão removidas.');
-    if (!confirmed) return;
-
-    try {
-      await deleteMapEvent(event.id, me.uid);
-      onDeleted?.(event.id);
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui excluir o chat.');
-    }
+    setDialog({
+      confirmLabel: 'Excluir',
+      destructive: true,
+      message: 'Todas as mensagens dele serão removidas.',
+      onConfirm: async () => {
+        try {
+          await deleteMapEvent(event.id, me.uid);
+          onDeleted?.(event.id);
+          onClose();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui excluir o chat.');
+        }
+      },
+      title: 'Excluir este chat?',
+      type: 'confirm',
+    });
   }
 
   async function handleApprove(profile: UserProfile) {
@@ -355,43 +506,96 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }
 
   async function handleModerator(profile: UserProfile, enabled: boolean) {
-    const confirmed = window.confirm(
-      enabled
-        ? `Tornar ${profile.displayName} moderador deste chat?`
-        : `Remover ${profile.displayName} da moderação deste chat?`,
-    );
-    if (!confirmed) return;
-
-    try {
-      await setMapEventModerator(event.id, profile.uid, enabled);
-      setError(enabled ? `${profile.displayName} agora é moderador.` : `${profile.displayName} não é mais moderador.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui atualizar moderador.');
-    }
+    setDialog({
+      confirmLabel: enabled ? 'Tornar moderador' : 'Remover',
+      message: enabled
+        ? `${profile.displayName} poderá aprovar pedidos e moderar pessoas neste chat.`
+        : `${profile.displayName} deixará de moderar este chat.`,
+      onConfirm: async () => {
+        try {
+          await setMapEventModerator(event.id, profile.uid, enabled);
+          setError(enabled ? `${profile.displayName} agora é moderador.` : `${profile.displayName} não é mais moderador.`);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui atualizar moderador.');
+        }
+      },
+      title: enabled ? 'Tornar moderador?' : 'Remover moderação?',
+      type: 'confirm',
+    });
   }
 
   async function handleBan(profile: UserProfile) {
-    const confirmed = window.confirm(`Banir ${profile.displayName} deste chat?`);
-    if (!confirmed) return;
-
-    try {
-      await banMapEventUser(event.id, profile.uid, me.uid);
-      setError(`${profile.displayName} foi banido.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui banir a pessoa.');
-    }
+    setDialog({
+      confirmLabel: 'Banir',
+      destructive: true,
+      message: `${profile.displayName} será removido e não poderá entrar novamente neste chat.`,
+      onConfirm: async () => {
+        try {
+          await banMapEventUser(event.id, profile.uid, me.uid);
+          setActionProfile(null);
+          setError(`${profile.displayName} foi banido.`);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui banir a pessoa.');
+        }
+      },
+      title: 'Banir pessoa?',
+      type: 'confirm',
+    });
   }
 
   async function handleUnban(profile: UserProfile) {
-    const confirmed = window.confirm(`Desbanir ${profile.displayName} deste chat?`);
-    if (!confirmed) return;
+    setDialog({
+      confirmLabel: 'Desbanir',
+      message: `${profile.displayName} poderá pedir entrada ou entrar novamente, conforme as regras do chat.`,
+      onConfirm: async () => {
+        try {
+          await unbanMapEventUser(event.id, profile.uid);
+          setError(`${profile.displayName} foi desbanido.`);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui desbanir a pessoa.');
+        }
+      },
+      title: 'Desbanir pessoa?',
+      type: 'confirm',
+    });
+  }
 
-    try {
-      await unbanMapEventUser(event.id, profile.uid);
-      setError(`${profile.displayName} foi desbanido.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui desbanir a pessoa.');
-    }
+  async function handleKick(profile: UserProfile) {
+    setDialog({
+      confirmLabel: 'Expulsar',
+      destructive: true,
+      message: `${profile.displayName} será removido do chat, mas poderá entrar novamente depois.`,
+      onConfirm: async () => {
+        try {
+          await leaveMapEvent(event.id, profile.uid);
+          setActionProfile(null);
+          setError(`${profile.displayName} foi expulso do chat.`);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui expulsar a pessoa.');
+        }
+      },
+      title: 'Expulsar do chat?',
+      type: 'confirm',
+    });
+  }
+
+  function handleChangePassword() {
+    setDialog({
+      confirmLabel: 'Salvar senha',
+      initialValue: '',
+      message: 'Defina a nova senha deste chat.',
+      onConfirm: async (nextPassword) => {
+        try {
+          const passwordHash = await hashMapEventPassword(nextPassword);
+          await updateMapEventPassword(event.id, passwordHash);
+          setError('Senha do chat atualizada.');
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui trocar a senha.');
+        }
+      },
+      title: 'Trocar senha',
+      type: 'prompt',
+    });
   }
 
   function profileRole(profile: UserProfile) {
@@ -402,26 +606,38 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
 
   async function handleEditMessage(message: (typeof allMessages)[number]) {
     setOpenMessageMenuId('');
-    const nextText = window.prompt('Editar mensagem', message.text);
-    if (!nextText || nextText.trim() === message.text.trim()) return;
-
-    try {
-      await editMapEventMessage(message, me.uid, nextText);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui editar a mensagem.');
-    }
+    setDialog({
+      confirmLabel: 'Salvar',
+      initialValue: message.text,
+      onConfirm: async (nextText) => {
+        if (nextText.trim() === message.text.trim()) return;
+        try {
+          await editMapEventMessage(message, me.uid, nextText);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui editar a mensagem.');
+        }
+      },
+      title: 'Editar mensagem',
+      type: 'prompt',
+    });
   }
 
   async function handleDeleteMessage(message: (typeof allMessages)[number]) {
     setOpenMessageMenuId('');
-    const confirmed = window.confirm('Excluir esta mensagem?');
-    if (!confirmed) return;
-
-    try {
-      await deleteMapEventMessage(message, me.uid, canManage);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui excluir a mensagem.');
-    }
+    setDialog({
+      confirmLabel: 'Excluir',
+      destructive: true,
+      message: 'Esta mensagem será removida do chat.',
+      onConfirm: async () => {
+        try {
+          await deleteMapEventMessage(message, me.uid, canManage);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui excluir a mensagem.');
+        }
+      },
+      title: 'Excluir mensagem?',
+      type: 'confirm',
+    });
   }
 
   return (
@@ -450,43 +666,80 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
               </p>
             )}
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="relative flex shrink-0 gap-2" ref={headerMenuRef}>
             <button
-              aria-label="Abrir localização no GPS"
+              aria-label="Opções do chat"
               className="grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
-              onClick={() => setGpsOpen(true)}
+              onClick={() => setHeaderMenuOpen((current) => !current)}
               type="button"
             >
-              <MapPin className="h-5 w-5" />
+              <MoreVertical className="h-5 w-5" />
             </button>
-            {!isOwner && (
-              <button
-                aria-label="Denunciar chat"
-                className="grid h-10 w-10 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
-                onClick={() => setReportOpen(true)}
-                type="button"
-              >
-                <Megaphone className="h-5 w-5" />
-              </button>
+            {headerMenuOpen && (
+              <div className="absolute right-12 top-0 z-10 w-56 overflow-hidden rounded-xl border border-white/10 bg-[#07111f] p-1 text-sm text-white shadow-2xl">
+                <button
+                  className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    setGpsOpen(true);
+                  }}
+                  type="button"
+                >
+                  <MapPin className="h-4 w-4 text-teal-300" />
+                  Abrir localização
+                </button>
+                {!isOwner && (
+                  <button
+                    className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
+                      setReportOpen(true);
+                    }}
+                    type="button"
+                  >
+                    <Megaphone className="h-4 w-4 text-amber-300" />
+                    Denunciar chat
+                  </button>
+                )}
+                {canManage && (
+                  <button
+                    className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
+                      handleChangePassword();
+                    }}
+                    type="button"
+                  >
+                    <Shield className="h-4 w-4 text-teal-300" />
+                    Trocar senha
+                  </button>
+                )}
+                {isOwner && (
+                  <button
+                    className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold text-rose-100 hover:bg-rose-400/10"
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
+                      handleDelete();
+                    }}
+                    type="button"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Excluir chat
+                  </button>
+                )}
+                <button
+                  className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold text-rose-100 hover:bg-rose-400/10"
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    handleLeave();
+                  }}
+                  type="button"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sair do chat
+                </button>
+              </div>
             )}
-            {isOwner && (
-              <button
-                aria-label="Excluir chat"
-                className="grid h-10 w-10 place-items-center rounded-lg bg-rose-400/20 text-rose-100"
-                onClick={handleDelete}
-                type="button"
-              >
-                <Trash2 className="h-5 w-5" />
-              </button>
-            )}
-            <button
-              aria-label="Sair do chat"
-              className="grid h-10 w-10 place-items-center rounded-lg bg-rose-400/20 text-rose-100"
-              onClick={handleLeave}
-              type="button"
-            >
-              <LogOut className="h-5 w-5" />
-            </button>
             <button
               aria-label="Fechar"
               className="grid h-10 w-10 place-items-center rounded-lg bg-white/8"
@@ -526,6 +779,61 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
               Enviar denúncia
             </button>
           </section>
+        )}
+        {reportProfile && (
+          <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+            <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold">Denunciar usuário</h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    Escolha o motivo para denunciar {reportProfile.displayName}. As últimas 10 mensagens dessa pessoa neste chat serão enviadas para análise.
+                  </p>
+                </div>
+                <button
+                  aria-label="Fechar"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8"
+                  onClick={() => setReportProfile(null)}
+                  type="button"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {reportReasons.map((reason) => (
+                  <button
+                    className={`min-h-10 rounded-lg border px-2 text-xs font-semibold ${
+                      reportReason === reason.value
+                        ? 'border-teal-300 bg-teal-300 text-slate-950'
+                        : 'border-white/10 bg-white/8 text-slate-100'
+                    }`}
+                    key={reason.value}
+                    onClick={() => setReportReason(reason.value)}
+                    type="button"
+                  >
+                    {reason.label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                  onClick={() => setReportProfile(null)}
+                  type="button"
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="h-11 rounded-lg bg-rose-400 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60"
+                  disabled={reportingProfile}
+                  onClick={confirmReportProfile}
+                  type="button"
+                >
+                  {reportingProfile ? 'Enviando...' : 'Confirmar denúncia'}
+                </button>
+              </div>
+            </section>
+          </div>
         )}
 
         <section className="border-b border-white/10 p-3">
@@ -581,6 +889,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
             const downloadFilename = message.imagePath.split('/').pop() || `raddo-imagem-${message.id}.jpg`;
+            const senderProfile = message.senderUid === me.uid ? me : participants.find((profile) => profile.uid === message.senderUid);
             return (
               <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`} key={message.id}>
                 <div className={`relative max-w-[82%] rounded-lg px-3 py-2 text-sm ${mine ? 'bg-teal-300 text-slate-950' : 'bg-slate-900 text-slate-100'}`}>
@@ -598,7 +907,9 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                     onDelete={() => handleDeleteMessage(message)}
                     onEdit={() => handleEditMessage(message)}
                     onFeedback={setError}
+                    onReportProfile={!mine && senderProfile ? () => handleReportProfile(senderProfile) : undefined}
                     onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
+                    onViewProfile={senderProfile ? () => setPreviewProfile(senderProfile) : undefined}
                     open={openMessageMenuId === message.id}
                   />
                   <div className="pr-6">
@@ -813,13 +1124,29 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                     {moderators.includes(actionProfile.uid) ? 'Remover da moderação' : 'Tornar moderador'}
                   </button>
                 )}
+                <button
+                  className="h-11 rounded-lg border border-amber-300/20 bg-amber-300/10 text-sm font-semibold text-amber-100"
+                  onClick={() => handleReportProfile(actionProfile)}
+                  type="button"
+                >
+                  Denunciar usuário
+                </button>
+                {canManage && event.creatorUid !== actionProfile.uid && (
+                  <button
+                    className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                    onClick={() => handleKick(actionProfile)}
+                    type="button"
+                  >
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <UserMinus className="h-4 w-4" />
+                      Expulsar do chat
+                    </span>
+                  </button>
+                )}
                 {canManage && event.creatorUid !== actionProfile.uid && (
                   <button
                     className="h-11 rounded-lg bg-rose-400/20 text-sm font-semibold text-rose-100"
-                    onClick={async () => {
-                      await handleBan(actionProfile);
-                      setActionProfile(null);
-                    }}
+                    onClick={() => handleBan(actionProfile)}
                     type="button"
                   >
                     Banir pessoa
@@ -829,6 +1156,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             </section>
           </div>
         )}
+        {dialog && <AppDialogModal dialog={dialog} onClose={() => setDialog(null)} />}
         {previewProfile && (
           <ProfilePreview
             me={me}
@@ -840,23 +1168,25 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           />
         )}
         <form className="flex gap-2 border-t border-white/10 p-3" onSubmit={handleSubmit}>
-          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100" title="Abrir câmera">
+          <label className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100 ${sendingText ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title="Abrir câmera">
             <Camera className="h-5 w-5" />
-            <input accept="image/*" capture="environment" className="hidden" disabled={uploadingImage} onChange={handleImageUpload} type="file" />
+            <input accept="image/*" capture="environment" className="hidden" disabled={uploadingImage || sendingText} onChange={handleImageUpload} type="file" />
           </label>
-          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100" title="Escolher imagem">
+          <label className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100 ${sendingText ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title="Escolher imagem">
             <ImagePlus className="h-5 w-5" />
-            <input accept="image/*" className="hidden" disabled={uploadingImage} onChange={handleImageUpload} type="file" />
+            <input accept="image/*" className="hidden" disabled={uploadingImage || sendingText} onChange={handleImageUpload} type="file" />
           </label>
           <input
-            className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none"
+            className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none disabled:cursor-wait disabled:opacity-70"
+            disabled={sendingText}
             onChange={(inputEvent) => setText(inputEvent.target.value)}
-            placeholder="Mensagem no evento"
+            placeholder={sendingText ? 'Enviando...' : 'Mensagem no evento'}
             value={text}
           />
           <button
             aria-label="Enviar"
-            className="grid h-11 w-11 place-items-center rounded-lg bg-teal-300 text-slate-950"
+            className="grid h-11 w-11 place-items-center rounded-lg bg-teal-300 text-slate-950 disabled:cursor-wait disabled:opacity-60"
+            disabled={sendingText || !text.trim()}
             type="submit"
           >
             <Send className="h-5 w-5" />

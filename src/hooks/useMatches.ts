@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabase';
 import { demoLikedBy, demoMatches, demoProfiles, isDemoMode } from '../demoData';
 import type { Match, Message, UserProfile } from '../types';
+import { distanceKm } from '../utils/geo';
+import { signedProfilePhotoUrl, withSignedProfilePhotos } from '../storageImages';
 
 type MatchRow = {
   id: string;
@@ -59,6 +61,13 @@ export type ProfileInteraction = {
   createdAt: string;
 };
 
+export type CrossedProfile = {
+  profile: UserProfile;
+  crossedAt: string;
+  lastCrossedAt: string;
+  distanceMeters: number;
+};
+
 function rowToMatch(row: MatchRow): Match {
   return {
     id: row.id,
@@ -82,6 +91,11 @@ function rowToMessage(row: MessageRow): Message {
     viewedBy: row.viewed_by ?? [],
     createdAt: row.created_at,
   };
+}
+
+async function withSignedMessageImage(message: Message) {
+  if (message.messageType !== 'image' || !message.imageURL) return message;
+  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL) };
 }
 
 function rowToProfile(row: ProfileRow): UserProfile {
@@ -248,17 +262,20 @@ export function useMessages(matchId?: string) {
         return;
       }
 
-      if (active) setMessages(((data ?? []) as MessageRow[]).map(rowToMessage));
+      const nextMessages = await Promise.all(((data ?? []) as MessageRow[]).map((row) => withSignedMessageImage(rowToMessage(row))));
+      if (active) setMessages(nextMessages);
     }
 
     loadMessages();
 
     function upsertMessage(row: MessageRow) {
       const nextMessage = rowToMessage(row);
+      withSignedMessageImage(nextMessage).then((signedMessage) => {
       setMessages((current) => {
         const byId = new Map(current.map((message) => [message.id, message]));
-        byId.set(nextMessage.id, nextMessage);
+        byId.set(signedMessage.id, signedMessage);
         return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      });
       });
     }
 
@@ -324,7 +341,9 @@ export function useMatchProfiles(matches: Match[], currentUid: string) {
     async function loadProfiles() {
       const { data } = await supabase.from('profiles').select('*').in('id', otherUids);
       if (!active) return;
-      setProfilesByUid(Object.fromEntries(((data ?? []) as ProfileRow[]).map((row) => [row.id, rowToProfile(row)])));
+      const signedProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      if (!active) return;
+      setProfilesByUid(Object.fromEntries(signedProfiles.map((profile) => [profile.uid, profile])));
     }
 
     loadProfiles();
@@ -597,7 +616,8 @@ export function useBlockedProfiles(uid?: string) {
 
       const { data } = await supabase.from('profiles').select('*').in('id', ids);
       if (!active) return;
-      setProfiles(((data ?? []) as ProfileRow[]).map(rowToProfile));
+      const signedProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      if (active) setProfiles(signedProfiles);
     }
 
     loadBlockedProfiles();
@@ -698,7 +718,8 @@ export function useProfileInteractions(uid?: string) {
       }
 
       const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
-      const profilesById = new Map(((profiles ?? []) as ProfileRow[]).map((row) => [row.id, rowToProfile(row)]));
+      const signedProfiles = await Promise.all(((profiles ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      const profilesById = new Map(signedProfiles.map((profile) => [profile.uid, profile]));
 
       if (!active) return;
 
@@ -843,38 +864,8 @@ export function useLikedBy(me: UserProfile | null) {
       const { data } = await supabase.from('profiles').select('*').in('id', ids);
       if (!active) return;
 
-      setProfiles(
-        (data ?? []).map((row) => ({
-          uid: row.id,
-          displayName: row.display_name,
-          photoURL: row.photo_url,
-          photos: row.photos ?? [row.photo_url],
-          location:
-            typeof row.lat === 'number' && typeof row.lng === 'number'
-              ? { lat: row.lat, lng: row.lng }
-              : null,
-          privacyMode: row.privacy_mode,
-          appearInCards: row.appear_in_cards ?? true,
-          showDistance: row.show_distance ?? true,
-          showOnlineStatus: row.show_online_status ?? true,
-          visibilityRadius: row.visibility_radius,
-          age: row.age ?? 18,
-          gender: row.gender,
-          genderIdentities: row.gender_identities ?? [row.gender],
-          sexualities: row.sexualities ?? [],
-          lookingFor: row.looking_for ?? [],
-          interestedSexualities: row.interested_sexualities ?? [],
-          interests: row.interests ?? [],
-          relationshipGoals: row.relationship_goals ?? [],
-          lastSeen: row.last_seen,
-          bio: row.bio ?? '',
-          isPremium: Boolean(row.is_premium),
-          likesUsedToday: row.likes_used_today ?? 0,
-          likesQuotaDate: row.likes_quota_date,
-          likesBonus: row.likes_bonus ?? 0,
-          likedByUnlockUntil: row.liked_by_unlock_until,
-        })),
-      );
+      const signedProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      if (active) setProfiles(signedProfiles);
     }
 
     loadLikedBy();
@@ -893,6 +884,136 @@ export function useLikedBy(me: UserProfile | null) {
   }, [me]);
 
   return profiles;
+}
+
+export function useCrossedProfiles(me: UserProfile | null, nearbyProfiles: UserProfile[]) {
+  const [crossedProfiles, setCrossedProfiles] = useState<CrossedProfile[]>([]);
+  const savedCrossingsRef = useRef<Set<string>>(new Set());
+  const eligibleCrossedIds = useMemo(() => new Set(nearbyProfiles.map((profile) => profile.uid)), [nearbyProfiles]);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setCrossedProfiles(
+        demoProfiles.slice(0, 3).map((profile, index) => ({
+          profile,
+          crossedAt: new Date(Date.now() - (index + 1) * 12 * 60 * 1000).toISOString(),
+          lastCrossedAt: new Date(Date.now() - (index + 1) * 8 * 60 * 1000).toISOString(),
+          distanceMeters: 180 + index * 20,
+        })),
+      );
+      return undefined;
+    }
+
+    if (!me) {
+      setCrossedProfiles([]);
+      savedCrossingsRef.current.clear();
+      return undefined;
+    }
+
+    let active = true;
+    const currentUid = me.uid;
+
+    async function loadCrossedProfiles() {
+      const crossingRetentionStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: crossings, error } = await supabase
+        .from('profile_crossings')
+        .select('crossed_uid,crossed_at,last_crossed_at,distance_meters')
+        .eq('user_uid', currentUid)
+        .gte('last_crossed_at', crossingRetentionStart)
+        .order('last_crossed_at', { ascending: false })
+        .limit(30);
+
+      if (error) {
+        console.error('Nao consegui carregar pessoas cruzadas', error);
+        if (active) setCrossedProfiles([]);
+        return;
+      }
+
+      const ids = [...new Set((crossings ?? []).map((item) => item.crossed_uid as string))].filter((uid) =>
+        eligibleCrossedIds.has(uid),
+      );
+      if (ids.length === 0) {
+        if (active) setCrossedProfiles([]);
+        return;
+      }
+
+      const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
+      const signedProfiles = await Promise.all(((profiles ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      const profilesById = new Map(signedProfiles.map((profile) => [profile.uid, profile]));
+
+      if (!active) return;
+
+      setCrossedProfiles(
+        ((crossings ?? []) as Array<{ crossed_uid: string; crossed_at: string; last_crossed_at: string; distance_meters: number | null }>)
+          .map((crossing) => {
+            const profile = profilesById.get(crossing.crossed_uid);
+            if (!profile) return null;
+            return {
+              profile,
+              crossedAt: crossing.crossed_at,
+              lastCrossedAt: crossing.last_crossed_at,
+              distanceMeters: crossing.distance_meters ?? 250,
+            };
+          })
+          .filter(Boolean) as CrossedProfile[],
+      );
+    }
+
+    loadCrossedProfiles();
+
+    const channel = supabase
+      .channel(`profile-crossings:${currentUid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profile_crossings', filter: `user_uid=eq.${currentUid}` }, loadCrossedProfiles)
+      .subscribe();
+
+    const refreshTimer = window.setInterval(loadCrossedProfiles, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [eligibleCrossedIds, me]);
+
+  useEffect(() => {
+    if (isDemoMode || !me?.location) return;
+
+    const closeProfiles = nearbyProfiles
+      .filter((profile) => profile.uid !== me.uid && profile.location && eligibleCrossedIds.has(profile.uid))
+      .map((profile) => ({
+        profile,
+        distanceMeters: Math.round(distanceKm(me.location!, profile.location!) * 1000),
+      }))
+      .filter((item) => item.distanceMeters <= 250);
+
+    if (closeProfiles.length === 0) return;
+
+    const now = new Date().toISOString();
+    const existingCrossedIds = new Set(crossedProfiles.map((item) => item.profile.uid));
+    const unsavedCrossings = closeProfiles.filter((item) => {
+      if (existingCrossedIds.has(item.profile.uid) || savedCrossingsRef.current.has(item.profile.uid)) return false;
+      savedCrossingsRef.current.add(item.profile.uid);
+      return true;
+    });
+
+    if (unsavedCrossings.length === 0) return;
+
+    supabase
+      .from('profile_crossings')
+      .insert(
+        unsavedCrossings.map((item) => ({
+          user_uid: me.uid,
+          crossed_uid: item.profile.uid,
+          last_crossed_at: now,
+          distance_meters: item.distanceMeters,
+        })),
+      )
+      .then(({ error }) => {
+        if (error) console.error('Nao consegui salvar pessoas cruzadas', error);
+      });
+  }, [crossedProfiles, eligibleCrossedIds, me, nearbyProfiles]);
+
+  return crossedProfiles;
 }
 
 export async function sendMessage(
