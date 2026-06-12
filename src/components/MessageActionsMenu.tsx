@@ -54,7 +54,7 @@ export default function MessageActionsMenu({
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
-  const buttonColor = mine ? 'bg-transparent text-slate-700 hover:bg-slate-950/10' : 'bg-transparent text-slate-300 hover:bg-white/8';
+  const buttonColor = mine ? 'text-slate-700 hover:text-slate-950' : 'text-slate-300 hover:text-white';
 
   useEffect(() => {
     if (!open || !buttonRef.current) return;
@@ -107,7 +107,7 @@ export default function MessageActionsMenu({
     <div className="absolute right-1 top-1 z-20">
       <button
         aria-label="Opções da mensagem"
-        className={`grid h-6 w-6 place-items-center rounded-full ${buttonColor}`}
+        className={`grid h-6 w-6 place-items-center bg-transparent ${buttonColor}`}
         onClick={(event) => {
           event.stopPropagation();
           onToggle();

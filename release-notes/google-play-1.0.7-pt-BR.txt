@@ -1,0 +1,7 @@
+Raddo 1.0.7
+
+- Abertura mais rápida em conexões móveis usando cache local para perfis, chats, mensagens e mídia já acessada.
+- Upload de imagens mais leve, com compressão antes do envio para reduzir falhas em internet móvel.
+- Melhorias no mapa para reduzir travamentos durante zoom e navegação.
+- Vídeos foram desativados temporariamente em novos envios; eles voltarão em breve.
+- Correções no salvamento de perfil, notificações, stories, chats e moderação de imagens.

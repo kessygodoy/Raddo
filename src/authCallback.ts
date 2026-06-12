@@ -8,16 +8,18 @@ export function getAuthRedirectUrl() {
   return Capacitor.isNativePlatform() ? nativeAuthRedirectUrl : window.location.origin;
 }
 
-async function handleAuthUrl(url: string) {
+export async function processAuthUrl(url: string) {
   const parsed = new URL(url);
   const code = parsed.searchParams.get('code');
   const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  const authType = parsed.searchParams.get('type') ?? hashParams.get('type');
   const accessToken = hashParams.get('access_token') ?? parsed.searchParams.get('access_token');
   const refreshToken = hashParams.get('refresh_token') ?? parsed.searchParams.get('refresh_token');
+  const tokenHash = parsed.searchParams.get('token_hash') ?? hashParams.get('token_hash');
 
   if (code) {
     await supabase.auth.exchangeCodeForSession(code);
-    return;
+    return { isRecovery: authType === 'recovery' };
   }
 
   if (accessToken && refreshToken) {
@@ -25,7 +27,19 @@ async function handleAuthUrl(url: string) {
       access_token: accessToken,
       refresh_token: refreshToken,
     });
+    return { isRecovery: authType === 'recovery' };
   }
+
+  if (tokenHash && authType === 'recovery') {
+    const { error } = await supabase.auth.verifyOtp({
+      token_hash: tokenHash,
+      type: 'recovery',
+    });
+    if (error) throw error;
+    return { isRecovery: true };
+  }
+
+  return { isRecovery: authType === 'recovery' };
 }
 
 export function registerAuthCallbackHandler() {
@@ -35,7 +49,11 @@ export function registerAuthCallbackHandler() {
     if (!url.startsWith(nativeAuthRedirectUrl)) return;
 
     try {
-      await handleAuthUrl(url);
+      const result = await processAuthUrl(url);
+      if (result.isRecovery) {
+        window.localStorage.setItem('raddo:password-recovery-url', url);
+        window.dispatchEvent(new CustomEvent('raddo:password-recovery', { detail: { url } }));
+      }
     } catch (error) {
       console.error('Supabase auth callback failed', error);
     }

@@ -103,8 +103,8 @@ export default function AuthOverlay({ theme }: Props) {
       <div className="absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-white/8 to-transparent" />
       <section className="relative mx-auto grid min-h-[calc(100dvh-2.5rem)] w-full max-w-md content-center gap-5">
         <div className="grid justify-items-center text-center">
-          <RaddoMark className="h-54 w-54 drop-shadow-[0_0_28px_rgba(255,23,68,0.35)]" showTile />
-          <h1 className="mt-6 text-4xl font-semibold tracking-normal">Raddo</h1>
+          <RaddoMark className="h-[min(20.25rem,72vw)] w-[min(20.25rem,72vw)] drop-shadow-[0_0_28px_rgba(255,23,68,0.35)]" showTile />
+          <h1 className="mt-1 text-4xl font-semibold tracking-normal">Raddo</h1>
           <p className="mt-2 max-w-xs text-sm leading-6 text-slate-300">
             {t('authIntro')}
           </p>

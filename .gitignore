@@ -2,6 +2,7 @@ node_modules
 dist
 .env
 .env.local
+release-builds/
 supabase/.edge-secrets*.env
 .DS_Store
 *.log

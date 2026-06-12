@@ -2,6 +2,7 @@ import { Eye, Loader2, Send, X } from 'lucide-react';
 
 type Props = {
   imageURL?: string;
+  mediaType?: 'image' | 'video';
   onCancel: () => void;
   onSend: () => void;
   sending?: boolean;
@@ -13,24 +14,26 @@ type Props = {
 
 export default function PendingChatImageModal({
   imageURL,
+  mediaType = 'image',
   onCancel,
   onSend,
   sending = false,
   setViewOnce,
-  title = 'Enviar imagem',
+  title,
   uploading,
   viewOnce,
 }: Props) {
   const busy = uploading || sending;
+  const resolvedTitle = title ?? (mediaType === 'video' ? 'Enviar vídeo' : 'Enviar imagem');
 
   return (
     <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
       <section className="w-full max-w-sm overflow-hidden rounded-2xl border border-white/10 bg-[#07111f] text-white shadow-2xl">
         <div className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
           <div>
-            <h2 className="text-lg font-semibold">{title}</h2>
+            <h2 className="text-lg font-semibold">{resolvedTitle}</h2>
             <p className="mt-1 text-xs text-slate-300">
-              {uploading ? 'Enviando imagem...' : 'Confira antes de enviar.'}
+              {uploading ? 'Enviando mídia...' : 'Confira antes de enviar.'}
             </p>
           </div>
           <button
@@ -51,7 +54,10 @@ export default function PendingChatImageModal({
               <span className="text-sm">Fazendo upload e verificação...</span>
             </div>
           )}
-          {!uploading && imageURL && (
+          {!uploading && imageURL && mediaType === 'video' && (
+            <video className="max-h-[52dvh] w-full rounded-xl object-contain" controls playsInline src={imageURL} />
+          )}
+          {!uploading && imageURL && mediaType === 'image' && (
             <img alt="" className="max-h-[52dvh] w-full rounded-xl object-contain" src={imageURL} />
           )}
         </div>

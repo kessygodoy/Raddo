@@ -56,6 +56,16 @@ function base64Url(input: ArrayBuffer | string) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+function arrayBufferToBase64(input: ArrayBuffer) {
+  const bytes = new Uint8Array(input);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function pemToArrayBuffer(pem: string) {
   const clean = pem
     .replace(/\\n/g, '\n')
@@ -265,6 +275,15 @@ async function validateImageContext(
   return true;
 }
 
+async function loadImageContentForVision(
+  admin: ReturnType<typeof createClient>,
+  values: { bucket: string; path: string },
+) {
+  const { data, error } = await admin.storage.from(values.bucket).download(values.path);
+  if (error || !data) throw new Error(`Could not download image for moderation: ${error?.message ?? 'empty response'}`);
+  return arrayBufferToBase64(await data.arrayBuffer());
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405);
@@ -301,6 +320,7 @@ Deno.serve(async (req) => {
     if (!validContext) return jsonResponse({ error: 'Invalid image context' }, 403);
 
     const imageUrl = body.imageUrl || admin.storage.from(bucket).getPublicUrl(body.path).data.publicUrl;
+    const imageContent = await loadImageContentForVision(admin, { bucket, path: body.path });
     const recentMessages = await loadRecentMessagesForImage(admin, {
       context: body.context,
       contextId: body.contextId,
@@ -313,7 +333,7 @@ Deno.serve(async (req) => {
         requests: [
           {
             features: [{ type: 'SAFE_SEARCH_DETECTION' }],
-            image: { source: { imageUri: imageUrl } },
+            image: { content: imageContent },
           },
         ],
       }),

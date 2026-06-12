@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Bell, Heart, LogOut, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
@@ -19,6 +19,8 @@ import NotificationsPanel from './components/NotificationsPanel';
 import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
 import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
 import { installAndroidApkUpdate } from './androidUpdater';
+import { processAuthUrl } from './authCallback';
+import { preloadImages, profileCoverUrl } from './imagePreload';
 import {
   defaultNotificationPreferences,
   loadNotificationPreferences,
@@ -32,6 +34,19 @@ const navItems = [
   { id: 'chat', labelKey: 'navChat', icon: Heart },
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
+
+function previousLoginKeys(uid: string, email?: string) {
+  const normalizedEmail = email?.trim().toLowerCase();
+  return [`raddo-known-login-uid:${uid}`, normalizedEmail ? `raddo-known-login-email:${normalizedEmail}` : ''].filter(Boolean);
+}
+
+function authDatesIndicatePreviousLogin(createdAt?: string, lastSignInAt?: string) {
+  if (!createdAt || !lastSignInAt) return false;
+  const createdTime = Date.parse(createdAt);
+  const lastSignInTime = Date.parse(lastSignInAt);
+  if (!Number.isFinite(createdTime) || !Number.isFinite(lastSignInTime)) return false;
+  return lastSignInTime - createdTime > 5 * 60 * 1000;
+}
 
 export default function App() {
   const [view, setView] = useState<AppView>('radar');
@@ -49,9 +64,17 @@ export default function App() {
   const [updateInstallMessage, setUpdateInstallMessage] = useState('');
   const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
+  const [accountLoggedBefore, setAccountLoggedBefore] = useState(false);
+  const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordRecoveryBusy, setPasswordRecoveryBusy] = useState(false);
+  const [passwordRecoveryMessage, setPasswordRecoveryMessage] = useState('');
+  const [passwordRecoveryError, setPasswordRecoveryError] = useState('');
+  const [passwordRecoveryUrl, setPasswordRecoveryUrl] = useState('');
   const [theme, setTheme] = useState<AppTheme>(() => {
     const savedTheme = window.localStorage.getItem('radar-match-theme');
-    return savedTheme === 'light' || savedTheme === 'pride' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
+    return savedTheme === 'light' || savedTheme === 'green' || savedTheme === 'pride' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
   });
   const [systemTheme, setSystemTheme] = useState<ResolvedAppTheme>(() =>
     window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
@@ -66,6 +89,13 @@ export default function App() {
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator) || !window.location.protocol.startsWith('http')) return;
+    navigator.serviceWorker.register('/raddo-sw.js').catch((error) => {
+      console.warn('Nao consegui registrar cache offline do Raddo.', error);
+    });
+  }, []);
 
   function navigateTo(nextView: AppView) {
     setHeaderMenuOpen(false);
@@ -126,8 +156,25 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
+    if (!user) {
+      setAccountLoggedBefore(false);
+      return;
+    }
+
+    const keys = previousLoginKeys(user.id, user.email);
+    const hasLocalLogin = keys.some((key) => window.localStorage.getItem(key) === 'yes');
+    const hasAuthHistory = authDatesIndicatePreviousLogin(user.created_at, user.last_sign_in_at);
+    setAccountLoggedBefore(hasLocalLogin || hasAuthHistory);
+    keys.forEach((key) => window.localStorage.setItem(key, 'yes'));
+  }, [user]);
+
+  useEffect(() => {
     hideAdMobBanner();
   }, []);
+
+  useEffect(() => {
+    preloadImages(nearbyProfiles.slice(0, 30).map(profileCoverUrl));
+  }, [nearbyProfiles]);
 
   useEffect(() => {
     if (!profile) {
@@ -178,6 +225,103 @@ export default function App() {
       }
     });
   }, [profile]);
+
+  useEffect(() => {
+    const openRecovery = (url = '') => {
+      setPasswordRecoveryOpen(true);
+      if (url) {
+        setPasswordRecoveryUrl(url);
+        window.localStorage.setItem('raddo:password-recovery-url', url);
+      } else {
+        setPasswordRecoveryUrl(window.localStorage.getItem('raddo:password-recovery-url') ?? '');
+      }
+      setPasswordRecoveryMessage('');
+      setPasswordRecoveryError('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+    };
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    if (urlParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery') {
+      const recoveryUrl = window.location.href;
+      window.localStorage.setItem('raddo:password-recovery-url', recoveryUrl);
+      void processAuthUrl(recoveryUrl).catch((error) => {
+        setPasswordRecoveryError(error instanceof Error ? error.message : 'Link de recuperação inválido.');
+      });
+      openRecovery(recoveryUrl);
+      window.history.replaceState(null, document.title, window.location.pathname);
+    }
+
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') openRecovery();
+    });
+    const handleNativeRecovery = (event: Event) => {
+      const url = (event as CustomEvent<{ url?: string }>).detail?.url ?? '';
+      openRecovery(url);
+    };
+    window.addEventListener('raddo:password-recovery', handleNativeRecovery);
+
+    return () => {
+      data.subscription.unsubscribe();
+      window.removeEventListener('raddo:password-recovery', handleNativeRecovery);
+    };
+  }, []);
+
+  async function handlePasswordRecoverySubmit(event: FormEvent) {
+    event.preventDefault();
+    setPasswordRecoveryError('');
+    setPasswordRecoveryMessage('');
+
+    if (newPassword.length < 6) {
+      setPasswordRecoveryError('A nova senha precisa ter pelo menos 6 caracteres.');
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      setPasswordRecoveryError('As senhas não conferem.');
+      return;
+    }
+
+    setPasswordRecoveryBusy(true);
+    try {
+      let { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData.session) {
+        const recoveryUrl = passwordRecoveryUrl || window.localStorage.getItem('raddo:password-recovery-url') || '';
+        if (recoveryUrl) {
+          await processAuthUrl(recoveryUrl);
+          sessionData = (await supabase.auth.getSession()).data;
+        }
+      }
+
+      if (!sessionData.session) {
+        setPasswordRecoveryError('O link de recuperação expirou ou não abriu corretamente. Peça um novo link em "Esqueci minha senha".');
+        return;
+      }
+
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setPasswordRecoveryError(
+          error.message.toLowerCase().includes('auth session missing')
+            ? 'O link de recuperação expirou ou não abriu corretamente. Peça um novo link em "Esqueci minha senha".'
+            : error.message,
+        );
+        return;
+      }
+    } catch (error) {
+      setPasswordRecoveryError(error instanceof Error ? error.message : 'Não consegui validar o link de recuperação.');
+      return;
+    } finally {
+      setPasswordRecoveryBusy(false);
+    }
+
+    setPasswordRecoveryMessage('Senha atualizada. Você já pode entrar com e-mail e senha.');
+    window.localStorage.removeItem('raddo:password-recovery-url');
+    setPasswordRecoveryUrl('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    window.setTimeout(() => setPasswordRecoveryOpen(false), 1400);
+  }
 
   async function requestNotifications() {
     if (!profile) return;
@@ -415,6 +559,7 @@ export default function App() {
   } else {
     const needsOnboarding =
       !onboardingDone &&
+      !accountLoggedBefore &&
       window.localStorage.getItem(`raddo-onboarding:${profile.uid}`) !== 'done' &&
       (!profile.bio || profile.sexualities.length === 0 || profile.lookingFor.length === 0);
 
@@ -483,11 +628,11 @@ export default function App() {
           <header
             className={
               view === 'radar'
-                ? 'absolute inset-x-0 top-0 z-[650] flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6'
+                ? 'pointer-events-none absolute inset-x-0 top-0 z-[720] flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6'
                 : 'flex items-center justify-between px-4 pb-3 pt-[calc(env(safe-area-inset-top)+16px)] sm:px-6'
             }
           >
-            <div className="flex min-w-0 items-center gap-2">
+            <div className="pointer-events-auto flex min-w-0 items-center gap-2">
               <button
                 className="raddo-top-pill flex min-h-[3.25rem] items-center gap-2 rounded-2xl border border-white/10 bg-white/8 px-3 py-2 text-left"
                 onClick={() => openRadarPanel('people')}
@@ -500,7 +645,7 @@ export default function App() {
                 </span>
               </button>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="pointer-events-auto flex items-center gap-2">
               <button
                 aria-label={t('notificationsPage')}
                 className={`raddo-header-icon relative grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200 ${
@@ -577,6 +722,7 @@ export default function App() {
           >
             {view === 'radar' && (
               <RadarMap
+                matches={matches}
                 me={profile}
                 profiles={nearbyProfiles}
                 theme={resolvedTheme}
@@ -630,5 +776,62 @@ export default function App() {
     );
   }
 
-  return <I18nProvider value={{ language, setLanguage, t }}>{content}</I18nProvider>;
+  return (
+    <I18nProvider value={{ language, setLanguage, t }}>
+      {content}
+      {passwordRecoveryOpen && (
+        <div className="fixed inset-0 z-[2000] grid place-items-center bg-black/70 p-4 backdrop-blur-sm sm:p-6">
+          <form
+            className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl"
+            onSubmit={handlePasswordRecoverySubmit}
+          >
+            <h1 className="text-xl font-semibold">Criar nova senha</h1>
+            <p className="mt-2 text-sm text-slate-300">Digite uma nova senha para usar login por e-mail no Raddo.</p>
+            <label className="mt-4 grid gap-1 text-xs font-semibold text-slate-300">
+              Nova senha
+              <input
+                autoFocus
+                className="h-11 rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-white outline-none"
+                minLength={6}
+                onChange={(event) => setNewPassword(event.target.value)}
+                placeholder="Mínimo de 6 caracteres"
+                type="password"
+                value={newPassword}
+              />
+            </label>
+            <label className="mt-3 grid gap-1 text-xs font-semibold text-slate-300">
+              Confirmar senha
+              <input
+                className="h-11 rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-white outline-none"
+                minLength={6}
+                onChange={(event) => setConfirmNewPassword(event.target.value)}
+                placeholder="Digite novamente"
+                type="password"
+                value={confirmNewPassword}
+              />
+            </label>
+            {passwordRecoveryMessage && <p className="mt-3 rounded-lg bg-teal-300/15 p-3 text-sm text-teal-100">{passwordRecoveryMessage}</p>}
+            {passwordRecoveryError && <p className="mt-3 rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{passwordRecoveryError}</p>}
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                disabled={passwordRecoveryBusy}
+                onClick={() => setPasswordRecoveryOpen(false)}
+                type="button"
+              >
+                Agora não
+              </button>
+              <button
+                className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-70"
+                disabled={passwordRecoveryBusy}
+                type="submit"
+              >
+                {passwordRecoveryBusy ? 'Salvando...' : 'Salvar senha'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </I18nProvider>
+  );
 }

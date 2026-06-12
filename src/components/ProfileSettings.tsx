@@ -80,6 +80,7 @@ const themeOptions: Array<{ value: AppTheme; label: string }> = [
   { value: 'system', label: 'systemTheme' },
   { value: 'dark', label: 'darkTheme' },
   { value: 'light', label: 'lightTheme' },
+  { value: 'green', label: 'greenTheme' },
   { value: 'pride', label: 'colorfulTheme' },
 ];
 
@@ -103,6 +104,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const { t } = useI18n();
   const [draft, setDraft] = useState({ ...profile, bio: profile.bio.slice(0, BIO_MAX_LENGTH) });
   const [saveStatus, setSaveStatus] = useState(t('savedAutomatically'));
+  const [hasProfileChanges, setHasProfileChanges] = useState(false);
+  const [manualSaving, setManualSaving] = useState(false);
   const [uploadingProfilePhoto, setUploadingProfilePhoto] = useState(false);
   const [uploadingCarouselPhotos, setUploadingCarouselPhotos] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>('profile');
@@ -128,6 +131,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   });
   const [deletingAccount, setDeletingAccount] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
+  const saveVersionRef = useRef(0);
   const latestDraftRef = useRef(profile);
   const blockedProfiles = useBlockedProfiles(profile.uid);
   const interactions = useProfileInteractions(profile.uid);
@@ -146,6 +150,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const nextProfile = { ...profile, bio: profile.bio.slice(0, BIO_MAX_LENGTH) };
     setDraft(nextProfile);
     latestDraftRef.current = nextProfile;
+    saveVersionRef.current += 1;
+    setHasProfileChanges(false);
     setNotificationPreferences(loadNotificationPreferences(profile.uid));
     const savedInteractionsUnlock = window.localStorage.getItem(`raddo-interactions-unlock-until:${profile.uid}`);
     setInteractionsUnlockUntil(savedInteractionsUnlock ? Number(savedInteractionsUnlock) : 0);
@@ -240,7 +246,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     setUploadingProfilePhoto(true);
     try {
       const uploadedUrl = await uploadFile(file, 'profile-photo');
-      if (uploadedUrl) updateDraft('photoURL', uploadedUrl);
+      if (uploadedUrl) {
+        const nextDraft = { ...latestDraftRef.current, photoURL: uploadedUrl };
+        setDraft(nextDraft);
+        const saveVersion = markProfileChanged(nextDraft);
+        await saveDraftNow(nextDraft, saveVersion);
+      }
     } catch (error) {
       setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar a imagem.');
     }
@@ -266,7 +277,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
     if (uploadedUrls.length > 0) {
       const nextPhotos = [...draft.photos, ...uploadedUrls].slice(0, CAROUSEL_PHOTO_MAX);
-      updateDraft('photos', nextPhotos);
+      const nextDraft = { ...latestDraftRef.current, photos: nextPhotos };
+      setDraft(nextDraft);
+      const saveVersion = markProfileChanged(nextDraft);
+      await saveDraftNow(nextDraft, saveVersion);
     }
 
     setUploadingCarouselPhotos(false);
@@ -280,10 +294,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     );
   }
 
-  async function saveProfile(nextDraft: UserProfile) {
+  async function saveProfile(nextDraft: UserProfile, successKey: 'savedAutomatically' | 'savedManually' = 'savedAutomatically') {
     if (isDemoMode) {
-      setSaveStatus(t('savedAutomatically'));
-      return;
+      setSaveStatus(t(successKey));
+      return true;
     }
 
     const { error } = await supabase
@@ -313,25 +327,46 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       })
       .eq('id', profile.uid);
 
-    setSaveStatus(error ? t('savedError', { message: error.message }) : t('savedAutomatically'));
+    setSaveStatus(error ? t('savedError', { message: error.message }) : t(successKey));
+    return !error;
+  }
+
+  function markProfileChanged(nextDraft: UserProfile) {
+    latestDraftRef.current = nextDraft;
+    saveVersionRef.current += 1;
+    setHasProfileChanges(true);
+    return saveVersionRef.current;
   }
 
   function queueAutoSave(nextDraft: UserProfile, delay = 650) {
-    latestDraftRef.current = nextDraft;
+    const saveVersion = markProfileChanged(nextDraft);
     setSaveStatus(t('saving'));
     if (saveTimeoutRef.current !== null) window.clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = window.setTimeout(() => {
+    saveTimeoutRef.current = window.setTimeout(async () => {
       saveTimeoutRef.current = null;
-      void saveProfile(nextDraft);
+      const saved = await saveProfile(nextDraft);
+      if (saved && saveVersionRef.current === saveVersion) setHasProfileChanges(false);
     }, delay);
   }
 
-  function flushAutoSave() {
+  async function saveDraftNow(nextDraft = latestDraftRef.current, saveVersion = saveVersionRef.current) {
     if (saveTimeoutRef.current !== null) {
       window.clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = null;
     }
-    void saveProfile(latestDraftRef.current);
+    latestDraftRef.current = nextDraft;
+    setManualSaving(true);
+    setSaveStatus(t('saving'));
+    try {
+      const saved = await saveProfile(nextDraft, 'savedManually');
+      if (saved && saveVersionRef.current === saveVersion) setHasProfileChanges(false);
+    } finally {
+      setManualSaving(false);
+    }
+  }
+
+  function flushAutoSave() {
+    void saveDraftNow(latestDraftRef.current);
   }
 
   async function enableNotifications() {
@@ -463,7 +498,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   }
 
   return (
-    <section className="mx-auto grid max-w-4xl gap-4 md:grid-cols-[280px_1fr]">
+    <section className="mx-auto grid w-full min-w-0 max-w-4xl gap-4 md:grid-cols-[280px_minmax(0,1fr)]">
       {showPublicPreview && (
         <ProfilePreview
           me={draft}
@@ -503,7 +538,22 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           </section>
         </div>
       )}
-      <aside className="overflow-hidden rounded-lg border border-white/10 bg-white/8">
+      {hasProfileChanges && (
+        <button
+          aria-label={t('saveSettings')}
+          className="fixed inset-x-3 z-[760] mx-auto grid h-14 max-w-xl place-items-center rounded-lg bg-teal-300 px-4 text-sm font-bold text-slate-950 shadow-2xl shadow-black/35 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={manualSaving || uploadingProfilePhoto || uploadingCarouselPhotos}
+          onClick={() => void saveDraftNow(draft)}
+          style={{
+            bottom: 'calc(var(--raddo-bottom-safe) + 92px)',
+          }}
+          title={t('saveSettings')}
+          type="button"
+        >
+          <span className="truncate">{manualSaving ? t('saving') : 'Salvar'}</span>
+        </button>
+      )}
+      <aside className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <div className="grid place-items-center bg-slate-950/60 p-5">
           {draft.photoURL ? (
             <img alt="" className="aspect-square w-1/2 min-w-24 rounded-full border border-white/10 object-cover" src={draft.photoURL} />
@@ -535,13 +585,13 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         </div>
       </aside>
 
-      <div className="space-y-4">
-        <nav className="grid grid-cols-2 gap-2 rounded-lg border border-white/10 bg-white/8 p-2 sm:grid-cols-3">
+      <div className="min-w-0 space-y-4">
+        <nav className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-white/10 bg-white/8 p-2 sm:grid-cols-3">
           {settingsSections.map((section) => (
             <button
-              className={`h-10 rounded-lg text-sm font-semibold ${
+              className={`min-w-0 truncate rounded-lg px-2 text-sm font-semibold ${
                 activeSection === section.value ? 'bg-teal-300 text-slate-950' : 'text-slate-200 hover:bg-white/8'
-              }`}
+              } h-10`}
               key={section.value}
               onClick={() => setActiveSection(section.value)}
               type="button"
@@ -552,8 +602,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         </nav>
 
         {activeSection === 'profile' && (
-          <div className="space-y-4">
-            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+          <div className="min-w-0 space-y-4">
+            <section className="min-w-0 rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <Camera className="h-4 w-4 text-teal-300" />
                 Perfil, fotos e bio
@@ -652,14 +702,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         )}
 
         {activeSection === 'gender' && (
-          <div className="space-y-4">
-            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-sm font-semibold">
+          <div className="min-w-0 space-y-4">
+            <section className="min-w-0 rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex items-center gap-2 text-sm font-semibold">
                   <MapPin className="h-4 w-4 text-teal-300" />
                   Preferências
                 </div>
-                <div className="grid grid-cols-2 rounded-full border border-white/10 bg-slate-950/40 p-1 text-xs font-semibold">
+                <div className="grid shrink-0 grid-cols-2 rounded-full border border-white/10 bg-slate-950/40 p-1 text-xs font-semibold">
                   <button
                     className={`rounded-full px-3 py-2 ${preferenceStep === 'find' ? 'bg-teal-300 text-slate-950' : 'text-slate-300'}`}
                     onClick={() => setPreferenceStep('find')}
@@ -767,7 +817,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
             {preferenceStep === 'find' && (
               <>
-                <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+                <section className="min-w-0 rounded-lg border border-white/10 bg-white/8 p-4">
                   <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                     <MapPin className="h-4 w-4 text-teal-300" />
                     {t('reachRadius')}
@@ -788,7 +838,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   </label>
                 </section>
 
-                <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+                <section className="min-w-0 rounded-lg border border-white/10 bg-white/8 p-4">
                   <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                     <SlidersHorizontal className="h-4 w-4 text-teal-300" />
                     {t('agePreference')}
@@ -1432,8 +1482,8 @@ function PreferenceSummary({ draft }: { draft: UserProfile }) {
       : 'sem objetivo definido';
 
   return (
-    <div className="mb-4 grid gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
-      <div className="flex flex-wrap gap-2">
+    <div className="mb-4 grid min-w-0 gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
+      <div className="flex min-w-0 flex-wrap gap-2">
         <SummaryPill label="Eu sou" value={identities || formatGender(draft.gender)} />
         <SummaryPill label="Quero ver" value={visibleTo} />
         <SummaryPill label="Interesses" value={interestSummary} />
@@ -1448,7 +1498,7 @@ function PreferenceSummary({ draft }: { draft: UserProfile }) {
 
 function SummaryPill({ label, value }: { label: string; value: string }) {
   return (
-    <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs">
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs">
       <span className="text-slate-400">{label}:</span>
       <span className="truncate font-semibold text-slate-100">{value}</span>
     </span>
@@ -1597,8 +1647,8 @@ function ModernChipGrid<T extends string>({
   const reachedLimit = typeof maxSelected === 'number' && selected.length >= maxSelected;
 
   return (
-    <div className="grid gap-3 rounded-xl border border-white/10 bg-slate-950/35 p-3 text-sm">
-      <div>
+    <div className="grid min-w-0 gap-3 rounded-xl border border-white/10 bg-slate-950/35 p-3 text-sm">
+      <div className="min-w-0">
         <h3 className="font-semibold text-slate-100">{title}</h3>
         <p className="mt-1 text-xs leading-relaxed text-slate-400">{helper}</p>
         {minRecommended && (
@@ -1607,14 +1657,14 @@ function ModernChipGrid<T extends string>({
           </p>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3">
         {filteredValues.map((option) => {
           const active = selected.includes(option.value);
           const disabled = !active && reachedLimit;
           const Icon = chipIcon(option.value, iconKind);
           return (
             <button
-              className={`group min-h-14 rounded-xl border px-3 py-2 text-left transition ${
+              className={`group min-h-14 min-w-0 rounded-xl border px-3 py-2 text-left transition ${
                 active
                   ? 'border-teal-300/70 bg-teal-300 text-slate-950 shadow-lg shadow-teal-950/20'
                   : 'border-white/10 bg-slate-950/60 text-slate-100'
@@ -1624,9 +1674,9 @@ function ModernChipGrid<T extends string>({
               onClick={() => onChange(option.value, single ? true : !active)}
               type="button"
             >
-              <span className="flex items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2">
                 <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-slate-950' : 'text-teal-300'}`} />
-                <span className="font-semibold">{t(option.value) || option.label}</span>
+                <span className="min-w-0 truncate font-semibold">{t(option.value) || option.label}</span>
               </span>
             </button>
           );

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { removeProfilePhoto } from './storageImages';
 
 type ModerationResult = {
   allowed?: boolean;
@@ -26,11 +27,15 @@ export async function moderateUploadedImage(input: {
   });
 
   if (error) {
-    throw new Error('Não consegui verificar a imagem. Tente outra imagem ou tente novamente.');
+    await removeProfilePhoto(input.path);
+    const details = error.message ? ` Detalhe: ${error.message}` : '';
+    throw new Error(`Não consegui verificar a imagem. Tente outra imagem ou tente novamente.${details}`);
   }
 
   if (!data?.allowed) {
+    await removeProfilePhoto(input.path);
     if (input.allowRejected) return data;
+    if (data?.error) throw new Error(`Não consegui verificar a imagem. ${data.error}`);
     const reasonText = data?.reasons?.length ? ` Motivo: ${data.reasons.join(', ')}.` : '';
     const reportText = data?.reportError ? ` A denúncia automática não foi registrada: ${data.reportError}` : '';
     throw new Error(`Imagem recusada pela verificação de segurança.${reasonText}${reportText}`);

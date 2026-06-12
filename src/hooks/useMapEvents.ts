@@ -1,9 +1,10 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { demoMapEventMessages, demoMapEvents, isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
-import type { LatLng, MapEvent, MapEventMessage, UserProfile } from '../types';
+import type { LatLng, MapEvent, MapEventMessage, MapEventStory, UserProfile } from '../types';
 import { distanceKm } from '../utils/geo';
 import { signedProfilePhotoUrl, withSignedProfilePhotos } from '../storageImages';
+import { deleteCachedChatMedia, deleteCachedChatMediaKeys } from '../chatMediaCache';
 
 let demoEventsState = [...demoMapEvents];
 let demoMessagesState = [...demoMapEventMessages];
@@ -41,6 +42,20 @@ type EventMessageRow = {
   view_once: boolean | null;
   viewed_by: string[] | null;
   created_at: string;
+};
+
+type EventStoryRow = {
+  id: string;
+  event_id: string | null;
+  creator_uid: string;
+  creator_name: string | null;
+  image_url: string | null;
+  media_type: 'image' | 'video' | null;
+  liked_by: string[] | null;
+  viewed_by: string[] | null;
+  text: string | null;
+  created_at: string;
+  expires_at: string;
 };
 
 type ParticipantRow = {
@@ -111,38 +126,55 @@ async function withSignedEventImages(event: MapEvent) {
 
 async function withSignedMapEventMessageImage(message: MapEventMessage) {
   if (message.messageType !== 'image' || !message.imageURL) return message;
-  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL) };
+  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL, { encryptedCache: false }) };
+}
+
+function mapEventMessageCacheKey(message: MapEventMessage) {
+  return message.messageType === 'image' && !message.viewOnce ? message.imagePath || message.imageURL : '';
+}
+
+function mapEventMessagesCacheKey(eventId: string, viewerUid: string) {
+  return `raddo-map-event-messages-cache:${eventId}:${viewerUid}`;
+}
+
+function readCachedMapEventMessages(eventId: string, viewerUid: string) {
+  try {
+    const saved = window.localStorage.getItem(mapEventMessagesCacheKey(eventId, viewerUid));
+    return saved ? JSON.parse(saved) as MapEventMessage[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedMapEventMessages(eventId: string, viewerUid: string, messages: MapEventMessage[]) {
+  try {
+    window.localStorage.setItem(mapEventMessagesCacheKey(eventId, viewerUid), JSON.stringify(messages.slice(-300)));
+  } catch {
+    // Cache is best-effort only.
+  }
 }
 
 export async function editMapEventMessage(message: MapEventMessage, viewerUid: string, nextText: string) {
   const cleanText = nextText.trim();
   if (isDemoMode || message.senderUid !== viewerUid || message.messageType !== 'text' || !cleanText) return;
 
-  const { error } = await supabase
-    .from('map_event_messages')
-    .update({ text: cleanText })
-    .eq('id', message.id)
-    .eq('sender_uid', viewerUid);
+  const { error } = await supabase.rpc('edit_map_event_message', {
+    next_text: cleanText,
+    target_message_id: message.id,
+  });
   if (error) throw new Error(error.message || 'Não consegui editar a mensagem.');
 }
 
 export async function deleteMapEventMessage(message: MapEventMessage, viewerUid: string, canManage: boolean) {
   if (isDemoMode) return;
   if (message.senderUid !== viewerUid && !canManage) return;
+  void deleteCachedChatMedia(mapEventMessageCacheKey(message));
 
   const rpcResult = await supabase.rpc('delete_map_event_message', {
     target_message_id: message.id,
   });
 
-  if (!rpcResult.error) return;
-
-  const missingFunction =
-    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('delete_map_event_message');
-  if (!missingFunction) throw new Error(rpcResult.error.message || 'Nao consegui excluir a mensagem.');
-
-  const query = supabase.from('map_event_messages').delete().eq('id', message.id);
-  const { error } = canManage ? await query : await query.eq('sender_uid', viewerUid);
-  if (error) throw new Error(error.message || 'Não consegui excluir a mensagem.');
+  if (rpcResult.error) throw new Error(rpcResult.error.message || 'Nao consegui excluir a mensagem.');
 }
 
 async function rowsToProfiles(rows: EventUserRow[], me: UserProfile) {
@@ -179,6 +211,143 @@ function rowToMessage(row: EventMessageRow): MapEventMessage {
     viewedBy: row.viewed_by ?? [],
     createdAt: row.created_at,
   };
+}
+
+function rowToStory(row: EventStoryRow): MapEventStory {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    creatorUid: row.creator_uid,
+    creatorName: row.creator_name ?? 'Raddo',
+    imageURL: row.image_url ?? '',
+    mediaType: row.media_type ?? 'image',
+    likedBy: row.liked_by ?? [],
+    viewedBy: row.viewed_by ?? [],
+    text: row.text ?? '',
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+async function withSignedStoryImage(story: MapEventStory) {
+  if (!story.imageURL) return story;
+  return { ...story, imageURL: await signedProfilePhotoUrl(story.imageURL) };
+}
+
+export function useMapEventStories(events: MapEvent[], me: UserProfile) {
+  const [stories, setStories] = useState<MapEventStory[]>([]);
+  const eventIdsKey = events.map((event) => event.id).sort().join(':');
+  const eventIds = useMemo(() => (eventIdsKey ? eventIdsKey.split(':') : []), [eventIdsKey]);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setStories([]);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadStories() {
+      let query = supabase
+        .from('map_event_stories')
+        .select('*')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(80);
+      if (eventIds.length > 0) query = query.or(`event_id.is.null,event_id.in.(${eventIds.join(',')})`);
+      else query = query.is('event_id', null);
+
+      const { data, error } = await query;
+
+      if (error) {
+        if (active) setStories([]);
+        return;
+      }
+
+      const nextStories = await Promise.all(((data ?? []) as EventStoryRow[]).map((row) => withSignedStoryImage(rowToStory(row))));
+      if (active) setStories(nextStories);
+    }
+
+    loadStories();
+    const channel = supabase
+      .channel(`map-event-stories:${me.uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_stories' }, loadStories)
+      .subscribe();
+    const refreshTimer = window.setInterval(loadStories, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [eventIdsKey, me.uid]);
+
+  return stories;
+}
+
+export async function createMapEventStory(input: {
+  creatorName: string;
+  creatorUid: string;
+  eventId?: string | null;
+  imageURL: string;
+  mediaType?: 'image' | 'video';
+  text: string;
+}) {
+  const cleanText = input.text.trim().slice(0, 160);
+  if (!input.imageURL && !cleanText) throw new Error('Adicione uma foto, vídeo ou texto para publicar.');
+
+  if (isDemoMode) return;
+
+  const { error } = await supabase.from('map_event_stories').insert({
+    creator_name: input.creatorName,
+    creator_uid: input.creatorUid,
+    event_id: input.eventId ?? null,
+    image_url: input.imageURL,
+    media_type: input.mediaType ?? 'image',
+    text: cleanText,
+  });
+  if (error) throw new Error(error.message || 'Não consegui publicar o story.');
+}
+
+export async function reportMapEventStory(story: MapEventStory, event: MapEvent | null, reporterUid: string) {
+  if (story.creatorUid === reporterUid) throw new Error('Você não pode denunciar seu próprio story.');
+  if (isDemoMode) return;
+
+  const { error } = await supabase.from('reports').insert({
+    context_id: story.id,
+    context_title: event?.title ?? 'Story do mapa',
+    context_type: 'map_story',
+    reporter_uid: reporterUid,
+    reported_uid: story.creatorUid,
+    reason: `reported_map_story:${event?.id ?? 'map'}`,
+    recent_messages: [
+      {
+        createdAt: story.createdAt,
+        imageUrl: story.imageURL,
+        mediaType: story.mediaType,
+        messageType: 'story',
+        senderName: story.creatorName,
+        senderUid: story.creatorUid,
+        text: story.text,
+      },
+    ],
+  });
+  if (error) throw new Error(error.message || 'Não consegui denunciar o story.');
+}
+
+export async function markMapEventStoryViewed(story: MapEventStory, userUid: string) {
+  if (isDemoMode || story.creatorUid === userUid || story.viewedBy.includes(userUid)) return;
+  const { error } = await supabase.rpc('mark_map_event_story_viewed', { target_story_id: story.id });
+  if (error) console.warn('Nao consegui marcar story como visto', error);
+}
+
+export async function toggleMapEventStoryLike(story: MapEventStory, userUid: string) {
+  if (isDemoMode || story.creatorUid === userUid) return;
+
+  const { error } = await supabase.rpc('toggle_map_event_story_like', {
+    target_story_id: story.id,
+  });
+  if (error) throw new Error(error.message || 'Não consegui curtir o story.');
 }
 
 function rowToProfile(row: ProfileRow): UserProfile {
@@ -226,6 +395,27 @@ function isPolicyBlockedError(error: { code?: string; message?: string }) {
   return error.code === '42501' || message.includes('row-level security policy') || message.includes('permission denied');
 }
 
+function mapEventsCacheKey(uid: string) {
+  return `raddo-map-events-cache:${uid}`;
+}
+
+function readCachedEventRows(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(mapEventsCacheKey(uid));
+    return saved ? JSON.parse(saved) as EventRow[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedEventRows(uid: string, rows: EventRow[]) {
+  try {
+    window.localStorage.setItem(mapEventsCacheKey(uid), JSON.stringify(rows.slice(0, 250)));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
 export function useMapEvents(me: UserProfile | null) {
   const [events, setEvents] = useState<MapEvent[]>([]);
 
@@ -238,20 +428,31 @@ export function useMapEvents(me: UserProfile | null) {
     }
 
     let active = true;
+    const meUid = me.uid;
+
+    async function loadCachedEvents() {
+      const cachedRows = readCachedEventRows(meUid);
+      if (cachedRows.length === 0) return;
+      const cachedEvents = await Promise.all(cachedRows.map((row) => withSignedEventImages(rowToEvent(row))));
+      if (active) setEvents(cachedEvents);
+    }
 
     async function loadEvents() {
       const { data } = await supabase.from('map_events').select('*').order('created_at', { ascending: false });
-      const nextEvents = await Promise.all(((data ?? []) as EventRow[]).map((row) => withSignedEventImages(rowToEvent(row))));
+      const rows = (data ?? []) as EventRow[];
+      writeCachedEventRows(meUid, rows);
+      const nextEvents = await Promise.all(rows.map((row) => withSignedEventImages(rowToEvent(row))));
       if (active) setEvents(nextEvents);
     }
 
+    loadCachedEvents();
     loadEvents();
 
     const channel = supabase
       .channel('map-events')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_events' }, loadEvents)
       .subscribe();
-    const refreshTimer = window.setInterval(loadEvents, 5000);
+    const refreshTimer = window.setInterval(loadEvents, 30000);
     const handleFocus = () => loadEvents();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadEvents();
@@ -378,7 +579,7 @@ export function useJoinedMapEvents(uid: string | undefined) {
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_events' }, loadEvents)
       .subscribe();
-    const refreshTimer = window.setInterval(loadEvents, 5000);
+    const refreshTimer = window.setInterval(loadEvents, 30000);
     const handleFocus = () => loadEvents();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadEvents();
@@ -414,6 +615,10 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
     }
 
     let active = true;
+    const currentEventId = eventId;
+    const currentViewerUid = viewerUid;
+    const cachedMessages = readCachedMapEventMessages(currentEventId, currentViewerUid);
+    if (cachedMessages.length > 0) setMessages(cachedMessages);
 
     async function loadMessages() {
       const { data: participantRows, error: participantError } = await supabase
@@ -443,7 +648,14 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
         .order('created_at', { ascending: true });
 
       const nextMessages = await Promise.all(((data ?? []) as EventMessageRow[]).map((row) => withSignedMapEventMessageImage(rowToMessage(row))));
-      if (active) setMessages(nextMessages);
+      if (active) {
+        setMessages((current) => {
+          const nextIds = new Set(nextMessages.map((message) => message.id));
+          void deleteCachedChatMediaKeys(current.filter((message) => !nextIds.has(message.id)).map(mapEventMessageCacheKey));
+          writeCachedMapEventMessages(currentEventId, currentViewerUid, nextMessages);
+          return nextMessages;
+        });
+      }
     }
 
     loadMessages();
@@ -454,7 +666,9 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
       setMessages((current) => {
         const byId = new Map(current.map((message) => [message.id, message]));
         byId.set(signedMessage.id, signedMessage);
-        return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+        const nextMessages = [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+        writeCachedMapEventMessages(currentEventId, currentViewerUid, nextMessages);
+        return nextMessages;
       });
       });
     }
@@ -469,6 +683,18 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
             upsertMessage(payload.new as EventMessageRow);
             return;
           }
+          if (payload.eventType === 'DELETE') {
+            const deletedId = (payload.old as Partial<EventMessageRow>)?.id;
+            if (deletedId) {
+              setMessages((current) => {
+                const deleted = current.find((message) => message.id === deletedId);
+                if (deleted) void deleteCachedChatMedia(mapEventMessageCacheKey(deleted));
+                const nextMessages = current.filter((message) => message.id !== deletedId);
+                writeCachedMapEventMessages(currentEventId, currentViewerUid, nextMessages);
+                return nextMessages;
+              });
+            }
+          }
           loadMessages();
         },
       )
@@ -478,7 +704,7 @@ export function useMapEventMessages(eventId?: string, viewerUid?: string) {
         loadMessages,
       )
       .subscribe();
-    const refreshTimer = window.setInterval(loadMessages, 2500);
+    const refreshTimer = window.setInterval(loadMessages, 15000);
     const handleFocus = () => loadMessages();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadMessages();
@@ -542,7 +768,7 @@ export function useMapEventParticipants(eventId: string | undefined, me: UserPro
         loadParticipants,
       )
       .subscribe();
-    const refreshTimer = window.setInterval(loadParticipants, 5000);
+    const refreshTimer = window.setInterval(loadParticipants, 15000);
     const handleFocus = () => loadParticipants();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadParticipants();
@@ -616,7 +842,7 @@ export function useMapEventParticipantCounts(events: MapEvent[]) {
       .channel(`map-event-participant-counts:${eventIds.join(':')}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_participants' }, loadCounts)
       .subscribe();
-    const refreshTimer = window.setInterval(loadCounts, 5000);
+    const refreshTimer = window.setInterval(loadCounts, 15000);
     const handleFocus = () => loadCounts();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadCounts();
@@ -634,6 +860,68 @@ export function useMapEventParticipantCounts(events: MapEvent[]) {
   }, [eventIdsKey]);
 
   return counts;
+}
+
+export function useMapEventRecentActivity(events: MapEvent[], windowMinutes = 30) {
+  const [activeEventIds, setActiveEventIds] = useState<Set<string>>(new Set());
+  const eventIdsKey = events
+    .map((event) => event.id)
+    .sort()
+    .join(':');
+  const eventIds = useMemo(() => (eventIdsKey ? eventIdsKey.split(':') : []), [eventIdsKey]);
+
+  useEffect(() => {
+    if (eventIds.length === 0) {
+      setActiveEventIds(new Set());
+      return undefined;
+    }
+
+    if (isDemoMode) {
+      const cutoff = Date.now() - windowMinutes * 60 * 1000;
+      setActiveEventIds(
+        new Set(
+          demoMessagesState
+            .filter((message) => eventIds.includes(message.eventId) && Date.parse(message.createdAt) >= cutoff)
+            .map((message) => message.eventId),
+        ),
+      );
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadRecentActivity() {
+      const cutoff = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from('map_event_messages')
+        .select('event_id,created_at')
+        .in('event_id', eventIds)
+        .gte('created_at', cutoff);
+
+      if (error) {
+        if (active) setActiveEventIds(new Set());
+        return;
+      }
+
+      if (active) setActiveEventIds(new Set(((data ?? []) as Pick<EventMessageRow, 'event_id'>[]).map((row) => row.event_id)));
+    }
+
+    loadRecentActivity();
+
+    const channel = supabase
+      .channel(`map-event-recent-activity:${eventIds.join(':')}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_messages' }, loadRecentActivity)
+      .subscribe();
+    const refreshTimer = window.setInterval(loadRecentActivity, 30000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [eventIdsKey, windowMinutes]);
+
+  return activeEventIds;
 }
 
 export function useMapEventModerators(eventId: string | undefined) {
@@ -784,8 +1072,22 @@ export async function createMapEvent(input: {
 }) {
   const now = new Date().toISOString();
   const activeSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const duplicateSince = new Date(Date.now() - 2 * 60 * 1000).toISOString();
 
   if (isDemoMode) {
+    const duplicateEvent = demoEventsState.find(
+      (event) =>
+        event.creatorUid === input.creatorUid &&
+        event.title.trim().toLowerCase() === input.title.trim().toLowerCase() &&
+        event.description.trim() === input.description.trim() &&
+        event.location.lat === input.location.lat &&
+        event.location.lng === input.location.lng &&
+        event.radiusKm === input.radiusKm &&
+        event.accessMode === input.accessMode &&
+        Date.parse(event.createdAt) >= Date.parse(duplicateSince),
+    );
+    if (duplicateEvent) return duplicateEvent;
+
     const ownEvents = demoEventsState.filter(
       (event) =>
         event.creatorUid === input.creatorUid &&
@@ -847,6 +1149,28 @@ export async function createMapEvent(input: {
   }
   if ((count ?? 0) >= limit) {
     throw new Error(input.isPremium ? 'Você pode criar até 5 chats no Premium.' : 'Você pode criar apenas 1 chat. Assine o Premium para criar até 5.');
+  }
+
+  const { data: existingDuplicate, error: duplicateError } = await supabase
+    .from('map_events')
+    .select('*')
+    .eq('creator_uid', input.creatorUid)
+    .eq('title', input.title)
+    .eq('description', input.description)
+    .eq('lat', input.location.lat)
+    .eq('lng', input.location.lng)
+    .eq('radius_km', input.radiusKm)
+    .eq('access_mode', input.accessMode)
+    .gte('created_at', duplicateSince)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle<EventRow>();
+
+  if (duplicateError) throw new Error(duplicateError.message);
+  if (existingDuplicate) {
+    const existing = await withSignedEventImages(rowToEvent(existingDuplicate));
+    await joinMapEvent(existing.id, input.creatorUid);
+    return existing;
   }
 
   const { data, error } = await supabase
@@ -1192,42 +1516,13 @@ export async function sendMapEventMessage(input: {
     image_path_value: input.image?.imagePath ?? '',
     view_once_value: input.image?.viewOnce ?? false,
   });
-  const missingRpc =
-    rpcResult.error &&
-    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('send_map_event_message_secure'));
-
-  if (rpcResult.error && !missingRpc) {
+  if (rpcResult.error) {
     throw new Error(rpcResult.error.message || 'Não consegui enviar a mensagem.');
   }
 
-  if (missingRpc) {
-    const { data, error } = await supabase
-      .from('map_event_messages')
-      .insert({
-      event_id: input.eventId,
-      sender_uid: input.senderUid,
-      sender_name: input.senderName,
-      text: cleanText,
-      message_type: input.image ? 'image' : 'text',
-      image_url: input.image?.imageURL ?? '',
-      image_path: input.image?.imagePath ?? '',
-      view_once: input.image?.viewOnce ?? false,
-      viewed_by: [],
-      created_at: now,
-      })
-      .select('id')
-      .single<{ id: string }>();
-
-    if (error) {
-      if (isPolicyBlockedError(error)) throw new Error('Você não pode enviar mensagens neste chat.');
-      throw new Error(error.message);
-    }
-    messageId = data?.id ?? '';
-  } else {
-    const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
-    const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-    messageId = row?.id ?? '';
-  }
+  const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
+  const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  messageId = row?.id ?? '';
 
   const { error: pushError } = await supabase.functions.invoke('send-map-event-push', {
     body: {
@@ -1248,14 +1543,6 @@ export async function markMapEventMessageImageViewed(message: MapEventMessage, v
     target_message_id: message.id,
   });
 
-  if (!rpcResult.error) return;
-
-  const missingFunction =
-    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('mark_map_event_image_viewed');
-  if (!missingFunction) throw new Error(rpcResult.error.message || 'Não consegui marcar a imagem como vista.');
-
-  const nextViewedBy = [...new Set([...message.viewedBy, viewerUid])];
-  const { error } = await supabase.from('map_event_messages').update({ viewed_by: nextViewedBy }).eq('id', message.id);
-  if (error) throw new Error(error.message || 'Não consegui marcar a imagem como vista.');
+  if (rpcResult.error) throw new Error(rpcResult.error.message || 'Não consegui marcar a imagem como vista.');
 }
 

@@ -1,0 +1,7 @@
+Raddo 1.0.7
+
+- Faster startup on mobile connections with local cache for profiles, chats, messages, and previously viewed media.
+- Lighter image uploads with compression before sending to reduce failures on mobile data.
+- Map performance improvements for smoother zooming and navigation.
+- New video uploads are temporarily disabled and will return soon.
+- Fixes for profile saving, notifications, stories, chats, and image moderation.

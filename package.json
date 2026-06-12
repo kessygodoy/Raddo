@@ -10,6 +10,9 @@
     "android:sync": "npm run build && npx cap sync android",
     "android:debug-apk": "npm run build && npx cap sync android && powershell -ExecutionPolicy Bypass -File scripts/build-debug-apk-with-version.ps1",
     "android:open": "npx cap open android",
+    "supabase:audit-storage": "node scripts/audit-supabase-storage.mjs",
+    "supabase:cleanup:dry": "node scripts/cleanup-supabase-storage.mjs",
+    "supabase:cleanup:execute": "node scripts/cleanup-supabase-storage.mjs --execute",
     "ios:sync": "npm run build && npx cap sync ios",
     "ios:open": "npx cap open ios"
   },

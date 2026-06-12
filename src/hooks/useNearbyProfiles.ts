@@ -38,6 +38,27 @@ type ProfileRow = {
   created_at: string | null;
 };
 
+function nearbyProfilesCacheKey(uid: string) {
+  return `raddo-nearby-profiles-cache:${uid}`;
+}
+
+function readCachedProfileRows(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(nearbyProfilesCacheKey(uid));
+    return saved ? JSON.parse(saved) as ProfileRow[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedProfileRows(uid: string, rows: ProfileRow[]) {
+  try {
+    window.localStorage.setItem(nearbyProfilesCacheKey(uid), JSON.stringify(rows.slice(0, 150)));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
 function rowToProfile(row: ProfileRow): UserProfile {
   return {
     uid: row.id,
@@ -123,12 +144,22 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
     let active = true;
     const currentUid = me.uid;
 
+    async function loadCachedProfiles() {
+      const cachedRows = readCachedProfileRows(currentUid);
+      if (cachedRows.length === 0) return;
+      const cachedProfiles = await Promise.all(cachedRows.map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      if (active) setProfiles(cachedProfiles);
+    }
+
     async function loadProfiles() {
       const { data } = await supabase.from('profiles').select('*').neq('id', currentUid);
-      const nextProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
+      const rows = (data ?? []) as ProfileRow[];
+      writeCachedProfileRows(currentUid, rows);
+      const nextProfiles = await Promise.all(rows.map((row) => withSignedProfilePhotos(rowToProfile(row))));
       if (active) setProfiles(nextProfiles);
     }
 
+    loadCachedProfiles();
     loadProfiles();
 
     const channel = supabase

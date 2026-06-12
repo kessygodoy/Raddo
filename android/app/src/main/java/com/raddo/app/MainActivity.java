@@ -4,7 +4,6 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.WindowManager;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -13,8 +12,8 @@ public class MainActivity extends BridgeActivity {
   protected void onCreate(Bundle savedInstanceState) {
     registerPlugin(RaddoUpdaterPlugin.class);
     registerPlugin(RaddoBillingPlugin.class);
+    registerPlugin(RaddoScreenSecurityPlugin.class);
     super.onCreate(savedInstanceState);
-    getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
     createPushNotificationChannel();
   }
 

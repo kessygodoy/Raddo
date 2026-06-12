@@ -1,15 +1,20 @@
 import { useEffect, useState } from 'react';
+import { useCachedChatMediaUrl } from '../chatMediaCache';
+import { setScreenshotBlocked } from '../screenSecurity';
 
 type Props = {
+  cacheKey?: string;
   imageURL: string;
+  mediaType?: 'image' | 'video';
   mine: boolean;
+  onLoaded?: () => void;
   onViewed?: () => Promise<void> | void;
   viewed: boolean;
   viewedStorageKey?: string;
   viewOnce: boolean;
 };
 
-export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, viewedStorageKey, viewOnce }: Props) {
+export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'image', mine, onLoaded, onViewed, viewed, viewedStorageKey, viewOnce }: Props) {
   const [open, setOpen] = useState(false);
   const [expiredHere, setExpiredHere] = useState(false);
   const [viewedLocally, setViewedLocally] = useState(() =>
@@ -17,6 +22,11 @@ export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, vie
   );
   const [secondsLeft, setSecondsLeft] = useState(10);
   const expired = viewOnce && !open && (expiredHere || viewed || viewedLocally);
+  const mediaUrl = useCachedChatMediaUrl({
+    cacheKey: cacheKey || imageURL,
+    enabled: !viewOnce,
+    url: imageURL,
+  });
 
   useEffect(() => {
     if (!viewedStorageKey) {
@@ -39,6 +49,14 @@ export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, vie
     }, 250);
 
     return () => window.clearInterval(timer);
+  }, [open, viewOnce]);
+
+  useEffect(() => {
+    void setScreenshotBlocked(open && viewOnce);
+
+    return () => {
+      if (viewOnce) void setScreenshotBlocked(false);
+    };
   }, [open, viewOnce]);
 
   async function openImage() {
@@ -65,11 +83,23 @@ export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, vie
   return (
     <>
       <button className="block overflow-hidden rounded-lg" onClick={openImage} type="button">
-        <img
-          alt=""
-          className={`max-h-56 w-full max-w-64 object-cover ${viewOnce ? 'scale-110 blur-2xl brightness-75' : ''}`}
-          src={imageURL}
-        />
+        {mediaType === 'video' ? (
+          <video
+            className={`max-h-56 w-full max-w-64 object-cover ${viewOnce ? 'scale-110 blur-2xl brightness-75' : ''}`}
+            muted
+            onLoadedData={onLoaded}
+            playsInline
+            preload="metadata"
+            src={mediaUrl}
+          />
+        ) : (
+          <img
+            alt=""
+            className={`max-h-56 w-full max-w-64 object-cover ${viewOnce ? 'scale-110 blur-2xl brightness-75' : ''}`}
+            onLoad={onLoaded}
+            src={mediaUrl}
+          />
+        )}
         {viewOnce && (
           <span className={`mt-1 block text-left text-[11px] ${mine ? 'text-slate-700' : 'text-slate-300'}`}>
             Ver uma vez
@@ -91,7 +121,11 @@ export default function ChatImageMessage({ imageURL, mine, onViewed, viewed, vie
           >
             x
           </button>
-          <img alt="" className="max-h-[84dvh] max-w-full rounded-lg object-contain" src={imageURL} />
+          {mediaType === 'video' ? (
+            <video autoPlay className="max-h-[84dvh] max-w-full rounded-lg object-contain" controls playsInline src={mediaUrl} />
+          ) : (
+            <img alt="" className="max-h-[84dvh] max-w-full rounded-lg object-contain" src={mediaUrl} />
+          )}
         </div>
       )}
     </>

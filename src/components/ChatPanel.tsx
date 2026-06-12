@@ -17,9 +17,38 @@ import {
 } from '../hooks/useMatches';
 import ProfilePreview from './ProfilePreview';
 import ChatImageMessage from './ChatImageMessage';
-import { uploadChatImage } from '../chatImages';
+import { uploadChatMedia } from '../chatImages';
 import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
+
+function isVideoMedia(url: string, text?: string) {
+  return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
+}
+
+type CachedConversation = {
+  createdAt: string;
+  displayName: string;
+  lastMessage: string;
+  lastMessageAt: string | null;
+  matchId: string;
+  otherUid: string;
+  photoURL: string;
+};
+
+function conversationCacheKey(uid: string) {
+  return `raddo-connections-summary:${uid}`;
+}
+
+function readConversationCache(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(conversationCacheKey(uid));
+    if (!saved) return {};
+    const parsed = JSON.parse(saved) as Record<string, CachedConversation>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 type Props = {
   currentUid: string;
@@ -31,6 +60,7 @@ type Props = {
 export default function ChatPanel({ currentProfile, currentUid, matches, openMatchId }: Props) {
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
+  const [cachedConversations, setCachedConversations] = useState<Record<string, CachedConversation>>(() => readConversationCache(currentUid));
   const [activeMatchId, setActiveMatchId] = useState('');
   const [chatView, setChatView] = useState<'list' | 'conversation'>('list');
   const [text, setText] = useState('');
@@ -38,6 +68,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
+  const [pendingImagePath, setPendingImagePath] = useState('');
+  const [pendingMediaType, setPendingMediaType] = useState<'image' | 'video'>('image');
   const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
@@ -45,6 +77,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const handledOpenMatchIdRef = useRef('');
   const activeMatch = useMemo(
@@ -68,14 +101,69 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     },
     [activeMatch?.id, messages, optimisticMessages],
   );
+
+  useEffect(() => {
+    setCachedConversations(readConversationCache(currentUid));
+  }, [currentUid]);
+
+  useEffect(() => {
+    if (sortedMatches.length === 0) return;
+
+    setCachedConversations((current) => {
+      const next = { ...current };
+      sortedMatches.forEach((match) => {
+        const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
+        if (!otherUid) return;
+        const profile = profilesByUid[otherUid];
+        const previous = next[match.id];
+        next[match.id] = {
+          createdAt: match.createdAt,
+          displayName: profile?.displayName ?? previous?.displayName ?? 'Carregando perfil',
+          lastMessage: match.lastMessage || previous?.lastMessage || 'Conversa iniciada',
+          lastMessageAt: match.lastMessageAt ?? previous?.lastMessageAt ?? null,
+          matchId: match.id,
+          otherUid,
+          photoURL: profile?.photos?.[0] || profile?.photoURL || previous?.photoURL || '',
+        };
+      });
+
+      const validIds = new Set(sortedMatches.map((match) => match.id));
+      Object.keys(next).forEach((matchId) => {
+        if (!validIds.has(matchId)) delete next[matchId];
+      });
+
+      window.localStorage.setItem(conversationCacheKey(currentUid), JSON.stringify(next));
+      return next;
+    });
+  }, [currentUid, profilesByUid, sortedMatches]);
   useEffect(() => {
     if (openMatchId && handledOpenMatchIdRef.current !== openMatchId && sortedMatches.some((match) => match.id === openMatchId)) {
       handledOpenMatchIdRef.current = openMatchId;
+      shouldStickToBottomRef.current = true;
       setActiveMatchId(openMatchId);
       setChatView('conversation');
       setMatchMenuOpen(false);
     }
   }, [openMatchId, sortedMatches]);
+
+  function scrollMessagesToBottom(behavior: ScrollBehavior = 'auto') {
+    const area = messageAreaRef.current;
+    if (!area) return;
+    area.scrollTo({ top: area.scrollHeight, behavior });
+    messageEndRef.current?.scrollIntoView({ block: 'end', behavior });
+  }
+
+  useEffect(() => {
+    if (chatView !== 'conversation' || !activeMatchId) return undefined;
+    shouldStickToBottomRef.current = true;
+    scrollMessagesToBottom();
+    const frame = window.requestAnimationFrame(() => scrollMessagesToBottom());
+    const timers = [120, 400, 900].map((delay) => window.setTimeout(() => scrollMessagesToBottom(), delay));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [activeMatchId, chatView]);
 
   useEffect(() => {
     const handleBack = (event: Event) => {
@@ -118,11 +206,10 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   }, [chatView, matchMenuOpen, openMessageMenuId, pendingImageURL, previewProfile, uploadingImage]);
 
   useEffect(() => {
-    const area = messageAreaRef.current;
-    if (!area || chatView !== 'conversation') return;
+    if (!messageAreaRef.current || chatView !== 'conversation') return;
     if (!shouldStickToBottomRef.current) return;
 
-    area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+    scrollMessagesToBottom('smooth');
   }, [chatView, visibleMessages.length]);
 
   function handleMessageAreaScroll() {
@@ -169,20 +256,23 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file || !activeMatch) return;
+    const mediaType = 'image';
 
     setUploadingImage(true);
     try {
-      const imageURL = await uploadChatImage({
+      const media = await uploadChatMedia({
         allowRejected: true,
         contextId: activeMatch?.id,
         context: 'match-chat-image',
         file,
         ownerUid: currentUid,
       });
-      setPendingImageURL(imageURL);
+      setPendingImageURL(media.url);
+      setPendingImagePath(media.path);
+      setPendingMediaType(mediaType);
       setPendingImageViewOnce(false);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a imagem.');
+      setActionMessage(error instanceof Error ? error.message : 'Mídia bloqueada pela verificação de segurança.');
     } finally {
       setUploadingImage(false);
     }
@@ -191,6 +281,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   function cancelPendingImage() {
     if (uploadingImage || sendingImage) return;
     setPendingImageURL('');
+    setPendingImagePath('');
+    setPendingMediaType('image');
     setPendingImageViewOnce(false);
   }
 
@@ -198,26 +290,32 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     if (!activeMatch || !pendingImageURL) return;
 
     const imageURL = pendingImageURL;
+    const imagePath = pendingImagePath;
+    const mediaType = pendingMediaType;
     const viewOnce = pendingImageViewOnce;
     setPendingImageURL('');
+    setPendingImagePath('');
+    setPendingMediaType('image');
     setPendingImageViewOnce(false);
     setSendingImage(true);
     try {
+      const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
       const nextMessage: Message = {
         id: `local-image-${Date.now()}`,
         senderUid: currentUid,
-        text: 'Imagem',
+        text: mediaText,
         matchId: activeMatch.id,
         messageType: 'image',
         imageURL,
-        imagePath: '',
+        imagePath,
         viewOnce,
         viewedBy: [],
         createdAt: new Date().toISOString(),
       };
       setOptimisticMessages((current) => [...current, nextMessage]);
       shouldStickToBottomRef.current = true;
-      await sendMessage(activeMatch.id, currentUid, 'Imagem', currentProfile.displayName, {
+      await sendMessage(activeMatch.id, currentUid, mediaText, currentProfile.displayName, {
+        imagePath,
         imageURL,
         viewOnce,
       });
@@ -333,6 +431,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
       {(uploadingImage || pendingImageURL) && (
         <PendingChatImageModal
           imageURL={pendingImageURL}
+          mediaType={pendingMediaType}
           onCancel={cancelPendingImage}
           onSend={confirmPendingImage}
           sending={sendingImage}
@@ -365,9 +464,12 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           {sortedMatches.map((match) => {
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
+            const cached = cachedConversations[match.id];
             const isActive = activeMatchId === match.id;
-            const displayName = profile?.displayName ?? 'Carregando perfil';
-            const photoURL = profile?.photoURL;
+            const displayName = profile?.displayName ?? cached?.displayName ?? 'Carregando perfil';
+            const photoURL = profile?.photos?.[0] || profile?.photoURL || cached?.photoURL || '';
+            const lastMessage = match.lastMessage || cached?.lastMessage || 'Conversa iniciada';
+            const lastMessageAt = match.lastMessageAt ?? cached?.lastMessageAt ?? null;
 
             return (
               <article
@@ -417,12 +519,12 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                 >
                   <p className="truncate text-sm font-semibold">{displayName}</p>
                   <p className={`truncate text-xs ${isActive ? 'text-slate-800' : 'text-slate-300'}`}>
-                    {match.lastMessage || 'Conversa iniciada'}
+                    {lastMessage}
                   </p>
                 </button>
-                {match.lastMessageAt && (
+                {lastMessageAt && (
                   <span className={`ml-auto shrink-0 text-[11px] ${isActive ? 'text-slate-800' : 'text-slate-400'}`}>
-                    {new Date(match.lastMessageAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(lastMessageAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 )}
               </article>
@@ -531,6 +633,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             const canEditMessage = mine && message.messageType === 'text';
             const canDeleteMessage = mine;
             const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL);
+            const mediaType = isVideoMedia(message.imageURL, message.text) ? 'video' : 'image';
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
             const downloadFilename = message.imagePath.split('/').pop() || `raddo-imagem-${message.id}.jpg`;
@@ -567,8 +670,13 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                   <div className="pr-6">
                     {message.messageType === 'image' && message.imageURL ? (
                       <ChatImageMessage
+                        cacheKey={message.imagePath || message.imageURL}
                         imageURL={message.imageURL}
+                        mediaType={mediaType}
                         mine={mine}
+                        onLoaded={() => {
+                          if (shouldStickToBottomRef.current) scrollMessagesToBottom();
+                        }}
                         onViewed={() => markMessageImageViewed(message, currentUid)}
                         viewed={message.viewedBy.includes(currentUid)}
                         viewedStorageKey={`raddo:view-once:match:${currentUid}:${message.imageURL || message.id}`}
@@ -585,7 +693,14 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
               </div>
             );
           })}
+          <div ref={messageEndRef} />
         </div>
+
+        {actionMessage && (
+          <p className="mx-3 mb-2 rounded-lg bg-amber-300/15 p-3 text-sm font-semibold text-amber-100">
+            {actionMessage}
+          </p>
+        )}
 
         <form className="flex gap-2 border-t border-white/10 bg-[#0f1f2d] p-3" onSubmit={handleSubmit}>
           <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full border border-white/10 bg-white/8 text-slate-100" title="Abrir câmera">

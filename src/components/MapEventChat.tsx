@@ -1,5 +1,5 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Eye, ImagePlus, LogOut, MapPin, Megaphone, MoreVertical, Send, Shield, Trash2, UserMinus, Users, X } from 'lucide-react';
+import { Camera, Eye, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, MoreVertical, Plus, Send, Shield, Trash2, UserMinus, Users, Video, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
@@ -9,7 +9,10 @@ import {
   hashMapEventPassword,
   leaveMapEvent,
   markMapEventMessageImageViewed,
+  markMapEventStoryViewed,
   reportMapEvent,
+  reportMapEventStory,
+  toggleMapEventStoryLike,
   rejectMapEventRequest,
   sendMapEventMessage,
   setMapEventModerator,
@@ -21,21 +24,28 @@ import {
   useMapEventModerators,
   useMapEventParticipants,
 } from '../hooks/useMapEvents';
-import { sendDislike, trySendLike } from '../hooks/useMatches';
-import type { MapEvent, UserProfile } from '../types';
+import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
+import type { MapEvent, MapEventStory, Match, UserProfile } from '../types';
 import ProfilePreview from './ProfilePreview';
 import { reportReasons, type ReportReason } from '../reportOptions';
 import ExternalGpsModal from './ExternalGpsModal';
 import ChatImageMessage from './ChatImageMessage';
-import { uploadChatImage } from '../chatImages';
+import { uploadChatMedia } from '../chatImages';
 import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
 
+function isVideoMedia(url: string, text?: string) {
+  return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
+}
+
 type Props = {
   event: MapEvent;
+  matches?: Match[];
   me: UserProfile;
   onClose: () => void;
+  onCreateStory?: (event: MapEvent) => void;
   onDeleted?: (eventId: string) => void;
+  stories?: MapEventStory[];
 };
 
 type ManagementView = 'people' | 'moderators' | 'banned' | 'requests' | null;
@@ -124,7 +134,7 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
   );
 }
 
-export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
+export default function MapEventChat({ event, matches = [], me, onClose, onCreateStory, onDeleted, stories = [] }: Props) {
   const messages = useMapEventMessages(event.id, me.uid);
   const participants = useMapEventParticipants(event.id, me);
   const moderators = useMapEventModerators(event.id);
@@ -140,6 +150,8 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
+  const [pendingImagePath, setPendingImagePath] = useState('');
+  const [pendingMediaType, setPendingMediaType] = useState<'image' | 'video'>('image');
   const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [error, setError] = useState('');
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
@@ -152,10 +164,27 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const [gpsOpen, setGpsOpen] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [coverPreviewOpen, setCoverPreviewOpen] = useState(false);
+  const [coverOpen, setCoverOpen] = useState(false);
+  const [storyViewerOpen, setStoryViewerOpen] = useState(false);
+  const [selectedStoryId, setSelectedStoryId] = useState('');
+  const [storyProgressKey, setStoryProgressKey] = useState(0);
+  const [storyProgressSeconds, setStoryProgressSeconds] = useState(7);
+  const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(() => {
+    const saved = window.localStorage.getItem(`raddo:viewed-map-stories:${me.uid}`);
+    if (!saved) return new Set();
+    try {
+      return new Set(JSON.parse(saved) as string[]);
+    } catch {
+      return new Set();
+    }
+  });
   const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [requestActionUid, setRequestActionUid] = useState('');
   const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
+  const messageEndRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
 
   const allMessages = useMemo(() => {
@@ -176,6 +205,33 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   );
   const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do chat';
   const expiresAt = new Date(Date.parse(event.createdAt) + 24 * 60 * 60 * 1000);
+  const orderedStories = useMemo(() => stories.slice().sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)), [stories]);
+  const storyGroups = useMemo(() => {
+    const grouped = new Map<string, MapEventStory[]>();
+    orderedStories.forEach((story) => {
+      grouped.set(story.creatorUid, [...(grouped.get(story.creatorUid) ?? []), story]);
+    });
+    return [...grouped.entries()]
+      .map(([creatorUid, groupStories]) => ({
+        creatorUid,
+        latestStory: groupStories[groupStories.length - 1],
+        stories: groupStories,
+      }))
+      .sort((a, b) => Date.parse(b.latestStory.createdAt) - Date.parse(a.latestStory.createdAt));
+  }, [orderedStories]);
+  const latestStory = orderedStories[orderedStories.length - 1];
+  const selectedStory = orderedStories.find((story) => story.id === selectedStoryId) ?? latestStory ?? null;
+  const storyViewerStories = useMemo(
+    () => (selectedStory ? storyGroups.find((group) => group.creatorUid === selectedStory.creatorUid)?.stories ?? [] : orderedStories),
+    [orderedStories, selectedStory, storyGroups],
+  );
+
+  function scrollMessagesToBottom(behavior: ScrollBehavior = 'auto') {
+    const area = messageAreaRef.current;
+    if (!area) return;
+    area.scrollTo({ top: area.scrollHeight, behavior });
+    messageEndRef.current?.scrollIntoView({ block: 'end', behavior });
+  }
 
   useEffect(() => {
     setHandledJoinRequestIds(new Set());
@@ -201,6 +257,12 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
         return;
       }
 
+      if (storyViewerOpen) {
+        backEvent.preventDefault();
+        setStoryViewerOpen(false);
+        return;
+      }
+
       if (reportOpen) {
         backEvent.preventDefault();
         setReportOpen(false);
@@ -222,6 +284,24 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
       if (headerMenuOpen) {
         backEvent.preventDefault();
         setHeaderMenuOpen(false);
+        return;
+      }
+
+      if (coverOpen) {
+        backEvent.preventDefault();
+        setCoverOpen(false);
+        return;
+      }
+
+      if (infoOpen) {
+        backEvent.preventDefault();
+        setInfoOpen(false);
+        return;
+      }
+
+      if (coverPreviewOpen) {
+        backEvent.preventDefault();
+        setCoverPreviewOpen(false);
         return;
       }
 
@@ -254,7 +334,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     return () => {
       window.removeEventListener('raddo:android-back', handleBack, { capture: true });
     };
-  }, [actionProfile, dialog, gpsOpen, headerMenuOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, reportProfile, uploadingImage]);
+  }, [actionProfile, coverOpen, coverPreviewOpen, dialog, gpsOpen, headerMenuOpen, infoOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, reportProfile, storyViewerOpen, uploadingImage]);
 
   useEffect(() => {
     if (!headerMenuOpen) return undefined;
@@ -273,10 +353,20 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   }, [headerMenuOpen]);
 
   useEffect(() => {
-    const area = messageAreaRef.current;
-    if (!area || !shouldStickToBottomRef.current) return;
+    shouldStickToBottomRef.current = true;
+    scrollMessagesToBottom();
+    const frame = window.requestAnimationFrame(() => scrollMessagesToBottom());
+    const timers = [120, 400, 900].map((delay) => window.setTimeout(() => scrollMessagesToBottom(), delay));
+    return () => {
+      window.cancelAnimationFrame(frame);
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [event.id]);
 
-    area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
+  useEffect(() => {
+    if (!shouldStickToBottomRef.current) return;
+
+    scrollMessagesToBottom('smooth');
   }, [allMessages.length]);
 
   function handleMessageAreaScroll() {
@@ -285,6 +375,109 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     const distanceFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
     shouldStickToBottomRef.current = distanceFromBottom < 80;
   }
+
+  function markStoryViewed(storyId: string) {
+    setViewedStoryIds((current) => {
+      const next = new Set(current);
+      next.add(storyId);
+      window.localStorage.setItem(`raddo:viewed-map-stories:${me.uid}`, JSON.stringify([...next].slice(-200)));
+      return next;
+    });
+  }
+
+  function openStory(storyId: string) {
+    setSelectedStoryId(storyId);
+    markStoryViewed(storyId);
+    const story = orderedStories.find((item) => item.id === storyId);
+    if (story) void markMapEventStoryViewed(story, me.uid);
+    setStoryProgressSeconds(7);
+    setStoryProgressKey((current) => current + 1);
+    setStoryViewerOpen(true);
+  }
+
+  function handleStoryStripPointerDown(event: { button: number; clientX: number; currentTarget: HTMLDivElement }) {
+    if (event.button !== 0) return;
+    const strip = event.currentTarget;
+    const startX = event.clientX;
+    const startScrollLeft = strip.scrollLeft;
+    let moved = false;
+
+    function handlePointerMove(moveEvent: globalThis.PointerEvent) {
+      const distance = moveEvent.clientX - startX;
+      if (Math.abs(distance) > 4) moved = true;
+      strip.scrollLeft = startScrollLeft - distance;
+    }
+
+    function finishDrag() {
+      strip.dataset.dragging = moved ? 'true' : 'false';
+      window.setTimeout(() => {
+        delete strip.dataset.dragging;
+      }, 0);
+      window.removeEventListener('pointermove', handlePointerMove);
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', finishDrag, { once: true });
+  }
+
+  function showNextStory() {
+    if (!selectedStory) return;
+    const currentIndex = storyViewerStories.findIndex((story) => story.id === selectedStory.id);
+    const nextStory = storyViewerStories[currentIndex + 1];
+    if (!nextStory) {
+      setStoryViewerOpen(false);
+      return;
+    }
+    openStory(nextStory.id);
+  }
+
+  function showPreviousStory() {
+    if (!selectedStory) return;
+    const currentIndex = storyViewerStories.findIndex((story) => story.id === selectedStory.id);
+    const previousStory = storyViewerStories[currentIndex - 1];
+    if (!previousStory) {
+      setStoryProgressKey((current) => current + 1);
+      return;
+    }
+    openStory(previousStory.id);
+  }
+
+  async function handleReportStory(story: MapEventStory) {
+    try {
+      await reportMapEventStory(story, event, me.uid);
+      setError('Story denunciado para revisão.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui denunciar o story.');
+    }
+  }
+
+  async function handleLikeStory(story: MapEventStory) {
+    try {
+      await toggleMapEventStoryLike(story, me.uid);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui curtir o story.');
+    }
+  }
+
+  async function handleReplyStory(story: MapEventStory) {
+    const match = matches.find((item) => item.users.includes(me.uid) && item.users.includes(story.creatorUid));
+    if (!match) return;
+    const message = window.prompt('Mensagem para responder ao story');
+    if (!message?.trim()) return;
+    try {
+      await sendMessage(match.id, me.uid, `Story: ${message.trim()}`, me.displayName);
+      setError('Mensagem enviada.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+    }
+  }
+
+  useEffect(() => {
+    if (!storyViewerOpen || !selectedStory) return undefined;
+    if (selectedStory.mediaType === 'video') return undefined;
+    const timer = window.setTimeout(showNextStory, 7000);
+    return () => window.clearTimeout(timer);
+  }, [selectedStory?.id, storyProgressKey, storyViewerOpen, storyViewerStories]);
 
   async function handleSubmit(submitEvent: FormEvent) {
     submitEvent.preventDefault();
@@ -329,21 +522,24 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     const file = eventInput.target.files?.[0];
     eventInput.target.value = '';
     if (!file) return;
+    const mediaType = 'image';
 
     setUploadingImage(true);
     setError('');
     try {
-      const imageURL = await uploadChatImage({
+      const media = await uploadChatMedia({
         allowRejected: event.accessMode !== 'open',
         contextId: event.id,
         context: 'map-chat-image',
         file,
         ownerUid: me.uid,
       });
-      setPendingImageURL(imageURL);
+      setPendingImageURL(media.url);
+      setPendingImagePath(media.path);
+      setPendingMediaType(mediaType);
       setPendingImageViewOnce(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui enviar a imagem.');
+      setError(err instanceof Error ? err.message : 'Não consegui enviar a mídia.');
     } finally {
       setUploadingImage(false);
     }
@@ -352,6 +548,8 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   function cancelPendingImage() {
     if (uploadingImage || sendingImage) return;
     setPendingImageURL('');
+    setPendingImagePath('');
+    setPendingMediaType('image');
     setPendingImageViewOnce(false);
   }
 
@@ -359,17 +557,22 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
     if (!pendingImageURL) return;
 
     const imageURL = pendingImageURL;
+    const imagePath = pendingImagePath;
+    const mediaType = pendingMediaType;
     const viewOnce = pendingImageViewOnce;
     setPendingImageURL('');
+    setPendingImagePath('');
+    setPendingMediaType('image');
     setPendingImageViewOnce(false);
     setSendingImage(true);
     try {
+      const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
       await sendMapEventMessage({
         eventId: event.id,
-        image: { imageURL, viewOnce },
+        image: { imagePath, imageURL, viewOnce },
         senderUid: me.uid,
         senderName: me.displayName,
-        text: 'Imagem',
+        text: mediaText,
       });
       shouldStickToBottomRef.current = true;
       setOptimisticMessages((current) => [
@@ -379,10 +582,10 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           eventId: event.id,
           senderUid: me.uid,
           senderName: me.displayName,
-          text: 'Imagem',
+          text: mediaText,
           messageType: 'image',
           imageURL,
-          imagePath: '',
+          imagePath,
           viewOnce,
           viewedBy: [],
           createdAt: new Date().toISOString(),
@@ -643,9 +846,157 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
   return (
     <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-[calc(env(safe-area-inset-top)+14px)] backdrop-blur-sm sm:place-items-center sm:p-6">
       {gpsOpen && <ExternalGpsModal location={event.location} onClose={() => setGpsOpen(false)} title={event.title} />}
+      {infoOpen && (
+        <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold">{event.title}</h2>
+                <p className="mt-1 text-xs text-slate-400">Informações do chat</p>
+              </div>
+              <button
+                aria-label="Fechar informações"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8"
+                onClick={() => setInfoOpen(false)}
+                type="button"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-3 text-sm">
+              <div className="rounded-lg bg-white/8 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Criado por</p>
+                <p className="mt-1 text-slate-100">{creatorName}</p>
+              </div>
+              <div className="rounded-lg bg-white/8 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Descrição</p>
+                <p className="mt-1 whitespace-pre-wrap text-slate-100">{event.description || 'Chat local do mapa'}</p>
+              </div>
+              <div className="rounded-lg bg-white/8 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Expiração</p>
+                <p className="mt-1 text-slate-100">
+                  {event.isPermanent
+                    ? 'Chat permanente'
+                    : expiresAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+      {storyViewerOpen && selectedStory && (
+        <div className="fixed inset-0 z-[1700] bg-black/90 backdrop-blur-sm">
+          <section className="relative flex h-full w-full flex-col bg-[#07111f] text-white shadow-2xl">
+            <div className="grid grid-flow-col gap-1 bg-black/40 p-2">
+              {storyViewerStories.map((story) => (
+                <div className="h-1 overflow-hidden rounded-full bg-white/15" key={story.id}>
+                  {Date.parse(story.createdAt) < Date.parse(selectedStory.createdAt) ? (
+                    <div className="h-full w-full bg-white/80" />
+                  ) : story.id === selectedStory.id ? (
+                    <div
+                      className="h-full bg-[#ff3f68]"
+                      key={`${selectedStory.id}-${storyProgressKey}`}
+                      style={{ animation: `raddoStoryProgress ${storyProgressSeconds}s linear forwards` }}
+                    />
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{event.title}</p>
+                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · expira em 24h</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryViewerOpen(false)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {selectedStory.imageURL && selectedStory.mediaType === 'video' ? (
+              <video
+                autoPlay
+                className="min-h-0 flex-1 bg-black object-contain"
+                muted
+                onEnded={showNextStory}
+                onLoadedMetadata={(event) => {
+                  const duration = event.currentTarget.duration;
+                  if (Number.isFinite(duration) && duration > 0) {
+                    setStoryProgressSeconds(Math.max(1, duration));
+                    setStoryProgressKey((current) => current + 1);
+                  }
+                }}
+                playsInline
+                src={selectedStory.imageURL}
+              />
+            ) : selectedStory.imageURL ? (
+              <img alt="" className="min-h-0 flex-1 bg-black object-contain" src={selectedStory.imageURL} />
+            ) : (
+              <div className="grid min-h-0 flex-1 place-items-center bg-slate-950 p-6 text-center text-lg font-semibold">{selectedStory.text}</div>
+            )}
+            {selectedStory.text && selectedStory.imageURL && <p className="p-4 text-sm text-slate-100">{selectedStory.text}</p>}
+            <button aria-label="Story anterior" className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent" onClick={showPreviousStory} type="button" />
+            <button aria-label="Próximo story" className="absolute bottom-24 right-0 top-14 z-10 w-1/2 bg-transparent" onClick={showNextStory} type="button" />
+            <div className="pointer-events-none absolute bottom-28 right-3 z-20 grid gap-2">
+              {selectedStory.creatorUid !== me.uid && (
+                <button
+                  aria-label="Curtir story"
+                  className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
+                  onClick={() => handleLikeStory(selectedStory)}
+                  type="button"
+                >
+                  <Heart className={`h-5 w-5 ${selectedStory.likedBy.includes(me.uid) ? 'fill-[#ff3f68] text-[#ff3f68]' : 'text-white'}`} />
+                </button>
+              )}
+              {selectedStory.creatorUid === me.uid && selectedStory.likedBy.length > 0 && (
+                <button
+                  className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
+                  onClick={() => window.alert(`Curtidas:\n${selectedStory.likedBy.join('\n') || 'Nenhuma curtida ainda.'}`)}
+                  type="button"
+                >
+                  <Heart className="h-4 w-4 fill-[#ff3f68] text-[#ff3f68]" />
+                  {selectedStory.likedBy.length}
+                </button>
+              )}
+              {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.length > 0 && (
+                <button
+                  className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
+                  onClick={() => window.alert(`Visualizaram:\n${selectedStory.viewedBy.join('\n') || 'Ninguém visualizou ainda.'}`)}
+                  type="button"
+                >
+                  <Eye className="h-4 w-4 text-white" />
+                  {selectedStory.viewedBy.length}
+                </button>
+              )}
+              {selectedStory.creatorUid !== me.uid && matches.some((item) => item.users.includes(me.uid) && item.users.includes(selectedStory.creatorUid)) && (
+                <button
+                  aria-label="Enviar mensagem"
+                  className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
+                  onClick={() => handleReplyStory(selectedStory)}
+                  type="button"
+                >
+                  <MessageCircle className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-3 pb-[calc(var(--raddo-bottom-safe)+12px)]">
+              <button className="h-10 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100" onClick={() => setStoryViewerOpen(false)} type="button">
+                Fechar
+              </button>
+              <button
+                aria-label="Denunciar story"
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-300/20 bg-rose-300/10 text-sm font-semibold text-rose-100"
+                onClick={() => handleReportStory(selectedStory)}
+                type="button"
+              >
+                <Megaphone className="h-4 w-4" />
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {(uploadingImage || pendingImageURL) && (
         <PendingChatImageModal
           imageURL={pendingImageURL}
+          mediaType={pendingMediaType}
           onCancel={cancelPendingImage}
           onSend={confirmPendingImage}
           sending={sendingImage}
@@ -654,19 +1005,46 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
           viewOnce={pendingImageViewOnce}
         />
       )}
+      {coverPreviewOpen && event.coverURL && (
+        <div className="fixed inset-0 z-[1700] grid place-items-center bg-black/90 p-4 backdrop-blur-sm">
+          <button
+            aria-label="Fechar capa"
+            className="absolute right-4 top-[calc(env(safe-area-inset-top)+16px)] grid h-11 w-11 place-items-center rounded-full bg-white/10 text-white"
+            onClick={() => setCoverPreviewOpen(false)}
+            type="button"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img alt="" className="max-h-[86dvh] max-w-full rounded-lg object-contain shadow-2xl" src={event.coverURL} />
+        </div>
+      )}
       <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] max-h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
         <header className="flex items-start justify-between gap-3 border-b border-white/10 p-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold">{event.title}</h1>
-            <p className="mt-1 text-xs font-semibold text-teal-200">Criado por {creatorName}</p>
-            <p className="mt-1 text-sm text-slate-300">{event.description || 'Chat local do mapa'}</p>
-            {!event.isPermanent && (
-              <p className="mt-1 text-xs text-teal-200">
-                Expira {expiresAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-              </p>
+          <div className="flex min-w-0 items-center gap-3">
+            {event.coverURL && (
+              <button
+                aria-label="Abrir capa do chat"
+                className="grid h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/8"
+                onClick={() => setCoverPreviewOpen(true)}
+                type="button"
+              >
+                <img alt="" className="h-full w-full object-cover" src={event.coverURL} />
+              </button>
             )}
+            <h1 className="truncate text-xl font-semibold">{event.title}</h1>
           </div>
           <div className="relative flex shrink-0 gap-2" ref={headerMenuRef}>
+            <button
+              aria-label="Pessoas no chat"
+              className="relative grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
+              onClick={() => setManagementView('people')}
+              type="button"
+            >
+              <Users className="h-5 w-5 text-[#ff3f68]" />
+              <span className="absolute -bottom-1 -right-1 grid h-5 min-w-5 place-items-center rounded-full bg-[#07111f] px-1 text-[10px] font-semibold text-slate-100 ring-1 ring-white/10">
+                {participants.length}
+              </span>
+            </button>
             <button
               aria-label="Opções do chat"
               className="grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
@@ -677,6 +1055,17 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             </button>
             {headerMenuOpen && (
               <div className="absolute right-12 top-0 z-10 w-56 overflow-hidden rounded-xl border border-white/10 bg-[#07111f] p-1 text-sm text-white shadow-2xl">
+                <button
+                  className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                  onClick={() => {
+                    setHeaderMenuOpen(false);
+                    setInfoOpen(true);
+                  }}
+                  type="button"
+                >
+                  <Info className="h-4 w-4 text-teal-300" />
+                  Informações
+                </button>
                 <button
                   className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
                   onClick={() => {
@@ -716,7 +1105,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                 )}
                 {isOwner && (
                   <button
-                    className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold text-rose-100 hover:bg-rose-400/10"
+                    className="raddo-delete-chat-button flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold text-white hover:bg-rose-400/10"
                     onClick={() => {
                       setHeaderMenuOpen(false);
                       handleDelete();
@@ -837,17 +1226,52 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
         )}
 
         <section className="border-b border-white/10 p-3">
-          <button
-            className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg bg-white/8 px-3 py-2 text-left text-sm font-semibold"
-            onClick={() => setManagementView('people')}
-            type="button"
+          <div
+            className="raddo-story-strip mb-2 flex gap-2 overflow-x-auto scrollbar-hidden"
+            onClickCapture={(event) => {
+              if ((event.currentTarget as HTMLDivElement).dataset.dragging === 'true') {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+            onPointerDown={handleStoryStripPointerDown}
           >
-            <span className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-teal-300" />
-              Pessoas no chat ({participants.length})
-            </span>
-            <span className="text-xs text-teal-300">Ver lista</span>
-          </button>
+            {onCreateStory && (
+              <button
+                className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-dashed border-[#ff3f68]/70 bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
+                onClick={() => onCreateStory(event)}
+                type="button"
+              >
+                <Plus className="raddo-story-plus-icon h-4 w-4 text-white" />
+                Story
+              </button>
+            )}
+            {storyGroups.length === 0 && (
+              <span className="rounded-lg bg-white/8 px-3 py-2 text-xs text-slate-300">Nenhum story neste chat.</span>
+            )}
+            {storyGroups.map((group) => {
+              const allViewed = group.stories.every((story) => viewedStoryIds.has(story.id));
+              const story = group.latestStory;
+              return (
+              <button
+                className={`relative grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border bg-slate-950 ${
+                  allViewed ? 'border-slate-700' : 'border-[#ff3f68]/70'
+                }`}
+                key={group.creatorUid}
+                onClick={() => openStory(story.id)}
+                type="button"
+              >
+                {story.imageURL && story.mediaType === 'video' ? (
+                  <Video className="h-5 w-5 text-white" />
+                ) : story.imageURL ? (
+                  <img alt="" className="h-full w-full object-cover" src={story.imageURL} />
+                ) : (
+                  <span className="px-1 text-center text-[10px] text-slate-100">{story.text || 'Story'}</span>
+                )}
+              </button>
+              );
+            })}
+          </div>
           {canManage && (
             <div className="grid grid-cols-3 gap-2 text-xs">
               <button
@@ -876,7 +1300,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
         </section>
 
         <div
-          className="min-h-64 flex-1 space-y-3 overflow-auto p-4"
+          className="chat-message-area scrollbar-hidden min-h-64 flex-1 space-y-3 overflow-auto p-4"
           onScroll={handleMessageAreaScroll}
           ref={messageAreaRef}
         >
@@ -886,13 +1310,20 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
             const canEditMessage = mine && message.messageType === 'text';
             const canDeleteMessage = mine || canManage;
             const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL);
+            const mediaType = isVideoMedia(message.imageURL, message.text) ? 'video' : 'image';
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
             const downloadFilename = message.imagePath.split('/').pop() || `raddo-imagem-${message.id}.jpg`;
             const senderProfile = message.senderUid === me.uid ? me : participants.find((profile) => profile.uid === message.senderUid);
             return (
               <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`} key={message.id}>
-                <div className={`relative max-w-[82%] rounded-lg px-3 py-2 text-sm ${mine ? 'bg-teal-300 text-slate-950' : 'bg-slate-900 text-slate-100'}`}>
+                <div
+                  className={`relative max-w-[82%] rounded-lg px-3 py-2 text-sm shadow-sm ${
+                    mine
+                      ? 'chat-bubble-mine rounded-br-sm bg-teal-300 text-slate-950'
+                      : 'chat-bubble-other rounded-bl-sm bg-slate-900 text-slate-100'
+                  }`}
+                >
                   <MessageActionsMenu
                     canCopy={!isImageMessage || !message.viewOnce}
                     canDelete={canDeleteMessage}
@@ -916,8 +1347,13 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                     {!mine && <p className="mb-1 text-xs font-semibold text-teal-200">{message.senderName}</p>}
                     {message.messageType === 'image' && message.imageURL ? (
                       <ChatImageMessage
+                        cacheKey={message.imagePath || message.imageURL}
                         imageURL={message.imageURL}
+                        mediaType={mediaType}
                         mine={mine}
+                        onLoaded={() => {
+                          if (shouldStickToBottomRef.current) scrollMessagesToBottom();
+                        }}
                         onViewed={() => markMapEventMessageImageViewed(message, me.uid)}
                         viewed={message.viewedBy.includes(me.uid)}
                         viewedStorageKey={`raddo:view-once:map:${me.uid}:${message.imageURL || message.id}`}
@@ -931,6 +1367,7 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
               </div>
             );
           })}
+          <div ref={messageEndRef} />
         </div>
 
         {error && <p className="mx-3 rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{error}</p>}
@@ -987,11 +1424,11 @@ export default function MapEventChat({ event, me, onClose, onDeleted }: Props) {
                           {!isMe && (
                             <button
                               aria-label={`Denunciar ${profile.displayName}`}
-                              className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
+                              className="raddo-report-person-button grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
                               onClick={() => handleReportProfile(profile)}
                               type="button"
                             >
-                              <Megaphone className="h-5 w-5" />
+                              <Megaphone className="h-5 w-5 text-amber-100" />
                             </button>
                           )}
                           {!isMe && canManage && event.creatorUid !== profile.uid && (

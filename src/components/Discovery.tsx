@@ -17,6 +17,7 @@ import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
 import { showRewardedVideoAd } from '../adMob';
 import ProfilePreview from './ProfilePreview';
 import { matchesGenderPreferences, profileQualityScore } from '../hooks/useNearbyProfiles';
+import { preloadImages, profileCoverUrl } from '../imagePreload';
 
 type Props = {
   me: UserProfile;
@@ -86,6 +87,10 @@ export default function Discovery({ me, profiles }: Props) {
   const crossedTotalPages = Math.max(1, Math.ceil(crossedProfiles.length / crossedPageSize));
   const safeCrossedPage = Math.min(crossedPage, crossedTotalPages - 1);
   const pagedCrossedProfiles = crossedProfiles.slice(safeCrossedPage * crossedPageSize, (safeCrossedPage + 1) * crossedPageSize);
+
+  useEffect(() => {
+    preloadImages(queue.slice(0, 12).map(profileCoverUrl));
+  }, [queue]);
 
   useEffect(() => {
     const handleBack = (event: Event) => {

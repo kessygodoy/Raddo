@@ -4,6 +4,7 @@ import { demoLikedBy, demoMatches, demoProfiles, isDemoMode } from '../demoData'
 import type { Match, Message, UserProfile } from '../types';
 import { distanceKm } from '../utils/geo';
 import { signedProfilePhotoUrl, withSignedProfilePhotos } from '../storageImages';
+import { deleteCachedChatMedia, deleteCachedChatMediaKeys } from '../chatMediaCache';
 
 type MatchRow = {
   id: string;
@@ -95,7 +96,32 @@ function rowToMessage(row: MessageRow): Message {
 
 async function withSignedMessageImage(message: Message) {
   if (message.messageType !== 'image' || !message.imageURL) return message;
-  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL) };
+  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL, { encryptedCache: false }) };
+}
+
+function chatMessageCacheKey(message: Message) {
+  return message.messageType === 'image' && !message.viewOnce ? message.imagePath || message.imageURL : '';
+}
+
+function messagesCacheKey(matchId: string) {
+  return `raddo-match-messages-cache:${matchId}`;
+}
+
+function readCachedMessages(matchId: string) {
+  try {
+    const saved = window.localStorage.getItem(messagesCacheKey(matchId));
+    return saved ? JSON.parse(saved) as Message[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedMessages(matchId: string, messages: Message[]) {
+  try {
+    window.localStorage.setItem(messagesCacheKey(matchId), JSON.stringify(messages.slice(-250)));
+  } catch {
+    // Cache is best-effort only.
+  }
 }
 
 function rowToProfile(row: ProfileRow): UserProfile {
@@ -138,6 +164,25 @@ async function fetchMatches(uid: string) {
   return ((data ?? []) as MatchRow[]).filter((row) => row.users.includes(uid)).map(rowToMatch);
 }
 
+function matchesCacheKey(uid: string) {
+  return `raddo-connections-matches:${uid}`;
+}
+
+function readCachedMatches(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(matchesCacheKey(uid));
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as Match[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedMatches(uid: string, matches: Match[]) {
+  window.localStorage.setItem(matchesCacheKey(uid), JSON.stringify(matches.slice(0, 100)));
+}
+
 export function useMatches(uid?: string) {
   const [matches, setMatches] = useState<Match[]>([]);
   const lastLoadedCountRef = useRef(0);
@@ -155,6 +200,11 @@ export function useMatches(uid?: string) {
 
     let active = true;
     const currentUid = uid;
+    const cachedMatches = readCachedMatches(currentUid);
+    if (cachedMatches.length > 0) {
+      lastLoadedCountRef.current = cachedMatches.length;
+      setMatches(cachedMatches);
+    }
 
     async function loadMatches() {
       try {
@@ -167,6 +217,7 @@ export function useMatches(uid?: string) {
         if (active) {
           lastLoadedCountRef.current = nextMatches.length;
           setMatches(nextMatches);
+          writeCachedMatches(currentUid, nextMatches);
         }
       } catch (error) {
         console.error('Não consegui carregar matches', error);
@@ -249,6 +300,9 @@ export function useMessages(matchId?: string) {
     }
 
     let active = true;
+    const currentMatchId = matchId;
+    const cachedMessages = readCachedMessages(currentMatchId);
+    if (cachedMessages.length > 0) setMessages(cachedMessages);
 
     async function loadMessages() {
       const { data, error } = await supabase
@@ -263,7 +317,14 @@ export function useMessages(matchId?: string) {
       }
 
       const nextMessages = await Promise.all(((data ?? []) as MessageRow[]).map((row) => withSignedMessageImage(rowToMessage(row))));
-      if (active) setMessages(nextMessages);
+      if (active) {
+        setMessages((current) => {
+          const nextIds = new Set(nextMessages.map((message) => message.id));
+          void deleteCachedChatMediaKeys(current.filter((message) => !nextIds.has(message.id)).map(chatMessageCacheKey));
+          writeCachedMessages(currentMatchId, nextMessages);
+          return nextMessages;
+        });
+      }
     }
 
     loadMessages();
@@ -274,7 +335,9 @@ export function useMessages(matchId?: string) {
       setMessages((current) => {
         const byId = new Map(current.map((message) => [message.id, message]));
         byId.set(signedMessage.id, signedMessage);
-        return [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+        const nextMessages = [...byId.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+        writeCachedMessages(currentMatchId, nextMessages);
+        return nextMessages;
       });
       });
     }
@@ -289,11 +352,23 @@ export function useMessages(matchId?: string) {
             upsertMessage(payload.new as MessageRow);
             return;
           }
+          if (payload.eventType === 'DELETE') {
+            const deletedId = (payload.old as Partial<MessageRow>)?.id;
+            if (deletedId) {
+              setMessages((current) => {
+                const deleted = current.find((message) => message.id === deletedId);
+                if (deleted) void deleteCachedChatMedia(chatMessageCacheKey(deleted));
+                const nextMessages = current.filter((message) => message.id !== deletedId);
+                writeCachedMessages(currentMatchId, nextMessages);
+                return nextMessages;
+              });
+            }
+          }
           loadMessages();
         },
       )
       .subscribe();
-    const refreshTimer = window.setInterval(loadMessages, 2500);
+    const refreshTimer = window.setInterval(loadMessages, 15000);
     const handleFocus = () => loadMessages();
     const handleVisibilityChange = () => {
       if (!document.hidden) loadMessages();
@@ -1028,7 +1103,6 @@ export async function sendMessage(
   const cleanText = text.trim() || (image ? 'Imagem' : '');
   if (!cleanText) return;
 
-  const now = new Date().toISOString();
   let messageId = '';
   const rpcResult = await supabase.rpc('send_match_message', {
     target_match_id: matchId,
@@ -1039,46 +1113,13 @@ export async function sendMessage(
     view_once_value: image?.viewOnce ?? false,
   });
 
-  const missingRpc =
-    rpcResult.error &&
-    (rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('send_match_message'));
-
-  if (rpcResult.error && !missingRpc) {
+  if (rpcResult.error) {
     throw new Error(rpcResult.error.message || 'Nao consegui enviar a mensagem.');
   }
 
-  if (missingRpc) {
-    const { data: messageData, error: messageError } = await supabase
-      .from('messages')
-      .insert({
-        sender_uid: senderUid,
-        text: cleanText,
-        match_id: matchId,
-        message_type: image ? 'image' : 'text',
-        image_url: image?.imageURL ?? '',
-        image_path: image?.imagePath ?? '',
-        view_once: image?.viewOnce ?? false,
-        viewed_by: [],
-        created_at: now,
-      })
-      .select('id')
-      .single<{ id: string }>();
-
-    if (messageError) throw new Error(messageError.message || 'Nao consegui enviar a mensagem.');
-    messageId = messageData?.id ?? '';
-
-    await supabase
-      .from('matches')
-      .update({
-        last_message: cleanText,
-        last_message_at: now,
-      })
-      .eq('id', matchId);
-  } else {
-    const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
-    const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-    messageId = row?.id ?? '';
-  }
+  const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
+  const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  messageId = row?.id ?? '';
 
   const { error: pushError } = await supabase.functions.invoke('send-match-push', {
     body: {
@@ -1096,29 +1137,22 @@ export async function editMessage(message: Message, viewerUid: string, nextText:
   const cleanText = nextText.trim();
   if (isDemoMode || message.senderUid !== viewerUid || message.messageType !== 'text' || !cleanText) return;
 
-  const { error } = await supabase
-    .from('messages')
-    .update({ text: cleanText })
-    .eq('id', message.id)
-    .eq('sender_uid', viewerUid);
+  const { error } = await supabase.rpc('edit_match_message', {
+    next_text: cleanText,
+    target_message_id: message.id,
+  });
   if (error) throw new Error(error.message || 'Não consegui editar a mensagem.');
 }
 
 export async function deleteMessage(message: Message, viewerUid: string) {
   if (isDemoMode || message.senderUid !== viewerUid) return;
+  void deleteCachedChatMedia(chatMessageCacheKey(message));
 
   const rpcResult = await supabase.rpc('delete_match_message', {
     target_message_id: message.id,
   });
 
-  if (!rpcResult.error) return;
-
-  const missingFunction =
-    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('delete_match_message');
-  if (!missingFunction) throw new Error(rpcResult.error.message || 'Nao consegui excluir a mensagem.');
-
-  const { error } = await supabase.from('messages').delete().eq('id', message.id).eq('sender_uid', viewerUid);
-  if (error) throw new Error(error.message || 'Não consegui excluir a mensagem.');
+  if (rpcResult.error) throw new Error(rpcResult.error.message || 'Nao consegui excluir a mensagem.');
 }
 
 export async function markMessageImageViewed(message: Message, viewerUid: string) {
@@ -1127,14 +1161,5 @@ export async function markMessageImageViewed(message: Message, viewerUid: string
   const rpcResult = await supabase.rpc('mark_match_image_viewed', {
     target_message_id: message.id,
   });
-
-  if (!rpcResult.error) return;
-
-  const missingFunction =
-    rpcResult.error.code === 'PGRST202' || rpcResult.error.message.toLowerCase().includes('mark_match_image_viewed');
-  if (!missingFunction) throw new Error(rpcResult.error.message || 'Não consegui marcar a imagem como vista.');
-
-  const nextViewedBy = [...new Set([...message.viewedBy, viewerUid])];
-  const { error } = await supabase.from('messages').update({ viewed_by: nextViewedBy }).eq('id', message.id);
-  if (error) throw new Error(error.message || 'Não consegui marcar a imagem como vista.');
+  if (rpcResult.error) throw new Error(rpcResult.error.message || 'Nao consegui marcar a imagem como vista.');
 }
