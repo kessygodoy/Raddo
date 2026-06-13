@@ -234,10 +234,17 @@ async function withSignedStoryImage(story: MapEventStory) {
   return { ...story, imageURL: await signedProfilePhotoUrl(story.imageURL) };
 }
 
-export function useMapEventStories(events: MapEvent[], me: UserProfile) {
+type MapStoryVisibilityOptions = {
+  includeOpenEventStories?: boolean;
+  includeStandaloneStories?: boolean;
+};
+
+export function useMapEventStories(events: MapEvent[], me: UserProfile, options: MapStoryVisibilityOptions = {}) {
   const [stories, setStories] = useState<MapEventStory[]>([]);
   const eventIdsKey = events.map((event) => event.id).sort().join(':');
   const eventIds = useMemo(() => (eventIdsKey ? eventIdsKey.split(':') : []), [eventIdsKey]);
+  const includeOpenEventStories = options.includeOpenEventStories ?? true;
+  const includeStandaloneStories = options.includeStandaloneStories ?? true;
 
   useEffect(() => {
     if (isDemoMode) {
@@ -254,8 +261,12 @@ export function useMapEventStories(events: MapEvent[], me: UserProfile) {
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false })
         .limit(80);
-      if (eventIds.length > 0) query = query.or(`event_id.is.null,event_id.in.(${eventIds.join(',')})`);
-      else query = query.is('event_id', null);
+      const storyFilters = [];
+      if (includeStandaloneStories) storyFilters.push('event_id.is.null');
+      if (includeOpenEventStories && eventIds.length > 0) storyFilters.push(`event_id.in.(${eventIds.join(',')})`);
+      if (storyFilters.length > 0) query = query.or(storyFilters.join(','));
+      else if (eventIds.length > 0) query = query.in('event_id', eventIds);
+      else query = query.is('event_id', null).eq('id', '00000000-0000-0000-0000-000000000000');
 
       const { data, error } = await query;
 
@@ -280,9 +291,15 @@ export function useMapEventStories(events: MapEvent[], me: UserProfile) {
       window.clearInterval(refreshTimer);
       supabase.removeChannel(channel);
     };
-  }, [eventIdsKey, me.uid]);
+  }, [eventIdsKey, includeOpenEventStories, includeStandaloneStories, me.uid]);
 
   return stories;
+}
+
+export async function deleteMapEventStory(storyId: string) {
+  if (isDemoMode || storyId.startsWith('local-story-')) return;
+  const { error } = await supabase.from('map_event_stories').delete().eq('id', storyId);
+  if (error) throw new Error(error.message || 'Não consegui apagar o story.');
 }
 
 export async function createMapEventStory(input: {
@@ -429,6 +446,7 @@ export function useMapEvents(me: UserProfile | null) {
 
     let active = true;
     const meUid = me.uid;
+    const currentLocation = me.location;
 
     async function loadCachedEvents() {
       const cachedRows = readCachedEventRows(meUid);
@@ -438,8 +456,12 @@ export function useMapEvents(me: UserProfile | null) {
     }
 
     async function loadEvents() {
-      const { data } = await supabase.from('map_events').select('*').order('created_at', { ascending: false });
-      const rows = (data ?? []) as EventRow[];
+      const { data, error } = await supabase.from('map_events').select('*').order('created_at', { ascending: false });
+      if (error) return;
+      const rows = ((data ?? []) as EventRow[]).filter((row) => {
+        if (!currentLocation || typeof row.lat !== 'number' || typeof row.lng !== 'number') return true;
+        return distanceKm(currentLocation, { lat: row.lat, lng: row.lng }) <= 50;
+      });
       writeCachedEventRows(meUid, rows);
       const nextEvents = await Promise.all(rows.map((row) => withSignedEventImages(rowToEvent(row))));
       if (active) setEvents(nextEvents);
@@ -452,26 +474,16 @@ export function useMapEvents(me: UserProfile | null) {
       .channel('map-events')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'map_events' }, loadEvents)
       .subscribe();
-    const refreshTimer = window.setInterval(loadEvents, 30000);
-    const handleFocus = () => loadEvents();
-    const handleVisibilityChange = () => {
-      if (!document.hidden) loadEvents();
-    };
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       active = false;
-      window.clearInterval(refreshTimer);
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       supabase.removeChannel(channel);
     };
   }, [me]);
 
   return useMemo(() => {
     if (!me?.location) return events;
-    return events.filter((event) => distanceKm(me.location!, event.location) <= Math.max(event.radiusKm, 500));
+    return events.filter((event) => distanceKm(me.location!, event.location) <= Math.max(event.radiusKm, 50));
   }, [events, me]);
 }
 
@@ -1221,6 +1233,59 @@ export async function isMapEventParticipant(eventId: string, userUid: string) {
   return (data ?? []).length > 0;
 }
 
+export async function isMapEventModerator(eventId: string, userUid: string) {
+  if (isDemoMode) return false;
+
+  const { data, error } = await supabase
+    .from('map_event_moderators')
+    .select('user_uid')
+    .eq('event_id', eventId)
+    .eq('user_uid', userUid)
+    .limit(1);
+  if (error) throw new Error(error.message);
+  return (data ?? []).length > 0;
+}
+
+type UpdateMapEventDetailsInput = {
+  accessMode: MapEvent['accessMode'];
+  description: string;
+  emoji: string;
+  isPermanent: boolean;
+  passwordHash: string;
+  radiusKm: number;
+  title: string;
+};
+
+export async function updateMapEventDetails(eventId: string, input: UpdateMapEventDetailsInput) {
+  if (isDemoMode) {
+    let updated: MapEvent | null = null;
+    demoEventsState = demoEventsState.map((event) => {
+      if (event.id !== eventId) return event;
+      updated = { ...event, ...input };
+      return updated;
+    });
+    if (!updated) throw new Error('Chat não encontrado.');
+    return updated;
+  }
+
+  const { data, error } = await supabase
+    .from('map_events')
+    .update({
+      access_mode: input.accessMode,
+      description: input.description,
+      emoji: input.emoji,
+      is_permanent: input.isPermanent,
+      password_hash: input.passwordHash,
+      radius_km: input.radiusKm,
+      title: input.title,
+    })
+    .eq('id', eventId)
+    .select('*')
+    .single<EventRow>();
+  if (error) throw new Error(error.message);
+  return withSignedEventImages(rowToEvent(data));
+}
+
 export async function updateMapEventPassword(eventId: string, passwordHash: string) {
   if (isDemoMode) {
     demoEventsState = demoEventsState.map((event) =>
@@ -1243,10 +1308,10 @@ export async function updateMapEventPassword(eventId: string, passwordHash: stri
   if (error) throw new Error(error.message);
 }
 
-async function loadRecentMapEventMessages(eventId: string, reportedUid?: string, limit = 5) {
+async function loadRecentMapEventMessages(eventId: string, reportedUid?: string, limit = 30) {
   let query = supabase
     .from('map_event_messages')
-    .select('id,sender_uid,sender_name,text,message_type,image_url,created_at')
+    .select('id,sender_uid,sender_name,text,message_type,image_url,image_path,created_at')
     .eq('event_id', eventId)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -1256,6 +1321,7 @@ async function loadRecentMapEventMessages(eventId: string, reportedUid?: string,
   return (data ?? []).map((message) => ({
     id: message.id,
     createdAt: message.created_at,
+    imagePath: message.image_path,
     imageUrl: message.image_url,
     messageType: message.message_type,
     senderName: message.sender_name,
@@ -1273,8 +1339,8 @@ export async function reportMapEvent(event: MapEvent, reporterUid: string, reaso
 
   const isUserReport = reportedUid !== event.creatorUid || reason === 'reported_chat_user';
   const recentMessages = isUserReport
-    ? await loadRecentMapEventMessages(event.id, reportedUid, 10)
-    : await loadRecentMapEventMessages(event.id, undefined, 20);
+    ? await loadRecentMapEventMessages(event.id, reportedUid, 30)
+    : await loadRecentMapEventMessages(event.id, undefined, 30);
   const { error } = await supabase.from('reports').insert({
     context_id: event.id,
     context_title: event.title,
@@ -1524,7 +1590,7 @@ export async function sendMapEventMessage(input: {
   const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
   messageId = row?.id ?? '';
 
-  const { error: pushError } = await supabase.functions.invoke('send-map-event-push', {
+  supabase.functions.invoke('send-map-event-push', {
     body: {
       eventId: input.eventId,
       messageId,
@@ -1532,8 +1598,9 @@ export async function sendMapEventMessage(input: {
       senderUid: input.senderUid,
       text: cleanText,
     },
+  }).then(({ error: pushError }) => {
+    if (pushError) console.warn('Nao consegui enviar push do chat local', pushError);
   });
-  if (pushError) console.warn('Nao consegui enviar push do chat local', pushError);
 }
 
 export async function markMapEventMessageImageViewed(message: MapEventMessage, viewerUid: string) {

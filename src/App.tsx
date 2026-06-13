@@ -16,6 +16,7 @@ import ProfileSettings from './components/ProfileSettings';
 import RadarMap from './components/RadarMap';
 import Onboarding from './components/Onboarding';
 import NotificationsPanel from './components/NotificationsPanel';
+import RaddoMark from './components/RaddoMark';
 import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
 import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
 import { installAndroidApkUpdate } from './androidUpdater';
@@ -35,6 +36,13 @@ const navItems = [
   { id: 'profile', labelKey: 'navProfile', icon: UserRound },
 ] as const;
 
+const LAST_VIEW_KEY = 'raddo:last-view';
+
+function savedAppView() {
+  const saved = window.localStorage.getItem(LAST_VIEW_KEY);
+  return saved === 'radar' || saved === 'discover' || saved === 'chat' || saved === 'profile' || saved === 'notifications' ? saved : 'radar';
+}
+
 function previousLoginKeys(uid: string, email?: string) {
   const normalizedEmail = email?.trim().toLowerCase();
   return [`raddo-known-login-uid:${uid}`, normalizedEmail ? `raddo-known-login-email:${normalizedEmail}` : ''].filter(Boolean);
@@ -49,7 +57,7 @@ function authDatesIndicatePreviousLogin(createdAt?: string, lastSignInAt?: strin
 }
 
 export default function App() {
-  const [view, setView] = useState<AppView>('radar');
+  const [view, setView] = useState<AppView>(() => savedAppView());
   const [viewHistory, setViewHistory] = useState<AppView[]>([]);
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
@@ -105,6 +113,10 @@ export default function App() {
       return nextView;
     });
   }
+
+  useEffect(() => {
+    window.localStorage.setItem(LAST_VIEW_KEY, view);
+  }, [view]);
 
   function goBackOneScreen() {
     setViewHistory((currentHistory) => {
@@ -529,10 +541,13 @@ export default function App() {
         </section>
       </main>
     );
-  } else if (loading || (user && profileLoading)) {
+  } else if (loading || (user && profileLoading && !profile)) {
     content = (
       <main className={`app-shell theme-${resolvedTheme} grid min-h-dvh place-items-center text-white`}>
-        <div className="h-11 w-11 animate-spin rounded-full border-2 border-teal-300 border-t-transparent" />
+        <div className="grid place-items-center gap-4">
+          <RaddoMark className="h-24 w-24 drop-shadow-[0_0_28px_rgba(255,63,104,0.28)]" />
+          <h1 className="text-3xl font-semibold tracking-normal">Raddo</h1>
+        </div>
       </main>
     );
   } else if (user && !profile) {

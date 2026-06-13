@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import { demoProfiles, isDemoMode } from '../demoData';
 import type { GenderFilter, GenderIdentity, PrivacyMode, Sexuality, UserProfile } from '../types';
-import { isWithinRadius } from '../utils/geo';
+import { distanceKm, isWithinRadius } from '../utils/geo';
 import { useBlockedProfileIds, useSeenProfileIds } from './useMatches';
 import { withSignedProfilePhotos } from '../storageImages';
 
@@ -53,7 +53,7 @@ function readCachedProfileRows(uid: string) {
 
 function writeCachedProfileRows(uid: string, rows: ProfileRow[]) {
   try {
-    window.localStorage.setItem(nearbyProfilesCacheKey(uid), JSON.stringify(rows.slice(0, 150)));
+    window.localStorage.setItem(nearbyProfilesCacheKey(uid), JSON.stringify(rows.slice(0, 30)));
   } catch {
     // Cache is best-effort only.
   }
@@ -143,6 +143,7 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
     if (!me) return undefined;
     let active = true;
     const currentUid = me.uid;
+    const currentLocation = me.location;
 
     async function loadCachedProfiles() {
       const cachedRows = readCachedProfileRows(currentUid);
@@ -152,8 +153,21 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
     }
 
     async function loadProfiles() {
-      const { data } = await supabase.from('profiles').select('*').neq('id', currentUid);
-      const rows = (data ?? []) as ProfileRow[];
+      const { data, error } = await supabase.from('profiles').select('*').neq('id', currentUid);
+      if (error) return;
+      const rows = ((data ?? []) as ProfileRow[])
+        .filter((row) => {
+          if (typeof row.lat !== 'number' || typeof row.lng !== 'number' || !currentLocation) return true;
+          return distanceKm(currentLocation, { lat: row.lat, lng: row.lng }) <= 50;
+        })
+        .sort((a, b) => {
+          if (!currentLocation) return 0;
+          const aDistance =
+            typeof a.lat === 'number' && typeof a.lng === 'number' ? distanceKm(currentLocation, { lat: a.lat, lng: a.lng }) : Number.MAX_SAFE_INTEGER;
+          const bDistance =
+            typeof b.lat === 'number' && typeof b.lng === 'number' ? distanceKm(currentLocation, { lat: b.lat, lng: b.lng }) : Number.MAX_SAFE_INTEGER;
+          return aDistance - bDistance;
+        });
       writeCachedProfileRows(currentUid, rows);
       const nextProfiles = await Promise.all(rows.map((row) => withSignedProfilePhotos(rowToProfile(row))));
       if (active) setProfiles(nextProfiles);
@@ -217,6 +231,14 @@ export function useNearbyProfiles(me: UserProfile | null, genderFilter: GenderFi
           !seenIds.has(profile.uid) &&
           matchesGenderPreferences(me, profile, genderFilter)
         );
-      });
+      })
+      .sort((a, b) => {
+        const qualityDiff = profileQualityScore(b) - profileQualityScore(a);
+        if (qualityDiff !== 0) return qualityDiff;
+        const aDistance = me.location && a.location ? distanceKm(me.location, a.location) : Number.MAX_SAFE_INTEGER;
+        const bDistance = me.location && b.location ? distanceKm(me.location, b.location) : Number.MAX_SAFE_INTEGER;
+        return aDistance - bDistance;
+      })
+      .slice(0, 30);
   }, [blockedIds, genderFilter, me, overrideProfileIds, profiles, seenIds]);
 }

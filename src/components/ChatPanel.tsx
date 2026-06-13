@@ -17,9 +17,10 @@ import {
 } from '../hooks/useMatches';
 import ProfilePreview from './ProfilePreview';
 import ChatImageMessage from './ChatImageMessage';
-import { uploadChatMedia } from '../chatImages';
+import { prepareChatImageFile, uploadChatMedia } from '../chatImages';
 import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
+import CachedMediaImage from './CachedMediaImage';
 
 function isVideoMedia(url: string, text?: string) {
   return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
@@ -69,6 +70,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
   const [pendingImagePath, setPendingImagePath] = useState('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingMediaType, setPendingMediaType] = useState<'image' | 'video'>('image');
   const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
@@ -86,6 +88,10 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   );
   const messages = useMessages(activeMatch?.id);
   const activeOtherUid = activeMatch?.users.find((uid) => uid !== currentUid) ?? activeMatch?.users[0] ?? '';
+  const activeCachedConversation = activeMatch ? cachedConversations[activeMatch.id] : undefined;
+  const activeProfile = profilesByUid[activeOtherUid];
+  const activeDisplayName = activeProfile?.displayName ?? activeCachedConversation?.displayName ?? 'Perfil salvo';
+  const activePhotoURL = activeProfile?.photos?.[0] || activeProfile?.photoURL || activeCachedConversation?.photoURL || '';
   const visibleMessages = useMemo(
     () => {
       const persistedKeys = new Set(
@@ -116,9 +122,10 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
         if (!otherUid) return;
         const profile = profilesByUid[otherUid];
         const previous = next[match.id];
+        const displayName = profile?.displayName ?? previous?.displayName ?? '';
         next[match.id] = {
           createdAt: match.createdAt,
-          displayName: profile?.displayName ?? previous?.displayName ?? 'Carregando perfil',
+          displayName: displayName === 'Carregando perfil' ? '' : displayName,
           lastMessage: match.lastMessage || previous?.lastMessage || 'Conversa iniciada',
           lastMessageAt: match.lastMessageAt ?? previous?.lastMessageAt ?? null,
           matchId: match.id,
@@ -258,30 +265,28 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     if (!file || !activeMatch) return;
     const mediaType = 'image';
 
+    setActionMessage('');
     setUploadingImage(true);
     try {
-      const media = await uploadChatMedia({
-        allowRejected: true,
-        contextId: activeMatch?.id,
-        context: 'match-chat-image',
-        file,
-        ownerUid: currentUid,
-      });
-      setPendingImageURL(media.url);
-      setPendingImagePath(media.path);
-      setPendingMediaType(mediaType);
-      setPendingImageViewOnce(false);
+      const preparedFile = await prepareChatImageFile(file);
+      setPendingImageURL(URL.createObjectURL(preparedFile));
+      setPendingImageFile(preparedFile);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Mídia bloqueada pela verificação de segurança.');
+      setActionMessage(error instanceof Error ? error.message : 'Não consegui preparar a imagem.');
+      return;
     } finally {
       setUploadingImage(false);
     }
+    setPendingImagePath('');
+    setPendingMediaType(mediaType);
+    setPendingImageViewOnce(false);
   }
 
   function cancelPendingImage() {
     if (uploadingImage || sendingImage) return;
     setPendingImageURL('');
     setPendingImagePath('');
+    setPendingImageFile(null);
     setPendingMediaType('image');
     setPendingImageViewOnce(false);
   }
@@ -289,42 +294,85 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   async function confirmPendingImage() {
     if (!activeMatch || !pendingImageURL) return;
 
-    const imageURL = pendingImageURL;
-    const imagePath = pendingImagePath;
+    const previewURL = pendingImageURL;
+    let imageURL = pendingImageURL;
+    let imagePath = pendingImagePath;
+    const uploadFile = pendingImageFile;
     const mediaType = pendingMediaType;
     const viewOnce = pendingImageViewOnce;
     setPendingImageURL('');
     setPendingImagePath('');
+    setPendingImageFile(null);
     setPendingMediaType('image');
     setPendingImageViewOnce(false);
     setSendingImage(true);
-    try {
-      const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
-      const nextMessage: Message = {
-        id: `local-image-${Date.now()}`,
-        senderUid: currentUid,
-        text: mediaText,
-        matchId: activeMatch.id,
-        messageType: 'image',
-        imageURL,
-        imagePath,
-        viewOnce,
-        viewedBy: [],
-        createdAt: new Date().toISOString(),
-      };
-      setOptimisticMessages((current) => [...current, nextMessage]);
-      shouldStickToBottomRef.current = true;
-      await sendMessage(activeMatch.id, currentUid, mediaText, currentProfile.displayName, {
-        imagePath,
-        imageURL,
-        viewOnce,
-      });
-    } catch (error) {
-      setOptimisticMessages((current) => current.filter((message) => !message.id.startsWith('local-image-')));
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a imagem.');
-    } finally {
-      setSendingImage(false);
-    }
+    const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
+    const nextMessage: Message = {
+      id: `local-image-${Date.now()}`,
+      senderUid: currentUid,
+      text: mediaText,
+      matchId: activeMatch.id,
+      messageType: 'image',
+      imageURL: previewURL,
+      imagePath,
+      viewOnce,
+      viewedBy: [],
+      createdAt: new Date().toISOString(),
+    };
+    setOptimisticMessages((current) => [...current, nextMessage]);
+    shouldStickToBottomRef.current = true;
+    let uploadedImageURL = '';
+    let uploadedImagePath = '';
+    const matchId = activeMatch.id;
+    const trySendImage = async (attempt = 0): Promise<void> => {
+      try {
+        if (uploadFile && !uploadedImageURL) {
+          const media = await uploadChatMedia({
+            allowRejected: true,
+            contextId: matchId,
+            context: 'match-chat-image',
+            file: uploadFile,
+            ownerUid: currentUid,
+          });
+          uploadedImageURL = media.url;
+          uploadedImagePath = media.path;
+          imageURL = media.url;
+          imagePath = media.path;
+        }
+        await sendMessage(matchId, currentUid, mediaText, currentProfile.displayName, {
+          imagePath,
+          imageURL,
+          viewOnce,
+        });
+        window.setTimeout(() => {
+          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+        }, 5000);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Não consegui enviar a imagem.';
+        const retryable =
+          message.toLowerCase().includes('fetch') ||
+          message.toLowerCase().includes('network') ||
+          message.toLowerCase().includes('timeout') ||
+          !navigator.onLine;
+        if (!retryable) {
+          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+          setActionMessage(message);
+          return;
+        }
+        if (uploadedImageURL) {
+          imageURL = uploadedImageURL;
+          imagePath = uploadedImagePath;
+        }
+        const delayMs = Math.min(30000, 4000 * 2 ** Math.min(attempt, 3));
+        setActionMessage('Internet instável. Vou continuar tentando enviar a imagem automaticamente.');
+        window.setTimeout(() => {
+          void trySendImage(attempt + 1);
+        }, delayMs);
+      }
+    };
+
+    setSendingImage(false);
+    void trySendImage();
   }
 
   function selectMatch(matchId: string) {
@@ -466,7 +514,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             const profile = profilesByUid[otherUid];
             const cached = cachedConversations[match.id];
             const isActive = activeMatchId === match.id;
-            const displayName = profile?.displayName ?? cached?.displayName ?? 'Carregando perfil';
+            const displayName = profile?.displayName ?? cached?.displayName ?? 'Perfil salvo';
             const photoURL = profile?.photos?.[0] || profile?.photoURL || cached?.photoURL || '';
             const lastMessage = match.lastMessage || cached?.lastMessage || 'Conversa iniciada';
             const lastMessageAt = match.lastMessageAt ?? cached?.lastMessageAt ?? null;
@@ -501,7 +549,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                   type="button"
                 >
                   {photoURL ? (
-                    <img alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" src={photoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 shrink-0 rounded-full" src={photoURL} />
                   ) : (
                     <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-900 text-sm text-teal-200">
                       {displayName.slice(0, 2).toUpperCase()}
@@ -554,28 +602,23 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                 <button
                   aria-label="Abrir perfil"
                   className="shrink-0"
-                  disabled={!profilesByUid[activeOtherUid]}
+                  disabled={!activeProfile}
                   onClick={() => {
-                    const profile = profilesByUid[activeOtherUid];
-                    if (profile) setPreviewProfile(profile);
+                    if (activeProfile) setPreviewProfile(activeProfile);
                   }}
                   type="button"
                 >
-                  {profilesByUid[activeOtherUid]?.photoURL ? (
-                    <img
-                      alt=""
-                      className="h-10 w-10 shrink-0 rounded-full object-cover"
-                      src={profilesByUid[activeOtherUid]?.photoURL}
-                    />
+                  {activePhotoURL ? (
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 shrink-0 rounded-full" src={activePhotoURL} />
                   ) : (
                     <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-900 text-xs text-teal-200">
-                      {(profilesByUid[activeOtherUid]?.displayName ?? '...').slice(0, 2).toUpperCase()}
+                      {activeDisplayName.slice(0, 2).toUpperCase()}
                     </div>
                   )}
                 </button>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">
-                    {profilesByUid[activeOtherUid]?.displayName ?? 'Carregando perfil'}
+                    {activeDisplayName}
                   </p>
                   {actionMessage && <p className="truncate text-xs text-slate-300">{actionMessage}</p>}
                 </div>
@@ -685,6 +728,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                     ) : (
                       message.text
                     )}
+                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">Enviando...</p>}
                   </div>
                   <span className={`ml-2 align-baseline text-[10px] ${mine ? 'text-slate-600' : 'text-slate-400'}`}>
                     {new Date(message.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}

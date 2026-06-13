@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useCachedChatMediaUrl } from '../chatMediaCache';
 import { setScreenshotBlocked } from '../screenSecurity';
+import CachedMediaImage from './CachedMediaImage';
 
 type Props = {
   cacheKey?: string;
@@ -93,10 +94,10 @@ export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'imag
             src={mediaUrl}
           />
         ) : (
-          <img
-            alt=""
+          <CachedMediaImage
             className={`max-h-56 w-full max-w-64 object-cover ${viewOnce ? 'scale-110 blur-2xl brightness-75' : ''}`}
-            onLoad={onLoaded}
+            fallbackClassName="max-h-56 w-full max-w-64 rounded-lg"
+            onLoaded={onLoaded}
             src={mediaUrl}
           />
         )}
@@ -124,7 +125,7 @@ export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'imag
           {mediaType === 'video' ? (
             <video autoPlay className="max-h-[84dvh] max-w-full rounded-lg object-contain" controls playsInline src={mediaUrl} />
           ) : (
-            <img alt="" className="max-h-[84dvh] max-w-full rounded-lg object-contain" src={mediaUrl} />
+            <CachedMediaImage className="max-h-[84dvh] max-w-full object-contain" fallbackClassName="max-h-[84dvh] max-w-full rounded-lg" src={mediaUrl} />
           )}
         </div>
       )}

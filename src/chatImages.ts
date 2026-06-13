@@ -1,9 +1,14 @@
 import { isDemoMode } from './demoData';
 import { moderateUploadedImage } from './imageModeration';
-import { uploadProfilePhoto } from './storageImages';
+import { prepareStorageUploadFile, uploadProfilePhoto } from './storageImages';
 
 export type ChatImageContext = 'map-chat-image' | 'match-chat-image';
 export type ChatMediaUpload = { path: string; url: string };
+
+export async function prepareChatImageFile(file: File) {
+  if (!file.type.startsWith('image/')) return file;
+  return prepareStorageUploadFile(file);
+}
 
 export async function uploadChatMedia(input: {
   allowRejected?: boolean;
@@ -19,10 +24,11 @@ export async function uploadChatMedia(input: {
 
   if (isDemoMode) return { path: '', url: URL.createObjectURL(input.file) };
 
-  const safeName = input.file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const uploadFile = await prepareChatImageFile(input.file);
+  const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
   const path = `${input.ownerUid}/chat-images/${Date.now()}-${safeName}`;
 
-  const signedUrl = await uploadProfilePhoto(path, input.file);
+  const signedUrl = await uploadProfilePhoto(path, uploadFile);
 
   await moderateUploadedImage({
     allowRejected: input.allowRejected ?? false,

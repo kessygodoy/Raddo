@@ -845,9 +845,9 @@ input[type="range"] {
   background:
     radial-gradient(circle at 50% 45%, #ff5a78, #ff315d 58%, #9f1239 100%);
   box-shadow:
-    0 0 0 12px rgba(255, 63, 104, 0.16),
-    0 0 0 24px rgba(255, 63, 104, 0.08),
-    0 18px 52px rgba(255, 63, 104, 0.42);
+    0 0 0 8px rgba(255, 63, 104, 0.16),
+    0 0 0 17px rgba(255, 63, 104, 0.08),
+    0 13px 36px rgba(255, 63, 104, 0.42);
 }
 
 .raddo-create-chat-cta::before {
@@ -864,9 +864,9 @@ input[type="range"] {
     radial-gradient(circle at 50% 45%, #ff8aa2, #ff3f68 58%, #be123c 100%) !important;
   color: #ffffff !important;
   box-shadow:
-    0 0 0 12px rgba(255, 63, 104, 0.16),
-    0 0 0 24px rgba(255, 63, 104, 0.08),
-    0 18px 52px rgba(255, 63, 104, 0.36) !important;
+    0 0 0 8px rgba(255, 63, 104, 0.16),
+    0 0 0 17px rgba(255, 63, 104, 0.08),
+    0 13px 36px rgba(255, 63, 104, 0.36) !important;
 }
 
 .theme-light .raddo-create-chat-cta::before {
@@ -878,9 +878,9 @@ input[type="range"] {
     radial-gradient(circle at 50% 45%, #3ee77a, #25d366 58%, #075e54 100%) !important;
   color: #ffffff !important;
   box-shadow:
-    0 0 0 12px rgba(37, 211, 102, 0.18),
-    0 0 0 24px rgba(37, 211, 102, 0.08),
-    0 18px 52px rgba(7, 94, 84, 0.32) !important;
+    0 0 0 8px rgba(37, 211, 102, 0.18),
+    0 0 0 17px rgba(37, 211, 102, 0.08),
+    0 13px 36px rgba(7, 94, 84, 0.32) !important;
 }
 
 .theme-green .raddo-create-chat-cta::before {
@@ -984,15 +984,15 @@ input[type="range"] {
   position: relative;
   width: 100%;
   height: 100%;
-  border: 2px solid #ffffff;
+  border: 1px solid #ffffff;
   border-radius: 999px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.35);
+  box-shadow: 0 7px 17px rgba(15, 23, 42, 0.35);
 }
 
 .map-pin::after {
   content: "";
   position: absolute;
-  inset: -7px;
+  inset: -5px;
   border: 1px solid currentColor;
   border-radius: inherit;
   opacity: 0.28;
@@ -1018,16 +1018,16 @@ input[type="range"] {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 2px solid rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.92);
   border-radius: 999px;
   background: #0f172a;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.38);
 }
 
 .map-profile-photo::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -4px;
   border: 1px solid rgba(45, 212, 191, 0.45);
   border-radius: inherit;
 }
@@ -1052,9 +1052,9 @@ input[type="range"] {
   border: 0;
   background: transparent;
   box-shadow: none;
-  font-size: 31px;
+  font-size: 22px;
   line-height: 1;
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45));
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
 }
 
 .map-pin-emoji-own {
@@ -1063,7 +1063,7 @@ input[type="range"] {
   background: transparent;
   border: 0;
   box-shadow: none;
-  font-size: 26px;
+  font-size: 18px;
 }
 
 .map-pin-emoji-own::before {
@@ -1078,14 +1078,14 @@ input[type="range"] {
 }
 
 .map-pin-emoji-own::before {
-  width: 20px;
-  height: 20px;
+  width: 14px;
+  height: 14px;
   border: 0;
   background:
     radial-gradient(circle at 50% 45%, rgba(147, 197, 253, 0.52), rgba(37, 99, 235, 0.34) 58%, rgba(30, 64, 175, 0.18) 100%);
   box-shadow:
-    0 0 0 6px rgba(37, 99, 235, 0.16),
-    0 0 22px rgba(96, 165, 250, 0.54);
+    0 0 0 4px rgba(37, 99, 235, 0.16),
+    0 0 15px rgba(96, 165, 250, 0.54);
 }
 
 .map-pin-emoji:not(.map-pin-emoji-own)::after {
@@ -1099,9 +1099,9 @@ input[type="range"] {
   place-items: center;
   background: transparent;
   border: 0;
-  font-size: 26px;
+  font-size: 18px;
   line-height: 1;
-  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.45));
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
   pointer-events: none;
 }
 
@@ -1136,31 +1136,6 @@ input[type="range"] {
   border-right: 4px solid rgba(59, 130, 246, 0.72);
   border-bottom: 4px solid rgba(59, 130, 246, 0.72);
   transform: rotate(-45deg);
-}
-
-.map-joined-event-dot-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 660;
-  pointer-events: none;
-}
-
-.map-joined-event-dot {
-  position: absolute;
-  width: 13px;
-  height: 13px;
-  border: 2px solid rgba(255, 255, 255, 0.92);
-  border-radius: 999px;
-  background: #ff315d;
-  padding: 0;
-  cursor: pointer;
-  box-shadow:
-    0 0 0 6px rgba(255, 49, 93, 0.18),
-    0 0 18px rgba(255, 49, 93, 0.75),
-    0 8px 16px rgba(15, 23, 42, 0.42);
-  pointer-events: auto;
-  transform: translate(-50%, -50%);
-  animation: raddoRedDotPulse 1.35s ease-in-out infinite;
 }
 
 .map-my-location-arrow {
@@ -1235,27 +1210,6 @@ input[type="range"] {
   }
 }
 
-@keyframes raddoRedDotPulse {
-  0%,
-  100% {
-    opacity: 0.78;
-    transform: translate(-50%, -50%) scale(0.9);
-    box-shadow:
-      0 0 0 4px rgba(255, 49, 93, 0.12),
-      0 0 14px rgba(255, 49, 93, 0.62),
-      0 8px 16px rgba(15, 23, 42, 0.42);
-  }
-
-  50% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.18);
-    box-shadow:
-      0 0 0 8px rgba(255, 49, 93, 0.2),
-      0 0 24px rgba(255, 49, 93, 0.86),
-      0 8px 16px rgba(15, 23, 42, 0.42);
-  }
-}
-
 @keyframes raddoStoryProgress {
   from {
     width: 0%;
@@ -1263,5 +1217,60 @@ input[type="range"] {
 
   to {
     width: 100%;
+  }
+}
+
+.raddo-story-ring {
+  position: relative;
+  border: 0;
+  box-shadow:
+    0 0 0 3px #07111f,
+    0 0 0 6px rgba(255, 63, 104, 0.85);
+}
+
+.raddo-story-ring::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(145deg, #ff3f68 0%, #ff7a45 42%, #a855f7 100%);
+}
+
+.raddo-story-ring-viewed {
+  box-shadow:
+    0 0 0 3px #07111f,
+    0 0 0 6px rgba(71, 85, 105, 0.9);
+}
+
+.raddo-story-ring-viewed::before {
+  background: linear-gradient(145deg, #64748b 0%, #334155 52%, #0f172a 100%);
+}
+
+.raddo-story-ring-new {
+  box-shadow:
+    0 0 0 3px #07111f,
+    0 0 0 6px rgba(255, 63, 104, 0.88),
+    0 0 18px rgba(255, 63, 104, 0.26);
+}
+
+.raddo-like-burst {
+  animation: raddoLikeBurst 0.48s cubic-bezier(0.2, 1.45, 0.35, 1) both;
+}
+
+@keyframes raddoLikeBurst {
+  0% {
+    transform: scale(0.72);
+    filter: drop-shadow(0 0 0 rgba(255, 63, 104, 0));
+  }
+
+  45% {
+    transform: scale(1.45);
+    filter: drop-shadow(0 0 14px rgba(255, 63, 104, 0.9));
+  }
+
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 4px rgba(255, 63, 104, 0.42));
   }
 }

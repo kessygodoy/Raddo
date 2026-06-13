@@ -15,6 +15,7 @@ type CachedMediaRecord = {
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 const objectUrls = new Map<string, string>();
+const objectUrlCacheKeys = new Map<string, string>();
 
 function supportsEncryptedCache() {
   return typeof window !== 'undefined' && 'indexedDB' in window && window.crypto?.subtle;
@@ -93,9 +94,13 @@ async function writeEncryptedBlob(cacheKey: string, blob: Blob) {
 
 function objectUrlForBlob(cacheKey: string, blob: Blob) {
   const existing = objectUrls.get(cacheKey);
-  if (existing) URL.revokeObjectURL(existing);
+  if (existing) {
+    URL.revokeObjectURL(existing);
+    objectUrlCacheKeys.delete(existing);
+  }
   const url = URL.createObjectURL(blob);
   objectUrls.set(cacheKey, url);
+  objectUrlCacheKeys.set(url, cacheKey);
   return url;
 }
 
@@ -124,9 +129,14 @@ export async function deleteEncryptedCachedMedia(cacheKey: string) {
   const objectUrl = objectUrls.get(cacheKey);
   if (objectUrl) {
     URL.revokeObjectURL(objectUrl);
+    objectUrlCacheKeys.delete(objectUrl);
     objectUrls.delete(cacheKey);
   }
   await transaction<undefined>(STORE_MEDIA, 'readwrite', (store) => store.delete(cacheKey));
+}
+
+export function encryptedCacheKeyForObjectUrl(url: string) {
+  return objectUrlCacheKeys.get(url) ?? '';
 }
 
 export async function deleteEncryptedCachedMediaKeys(cacheKeys: string[]) {

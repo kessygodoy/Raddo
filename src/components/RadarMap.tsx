@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Camera, Eye, Flag, Heart, ImagePlus, Info, MapPin, Megaphone, MessageCircle, Plus, Send, Users, Video, X } from 'lucide-react';
+import { ArrowRight, Camera, Eye, Flag, Heart, ImagePlus, Info, MapPin, Megaphone, MessageCircle, Plus, Send, Settings, Trash2, Users, Video, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
+  deleteMapEventStory,
   deleteMapEvent,
   hashMapEventPassword,
+  isMapEventModerator,
   isMapEventParticipant,
   joinMapEvent,
   leaveMapEvent,
@@ -18,6 +20,7 @@ import {
   toggleMapEventStoryLike,
   requestMapEventEntry,
   createMapEventStory,
+  updateMapEventDetails,
   useJoinedMapEvents,
   useMapEventCreatorNames,
   useMapEventParticipantCounts,
@@ -25,16 +28,18 @@ import {
   useMapEventStories,
   useMapEvents as useLocalMapEvents,
 } from '../hooks/useMapEvents';
+import { useAppModeratorRole } from '../moderation';
 import type { AppTheme, LatLng, MapEvent, MapEventStory, Match, UserProfile } from '../types';
 import { distanceKm, formatPersonDistanceKm, visibleLocation } from '../utils/geo';
 import MapEventChat from './MapEventChat';
 import { isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
 import ProfilePreview from './ProfilePreview';
+import CachedMediaImage from './CachedMediaImage';
 import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
 import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
-import { prepareStorageUploadFile, uploadProfilePhoto } from '../storageImages';
+import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } from '../storageImages';
 
 type Props = {
   matches: Match[];
@@ -42,6 +47,63 @@ type Props = {
   profiles: UserProfile[];
   theme: AppTheme;
 };
+
+function localMapEventsCacheKey(uid: string) {
+  return `raddo-local-map-events-cache:${uid}`;
+}
+
+function readLocalMapEvents(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(localMapEventsCacheKey(uid));
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as MapEvent[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalMapEvents(uid: string, events: MapEvent[]) {
+  try {
+    window.localStorage.setItem(localMapEventsCacheKey(uid), JSON.stringify(events.slice(0, 100)));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
+type MapStorySettings = {
+  includeOpenEventStories: boolean;
+  includeStandaloneStories: boolean;
+  radiusKm: number;
+};
+
+function mapStorySettingsKey(uid: string) {
+  return `raddo-map-story-settings:${uid}`;
+}
+
+function readMapStorySettings(uid: string): MapStorySettings {
+  try {
+    const saved = window.localStorage.getItem(mapStorySettingsKey(uid));
+    if (!saved) return { includeOpenEventStories: true, includeStandaloneStories: true, radiusKm: 50 };
+    const parsed = JSON.parse(saved) as Partial<MapStorySettings>;
+    return {
+      includeOpenEventStories: parsed.includeOpenEventStories ?? true,
+      includeStandaloneStories: parsed.includeStandaloneStories ?? true,
+      radiusKm: Math.min(50, Math.max(1, Number(parsed.radiusKm) || 50)),
+    };
+  } catch {
+    return { includeOpenEventStories: true, includeStandaloneStories: true, radiusKm: 50 };
+  }
+}
+
+function writeMapStorySettings(uid: string, settings: MapStorySettings) {
+  try {
+    window.localStorage.setItem(mapStorySettingsKey(uid), JSON.stringify(settings));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
 type AppDialog =
   | {
       confirmLabel?: string;
@@ -81,29 +143,29 @@ function storyRecorderMimeType() {
 const meIcon = L.divIcon({
   className: '',
   html: '<div class="map-pin map-pin-me"></div>',
-  iconAnchor: [12, 12],
-  iconSize: [24, 24],
+  iconAnchor: [8, 8],
+  iconSize: [17, 17],
 });
 
 const personIcon = L.divIcon({
   className: '',
   html: '<div class="map-pin map-pin-person"></div>',
-  iconAnchor: [10, 10],
-  iconSize: [20, 20],
+  iconAnchor: [7, 7],
+  iconSize: [14, 14],
 });
 
 const personGroupIcon = L.divIcon({
   className: '',
   html: '<div class="map-group-marker">\u{1F465}</div>',
-  iconAnchor: [18, 18],
-  iconSize: [36, 36],
+  iconAnchor: [13, 13],
+  iconSize: [25, 25],
 });
 
 const eventIcon = L.divIcon({
   className: '',
   html: '<div class="map-pin map-pin-event"></div>',
-  iconAnchor: [13, 13],
-  iconSize: [26, 26],
+  iconAnchor: [9, 9],
+  iconSize: [18, 18],
 });
 
 const eventEmojiOptions: string[] = [];
@@ -259,8 +321,8 @@ function eventEmojiIcon(emoji: string, highlighted = false, _active = false) {
     return L.divIcon({
       className: '',
       html: `<div class="${emojiClassName}">\u{1F4AC}</div>`,
-      iconAnchor: highlighted ? [16, 16] : [23, 23],
-      iconSize: highlighted ? [31, 31] : [47, 47],
+      iconAnchor: highlighted ? [11, 11] : [16, 16],
+      iconSize: highlighted ? [22, 22] : [33, 33],
     });
   }
 
@@ -268,8 +330,8 @@ function eventEmojiIcon(emoji: string, highlighted = false, _active = false) {
   return L.divIcon({
     className: '',
     html: `<div class="${emojiClassName}">${visibleEmoji}</div>`,
-    iconAnchor: highlighted ? [16, 16] : [23, 23],
-    iconSize: highlighted ? [31, 31] : [47, 47],
+    iconAnchor: highlighted ? [11, 11] : [16, 16],
+    iconSize: highlighted ? [22, 22] : [33, 33],
   });
 }
 
@@ -294,9 +356,9 @@ function sharedRelationshipGoalCount(me: UserProfile, profile: UserProfile) {
 function profilePhotoIcon(photoURL: string) {
   return L.divIcon({
     className: '',
-    html: `<div class="map-profile-photo"><img alt="" src="${escapeHtml(photoURL)}" /></div>`,
-    iconAnchor: [17, 17],
-    iconSize: [34, 34],
+    html: `<div class="map-profile-photo"><img alt="" src="${escapeHtml(photoURL)}" onerror="this.style.display='none'" /></div>`,
+    iconAnchor: [12, 12],
+    iconSize: [24, 24],
   });
 }
 
@@ -310,8 +372,8 @@ const draftIcon = L.divIcon({
 const eventGroupIcon = L.divIcon({
   className: '',
   html: '<div class="map-group-marker">\u{1F4AC}</div>',
-  iconAnchor: [18, 18],
-  iconSize: [36, 36],
+  iconAnchor: [13, 13],
+  iconSize: [25, 25],
 });
 
 function ownerEventArrowIcon(angle: number) {
@@ -656,67 +718,6 @@ function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me
   );
 }
 
-function JoinedEventDots({ events, me, onFocusEvent }: { events: MapEvent[]; me: UserProfile; onFocusEvent: (event: MapEvent) => void }) {
-  const map = useMap();
-  const [dots, setDots] = useState<Array<{ event: MapEvent; id: string; x: number; y: number }>>([]);
-
-  const joinedEvents = useMemo(
-    () => events.filter((event) => event.creatorUid !== me.uid),
-    [events, me.uid],
-  );
-
-  useEffect(() => {
-    let frame = 0;
-
-    function updateDots() {
-      frame = 0;
-      const next = joinedEvents
-        .filter((event) => !isPositionInView(map, event.location))
-        .map((event) => ({
-          event,
-          id: event.id,
-          ...edgeOverlayForPosition(map, event.location),
-        }));
-      setDots(next);
-    }
-
-    function scheduleUpdate() {
-      if (frame) return;
-      frame = window.requestAnimationFrame(updateDots);
-    }
-
-    updateDots();
-    map.on('move zoom moveend zoomend resize', scheduleUpdate);
-
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      map.off('move zoom moveend zoomend resize', scheduleUpdate);
-    };
-  }, [joinedEvents, map]);
-
-  if (dots.length === 0) return null;
-
-  return createPortal(
-    <div className="map-joined-event-dot-layer">
-      {dots.map((dot) => (
-        <button
-          aria-label={`Focar chat ${dot.event.title}`}
-          className="map-joined-event-dot"
-          key={dot.id}
-          onClick={() => onFocusEvent(dot.event)}
-          style={{
-            left: `${dot.x}px`,
-            top: `${dot.y}px`,
-          }}
-          title={dot.event.title}
-          type="button"
-        />
-      ))}
-    </div>,
-    map.getContainer(),
-  );
-}
-
 function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: UserProfile[] }) {
   const map = useMap();
   const [, setMapVersion] = useState(0);
@@ -911,6 +912,8 @@ function ClusteredEventMarkers({
 
 export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const center = me.location ?? { lat: -23.5505, lng: -46.6333 };
+  const appModeratorRole = useAppModeratorRole(me.uid);
+  const canManageApp = Boolean(appModeratorRole);
   const [selectedPoint, setSelectedPoint] = useState<LatLng | null>(null);
   const [eventTitle, setEventTitle] = useState('');
   const [eventDescription, setEventDescription] = useState('');
@@ -926,6 +929,15 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const [clusteredEvents, setClusteredEvents] = useState<MapEvent[]>([]);
   const [createChatOpen, setCreateChatOpen] = useState(false);
   const [creatingEvent, setCreatingEvent] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<MapEvent | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  const [editingDescription, setEditingDescription] = useState('');
+  const [editingEmoji, setEditingEmoji] = useState(modernEventEmojiOptions[0]);
+  const [editingAccessMode, setEditingAccessMode] = useState<MapEvent['accessMode']>('open');
+  const [editingPassword, setEditingPassword] = useState('');
+  const [editingRadius, setEditingRadius] = useState(5);
+  const [editingIsPermanent, setEditingIsPermanent] = useState(false);
+  const [savingEventEdit, setSavingEventEdit] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showChatsList, setShowChatsList] = useState(false);
   const [showMyChatsList, setShowMyChatsList] = useState(false);
@@ -933,18 +945,22 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const [showPeopleList, setShowPeopleList] = useState(false);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [gpsEvent, setGpsEvent] = useState<MapEvent | null>(null);
-  const [localEvents, setLocalEvents] = useState<MapEvent[]>([]);
+  const [localEvents, setLocalEvents] = useState<MapEvent[]>(() => readLocalMapEvents(me.uid));
   const [focusTarget, setFocusTarget] = useState<{ event: MapEvent; nonce: number } | null>(null);
   const [eventError, setEventError] = useState('');
   const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [profileActionMessage, setProfileActionMessage] = useState('');
   const [storyViewerOpen, setStoryViewerOpen] = useState(false);
+  const [storySettingsOpen, setStorySettingsOpen] = useState(false);
+  const [mapStorySettings, setMapStorySettings] = useState<MapStorySettings>(() => readMapStorySettings(me.uid));
   const [storyComposerEvent, setStoryComposerEvent] = useState<MapEvent | null>(null);
   const [storyComposerOpen, setStoryComposerOpen] = useState(false);
   const [selectedStoryId, setSelectedStoryId] = useState('');
   const [storyText, setStoryText] = useState('');
   const [storyImageURL, setStoryImageURL] = useState('');
+  const [storyUploadFile, setStoryUploadFile] = useState<File | null>(null);
   const [storyMediaType, setStoryMediaType] = useState<'image' | 'video'>('image');
+  const [localPublishingStories, setLocalPublishingStories] = useState<MapEventStory[]>([]);
   const [uploadingStory, setUploadingStory] = useState(false);
   const [storyRecording, setStoryRecording] = useState(false);
   const [storyRecordingBytes, setStoryRecordingBytes] = useState(0);
@@ -954,8 +970,24 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const storyRecordingBytesRef = useRef(0);
   const storyRecordingDiscardRef = useRef(false);
   const storyRecordingPreviewRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    setLocalEvents(readLocalMapEvents(me.uid));
+    setMapStorySettings(readMapStorySettings(me.uid));
+  }, [me.uid]);
+
+  useEffect(() => {
+    writeLocalMapEvents(me.uid, localEvents.filter((event) => eventExpiresAt(event).getTime() > Date.now()));
+  }, [localEvents, me.uid]);
+
+  useEffect(() => {
+    writeMapStorySettings(me.uid, mapStorySettings);
+  }, [mapStorySettings, me.uid]);
   const [storyProgressKey, setStoryProgressKey] = useState(0);
   const [storyProgressSeconds, setStoryProgressSeconds] = useState(7);
+  const [storyPeopleModal, setStoryPeopleModal] = useState<{ title: string; userIds: string[] } | null>(null);
+  const [optimisticStoryLikes, setOptimisticStoryLikes] = useState<Record<string, boolean>>({});
+  const [storyLikeBursts, setStoryLikeBursts] = useState<Set<string>>(new Set());
   const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(() => {
     const saved = window.localStorage.getItem(`raddo:viewed-map-stories:${me.uid}`);
     if (!saved) return new Set();
@@ -995,6 +1027,19 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     () => sortedVisibleEvents.filter((event) => eventDistance(event) <= event.radiusKm),
     [sortedVisibleEvents, me.location],
   );
+  const storyRadiusEvents = useMemo(
+    () => sortedVisibleEvents.filter((event) => eventDistance(event) <= mapStorySettings.radiusKm),
+    [mapStorySettings.radiusKm, sortedVisibleEvents, me.location],
+  );
+  const storySourceEvents = useMemo(
+    () => [
+      ...joinedActiveEvents,
+      ...(mapStorySettings.includeOpenEventStories
+        ? storyRadiusEvents.filter((event) => event.accessMode === 'open' && !joinedActiveEvents.some((joined) => joined.id === event.id))
+        : []),
+    ],
+    [joinedActiveEvents, mapStorySettings.includeOpenEventStories, storyRadiusEvents],
+  );
   const currentChatModalEvents = showMyChatsList ? myEvents : showNearbyChatsList ? nearbyReachableEvents : joinedOnlyEvents;
   const eventContextList = useMemo(
     () => [
@@ -1014,7 +1059,32 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const eventParticipantCounts = useMapEventParticipantCounts(eventContextList);
   const recentlyActiveEventIds = useMapEventRecentActivity(eventContextList, 30);
   const eventCreatorNames = useMapEventCreatorNames(eventContextList, me);
-  const mapEventStories = useMapEventStories(nearbyReachableEvents, me);
+  const remoteMapEventStories = useMapEventStories(storySourceEvents, me, {
+    includeOpenEventStories: mapStorySettings.includeOpenEventStories,
+    includeStandaloneStories: mapStorySettings.includeStandaloneStories,
+  });
+  const mapEventStories = useMemo(
+    () => {
+      const visibleEventIds = new Set(storySourceEvents.map((event) => event.id));
+      const canShowStory = (story: MapEventStory) => {
+        if (story.creatorUid === me.uid || story.id.startsWith('local-story-')) return true;
+        if (!story.eventId) return mapStorySettings.includeStandaloneStories;
+        return visibleEventIds.has(story.eventId);
+      };
+      return [
+        ...localPublishingStories.filter(canShowStory),
+        ...remoteMapEventStories.filter((story) => canShowStory(story) && !localPublishingStories.some((localStory) => localStory.id === story.id)),
+      ].map((story) => {
+        const optimisticLiked = optimisticStoryLikes[story.id];
+        if (typeof optimisticLiked !== 'boolean') return story;
+        const likedBy = new Set(story.likedBy);
+        if (optimisticLiked) likedBy.add(me.uid);
+        else likedBy.delete(me.uid);
+        return { ...story, likedBy: [...likedBy] };
+      });
+    },
+    [localPublishingStories, mapStorySettings.includeStandaloneStories, me.uid, optimisticStoryLikes, remoteMapEventStories, storySourceEvents],
+  );
   const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do chat');
   const previewEventIsParticipant = Boolean(
     previewEvent && (previewEvent.creatorUid === me.uid || joinedEventIds.has(previewEvent.id)),
@@ -1026,6 +1096,15 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       grouped.set(story.eventId, [...(grouped.get(story.eventId) ?? []), story]);
     });
     return grouped;
+  }, [mapEventStories]);
+
+  useEffect(() => {
+    mapEventStories.slice(0, 24).forEach((story) => {
+      if (!story.imageURL || story.mediaType === 'video') return;
+      void signedProfilePhotoUrl(story.imageURL).catch(() => undefined);
+      const image = new Image();
+      image.src = story.imageURL;
+    });
   }, [mapEventStories]);
   const storyEvents = useMemo(
     () =>
@@ -1053,6 +1132,11 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   }, [mapEventStories]);
   const selectedStory = mapEventStories.find((story) => story.id === selectedStoryId) ?? mapEventStories[0] ?? null;
   const selectedStoryEvent = selectedStory ? eventContextList.find((event) => event.id === selectedStory.eventId) ?? null : null;
+  const storyPeopleProfiles = useMemo(() => {
+    const byUid = new Map<string, UserProfile>();
+    [me, ...profiles].forEach((profile) => byUid.set(profile.uid, profile));
+    return byUid;
+  }, [me, profiles]);
   const storyViewerStories = useMemo(
     () =>
       selectedStory
@@ -1124,6 +1208,12 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         return;
       }
 
+      if (storyPeopleModal) {
+        event.preventDefault();
+        setStoryPeopleModal(null);
+        return;
+      }
+
       if (storyViewerOpen) {
         event.preventDefault();
         setStoryViewerOpen(false);
@@ -1183,6 +1273,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     previewProfile,
     storyComposerEvent,
     storyComposerOpen,
+    storyPeopleModal,
     storyViewerOpen,
     showChatsList,
     showMyChatsList,
@@ -1210,9 +1301,12 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setEventError('Vídeos estarão disponíveis em breve. Por enquanto, envie uma imagem.');
       setUploadingStory(false);
       setStoryMediaType('image');
+      setStoryUploadFile(null);
       return;
     }
 
+    const previewURL = URL.createObjectURL(file);
+    setStoryImageURL(previewURL);
     setUploadingStory(true);
     setEventError('');
     setStoryMediaType(mediaType);
@@ -1224,19 +1318,11 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       uploadFile = file;
     }
 
-    if (isDemoMode) {
-      setStoryImageURL(URL.createObjectURL(uploadFile));
-      setUploadingStory(false);
-      return;
-    }
-
-    const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const path = `${me.uid}/map-stories/${Date.now()}-${safeName}`;
     try {
-      const signedUrl = await uploadProfilePhoto(path, uploadFile);
-      await moderateUploadedImage({ allowRejected: false, context: 'map-chat-image', contextId: storyComposerEvent?.id, path, publicUrl: signedUrl });
-      setStoryImageURL(signedUrl);
+      setStoryUploadFile(uploadFile);
     } catch (error) {
+      setStoryImageURL('');
+      setStoryUploadFile(null);
       setEventError(error instanceof Error ? error.message : 'Não consegui enviar o story.');
     } finally {
       setUploadingStory(false);
@@ -1354,24 +1440,81 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
 
   async function publishStory() {
     setEventError('');
-    try {
-      await createMapEventStory({
-        creatorName: me.displayName,
-        creatorUid: me.uid,
-        eventId: storyComposerEvent?.id ?? null,
-        imageURL: storyImageURL,
-        mediaType: storyMediaType,
-        text: storyText,
-      });
-      setStoryText('');
-      setStoryImageURL('');
-      setStoryMediaType('image');
-      setStoryComposerEvent(null);
-      setStoryComposerOpen(false);
-      setStoryViewerOpen(true);
-    } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui publicar o story.');
-    }
+    const localStoryId = `local-story-${Date.now()}`;
+    const publishingText = storyText.trim();
+    const localStory: MapEventStory = {
+      id: localStoryId,
+      creatorName: me.displayName,
+      creatorUid: me.uid,
+      eventId: storyComposerEvent?.id ?? null,
+      imageURL: storyImageURL,
+      mediaType: storyMediaType,
+      text: publishingText || 'Publicando...',
+      likedBy: [],
+      viewedBy: [me.uid],
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    };
+    const uploadFile = storyUploadFile;
+    const composerEvent = storyComposerEvent;
+    const textToPublish = storyText;
+    const mediaTypeToPublish = storyMediaType;
+    setLocalPublishingStories((current) => [localStory, ...current]);
+    setSelectedStoryId(localStoryId);
+    setStoryText('');
+    setStoryImageURL('');
+    setStoryUploadFile(null);
+    setStoryMediaType('image');
+    setStoryComposerEvent(null);
+    setStoryComposerOpen(false);
+    setStoryViewerOpen(true);
+
+    let uploadedImageURL = '';
+    const tryPublish = async (attempt = 0): Promise<void> => {
+      try {
+        let finalImageURL = uploadedImageURL || localStory.imageURL;
+        if (uploadFile && !isDemoMode && !uploadedImageURL) {
+          const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+          const path = `${me.uid}/map-stories/${Date.now()}-${safeName}`;
+          finalImageURL = await uploadProfilePhoto(path, uploadFile);
+          await moderateUploadedImage({ allowRejected: false, context: 'map-chat-image', contextId: composerEvent?.id, path, publicUrl: finalImageURL });
+          uploadedImageURL = finalImageURL;
+        }
+        await createMapEventStory({
+          creatorName: me.displayName,
+          creatorUid: me.uid,
+          eventId: composerEvent?.id ?? null,
+          imageURL: finalImageURL,
+          mediaType: mediaTypeToPublish,
+          text: textToPublish,
+        });
+        setLocalPublishingStories((current) =>
+          current.map((story) => (story.id === localStoryId ? { ...story, imageURL: finalImageURL, text: textToPublish, mediaType: mediaTypeToPublish } : story)),
+        );
+        window.setTimeout(() => {
+          setLocalPublishingStories((current) => current.filter((story) => story.id !== localStoryId));
+        }, 8000);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Não consegui publicar o story.';
+        const retryable =
+          message.toLowerCase().includes('fetch') ||
+          message.toLowerCase().includes('network') ||
+          message.toLowerCase().includes('timeout') ||
+          !navigator.onLine;
+        if (!retryable) {
+          setLocalPublishingStories((current) => current.filter((story) => story.id !== localStoryId));
+          setEventError(message);
+          return;
+        }
+        const delayMs = Math.min(30000, 4000 * 2 ** Math.min(attempt, 3));
+        setEventError('Internet instável. Vou continuar tentando publicar o story automaticamente.');
+        window.setTimeout(() => {
+          void tryPublish(attempt + 1);
+        }, delayMs);
+      }
+    };
+
+    void tryPublish();
   }
 
   async function reportStory(story: MapEventStory) {
@@ -1384,10 +1527,47 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     }
   }
 
+  async function deleteStory(story: MapEventStory) {
+    setDialog({
+      confirmLabel: 'Apagar',
+      destructive: true,
+      message: 'Este story será removido do mapa.',
+      onConfirm: async () => {
+        try {
+          await deleteMapEventStory(story.id);
+          setLocalPublishingStories((current) => current.filter((item) => item.id !== story.id));
+          if (selectedStoryId === story.id) {
+            setStoryViewerOpen(false);
+            setSelectedStoryId('');
+          }
+        } catch (error) {
+          setEventError(error instanceof Error ? error.message : 'Não consegui apagar o story.');
+        }
+      },
+      title: 'Apagar story?',
+      type: 'confirm',
+    });
+  }
+
   async function likeStory(story: MapEventStory) {
+    const nextLiked = !story.likedBy.includes(me.uid);
+    setOptimisticStoryLikes((current) => ({ ...current, [story.id]: nextLiked }));
+    setStoryLikeBursts((current) => new Set(current).add(story.id));
+    window.setTimeout(() => {
+      setStoryLikeBursts((current) => {
+        const next = new Set(current);
+        next.delete(story.id);
+        return next;
+      });
+    }, 520);
     try {
       await toggleMapEventStoryLike(story, me.uid);
     } catch (error) {
+      setOptimisticStoryLikes((current) => {
+        const next = { ...current };
+        delete next[story.id];
+        return next;
+      });
       setEventError(error instanceof Error ? error.message : 'Não consegui curtir o story.');
     }
   }
@@ -1471,6 +1651,14 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     openStory(previousStory.id);
   }
 
+  function openStoryPerson(uid: string) {
+    const profile = storyPeopleProfiles.get(uid);
+    if (!profile) return;
+    setStoryPeopleModal(null);
+    setStoryViewerOpen(false);
+    setPreviewProfile(profile);
+  }
+
   useEffect(() => {
     if (!storyViewerOpen || !selectedStory) return undefined;
     if (selectedStory.mediaType === 'video') return undefined;
@@ -1488,10 +1676,12 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       return;
     }
 
+    const previousCoverURL = eventCoverURL;
+    const previewURL = URL.createObjectURL(file);
+    setEventCoverURL(previewURL);
     setUploadingCover(true);
 
     if (isDemoMode) {
-      setEventCoverURL(URL.createObjectURL(file));
       setUploadingCover(false);
       event.target.value = '';
       return;
@@ -1504,6 +1694,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       await moderateUploadedImage({ context: 'chat-cover', path, publicUrl: signedUrl });
       setEventCoverURL(signedUrl);
     } catch (uploadError) {
+      setEventCoverURL(previousCoverURL);
       setEventError(uploadError instanceof Error ? uploadError.message : 'Não consegui enviar a capa.');
     }
 
@@ -1520,6 +1711,11 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
 
     if (!title) {
       setEventError('Escolha um título para o chat.');
+      return;
+    }
+
+    if (uploadingCover) {
+      setEventError('Aguarde a capa terminar de enviar.');
       return;
     }
 
@@ -1567,17 +1763,77 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     }
   }
 
-  async function handleEnterEvent(event: MapEvent) {
+  function openEditEvent(event: MapEvent) {
     setEventError('');
-    if (me.location && distanceKm(me.location, event.location) > event.radiusKm) {
-      setEventError(`Você precisa estar dentro de ${formatRadius(event.radiusKm)} para entrar neste chat.`);
+    setEditingEvent(event);
+    setEditingTitle(event.title);
+    setEditingDescription(event.description);
+    setEditingEmoji(event.emoji);
+    setEditingAccessMode(event.accessMode);
+    setEditingPassword('');
+    setEditingRadius(event.radiusKm);
+    setEditingIsPermanent(event.isPermanent);
+  }
+
+  async function handleSaveEventEdit(submitEvent: FormEvent) {
+    submitEvent.preventDefault();
+    if (!editingEvent) return;
+
+    const title = editingTitle.trim();
+    if (!title) {
+      setEventError('Dê um nome para o chat.');
+      return;
+    }
+    if (editingAccessMode === 'password' && !editingEvent.passwordHash && !editingPassword.trim()) {
+      setEventError('Defina uma senha para este chat.');
       return;
     }
 
+    setSavingEventEdit(true);
+    setEventError('');
+    try {
+      const passwordHash =
+        editingAccessMode === 'password'
+          ? editingPassword.trim()
+            ? await hashMapEventPassword(editingPassword)
+            : editingEvent.passwordHash
+          : '';
+      const updated = await updateMapEventDetails(editingEvent.id, {
+        accessMode: editingAccessMode,
+        description: editingDescription.trim(),
+        emoji: editingEmoji,
+        isPermanent: me.isPremium && editingIsPermanent,
+        passwordHash,
+        radiusKm: editingRadius,
+        title,
+      });
+      setLocalEvents((current) => current.map((event) => (event.id === updated.id ? updated : event)));
+      setActiveEvent((current) => (current?.id === updated.id ? updated : current));
+      setPreviewEvent((current) => (current?.id === updated.id ? updated : current));
+      setEditingEvent(null);
+      setEditingPassword('');
+    } catch (error) {
+      setEventError(error instanceof Error ? error.message : 'Não consegui editar o chat.');
+    } finally {
+      setSavingEventEdit(false);
+    }
+  }
+
+  async function handleEnterEvent(event: MapEvent) {
+    setEventError('');
+
     try {
       const joinedEvent = joinedActiveEvents.find((joined) => joined.id === event.id);
-      const isAlreadyParticipant = Boolean(joinedEvent) || event.creatorUid === me.uid || await isMapEventParticipant(event.id, me.uid);
-      if (isAlreadyParticipant) {
+      const [isParticipant, isModerator] = await Promise.all([
+        joinedEvent || event.creatorUid === me.uid ? Promise.resolve(true) : isMapEventParticipant(event.id, me.uid),
+        event.creatorUid === me.uid ? Promise.resolve(false) : isMapEventModerator(event.id, me.uid),
+      ]);
+      const canBypassRadius = Boolean(joinedEvent) || event.creatorUid === me.uid || isParticipant || isModerator;
+      if (!canBypassRadius && me.location && distanceKm(me.location, event.location) > event.radiusKm) {
+        setEventError(`Você precisa estar dentro de ${formatRadius(event.radiusKm)} para entrar neste chat.`);
+        return;
+      }
+      if (isParticipant || isModerator) {
         setPreviewEvent(null);
         setActiveEvent(joinedEvent ?? event);
         return;
@@ -1710,7 +1966,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       {dialog && <AppDialogModal dialog={dialog} onClose={() => setDialog(null)} />}
       <div className="pointer-events-none absolute left-0 right-0 top-[calc(env(safe-area-inset-top)+5.75rem)] z-[640] px-3 sm:top-[calc(env(safe-area-inset-top)+6.25rem)]">
         <div
-          className="raddo-story-strip pointer-events-auto mx-auto flex max-w-4xl gap-2 overflow-x-auto scrollbar-hidden p-2"
+          className="raddo-story-strip pointer-events-auto mx-auto flex max-w-4xl gap-[3px] overflow-x-auto scrollbar-hidden p-2"
           onClickCapture={(event) => {
             if ((event.currentTarget as HTMLDivElement).dataset.dragging === 'true') {
               event.preventDefault();
@@ -1721,16 +1977,30 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         >
           {me.location && (
             <button
-              className="grid h-16 w-16 shrink-0 place-items-center rounded-full border border-dashed border-[#ff3f68]/70 bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
+              className="raddo-story-ring raddo-story-ring-new relative mx-2 grid h-16 w-16 shrink-0 place-items-center rounded-full bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
               onClick={() => {
                 setStoryComposerEvent(null);
                 setStoryComposerOpen(true);
                 setStoryText('');
                 setStoryImageURL('');
+                setStoryUploadFile(null);
                 setStoryMediaType('image');
               }}
               type="button"
             >
+              <span
+                aria-label="Configurar stories do mapa"
+                className="absolute -left-1 -top-1 z-10 grid h-6 w-6 place-items-center rounded-full border border-white/10 bg-[#07111f] text-white shadow-lg"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setStorySettingsOpen(true);
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </span>
               <Plus className="raddo-story-plus-icon h-5 w-5 text-white" />
               Story
             </button>
@@ -1741,9 +2011,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             const allViewed = group.stories.every((story) => viewedStoryIds.has(story.id));
             return (
               <button
-                className={`relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full border bg-slate-950 text-white ${
-                  allViewed ? 'border-slate-700' : 'border-[#ff3f68]/70'
-                }`}
+                className={`raddo-story-ring ${allViewed ? 'raddo-story-ring-viewed' : 'raddo-story-ring-new'} relative mx-2 grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-950 text-white`}
                 key={group.creatorUid}
                 onClick={(clickEvent) => {
                   if ((clickEvent.currentTarget as HTMLButtonElement).closest('.raddo-story-strip')?.getAttribute('data-dragging') === 'true') return;
@@ -1757,21 +2025,72 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                     <Video className="h-5 w-5" />
                   </div>
                 ) : latestStory?.imageURL ? (
-                  <img alt="" className="h-full w-full object-cover" src={latestStory.imageURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={latestStory.imageURL} />
                 ) : (
                   <span className="text-2xl">{event?.emoji || '\u{1F4AC}'}</span>
+                )}
+                {latestStory.id.startsWith('local-story-') && (
+                  <span className="absolute inset-x-1 bottom-1 rounded bg-[#ff3f68] px-1 py-0.5 text-[9px] font-bold text-white">
+                    Publicando...
+                  </span>
                 )}
                 <span className="absolute mt-11 max-w-14 truncate rounded bg-black/55 px-1 text-[10px]">{latestStory.creatorName}</span>
               </button>
             );
           })}
-          {joinedActiveEvents.length === 0 && storyEvents.length === 0 && (
-            <span className="px-2 py-3 text-xs text-slate-300">Entre em um chat próximo para postar stories.</span>
-          )}
         </div>
       </div>
+      {storySettingsOpen && (
+        <div className="fixed inset-0 z-[1450] grid place-items-end bg-black/60 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] backdrop-blur-sm sm:place-items-center">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">Stories do mapa</h2>
+                <p className="text-xs text-slate-400">Escolha o que aparece para você.</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStorySettingsOpen(false)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-3">
+              <label className="grid gap-2 text-xs text-slate-300">
+                Raio dos stories: {formatRadius(mapStorySettings.radiusKm)}
+                <input
+                  max={50}
+                  min={1}
+                  onChange={(event) => setMapStorySettings((current) => ({ ...current, radiusKm: Number(event.target.value) }))}
+                  step={1}
+                  type="range"
+                  value={mapStorySettings.radiusKm}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 p-3 text-sm">
+                <span>Mostrar stories soltos no mapa</span>
+                <input
+                  checked={mapStorySettings.includeStandaloneStories}
+                  className="h-5 w-5"
+                  onChange={(event) => setMapStorySettings((current) => ({ ...current, includeStandaloneStories: event.target.checked }))}
+                  type="checkbox"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 p-3 text-sm">
+                <span>Mostrar stories de chats abertos</span>
+                <input
+                  checked={mapStorySettings.includeOpenEventStories}
+                  className="h-5 w-5"
+                  onChange={(event) => setMapStorySettings((current) => ({ ...current, includeOpenEventStories: event.target.checked }))}
+                  type="checkbox"
+                />
+              </label>
+              <p className="rounded-lg bg-white/8 p-3 text-xs text-slate-300">
+                Se desativar essas opções, ficam visíveis no mapa apenas stories dos chats em que você participa.
+              </p>
+            </div>
+          </section>
+        </div>
+      )}
       {storyViewerOpen && selectedStory && (
-        <div className="fixed inset-0 z-[1500] bg-black/90 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[1500] bg-black/90 pt-[env(safe-area-inset-top)] backdrop-blur-sm">
           <section className="relative flex h-full w-full flex-col bg-[#07111f] text-white shadow-2xl">
             <div className="grid grid-flow-col gap-1 bg-black/40 p-2">
               {storyViewerStories.map((story) => (
@@ -1814,11 +2133,16 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 src={selectedStory.imageURL}
               />
             ) : selectedStory.imageURL ? (
-              <img alt="" className="min-h-0 flex-1 bg-black object-contain" src={selectedStory.imageURL} />
+              <CachedMediaImage className="h-full w-full object-contain" fallbackClassName="min-h-0 flex-1 bg-black" src={selectedStory.imageURL} />
             ) : (
               <div className="grid min-h-0 flex-1 place-items-center bg-slate-950 p-6 text-center text-lg font-semibold">{selectedStory.text}</div>
             )}
             {selectedStory.text && selectedStory.imageURL && <p className="p-4 text-sm text-slate-100">{selectedStory.text}</p>}
+            {selectedStory.id.startsWith('local-story-') && (
+              <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+4.5rem)] z-20 rounded-full bg-[#ff3f68] px-3 py-1 text-xs font-bold text-white shadow-lg">
+                Publicando...
+              </div>
+            )}
             <button
               aria-label="Story anterior"
               className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent"
@@ -1832,6 +2156,16 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               type="button"
             />
             <div className="pointer-events-none absolute bottom-28 right-3 z-20 grid gap-2">
+              {(selectedStory.creatorUid === me.uid || canManageApp) && (
+                <button
+                  aria-label="Apagar story"
+                  className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
+                  onClick={() => deleteStory(selectedStory)}
+                  type="button"
+                >
+                  <Trash2 className="h-5 w-5" />
+                </button>
+              )}
               {selectedStory.creatorUid !== me.uid && (
                 <button
                   aria-label="Curtir story"
@@ -1839,13 +2173,17 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                   onClick={() => likeStory(selectedStory)}
                   type="button"
                 >
-                  <Heart className={`h-5 w-5 ${selectedStory.likedBy.includes(me.uid) ? 'fill-[#ff3f68] text-[#ff3f68]' : 'text-white'}`} />
+                  <Heart
+                    className={`h-5 w-5 ${
+                      selectedStory.likedBy.includes(me.uid) ? 'fill-[#ff3f68] text-[#ff3f68]' : 'text-white'
+                    } ${storyLikeBursts.has(selectedStory.id) ? 'raddo-like-burst' : ''}`}
+                  />
                 </button>
               )}
               {selectedStory.creatorUid === me.uid && selectedStory.likedBy.length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => window.alert(`Curtidas:\n${selectedStory.likedBy.join('\n') || 'Nenhuma curtida ainda.'}`)}
+                  onClick={() => setStoryPeopleModal({ title: 'Curtidas', userIds: [...new Set(selectedStory.likedBy)] })}
                   type="button"
                 >
                   <Heart className="h-4 w-4 fill-[#ff3f68] text-[#ff3f68]" />
@@ -1855,7 +2193,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => window.alert(`Visualizaram:\n${selectedStory.viewedBy.join('\n') || 'Ninguém visualizou ainda.'}`)}
+                  onClick={() => setStoryPeopleModal({ title: 'Visualizaram', userIds: [...new Set(selectedStory.viewedBy)] })}
                   type="button"
                 >
                   <Eye className="h-4 w-4 text-white" />
@@ -1900,6 +2238,39 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           </section>
         </div>
       )}
+      {storyPeopleModal && (
+        <div className="fixed inset-0 z-[1800] grid place-items-end bg-black/65 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] pt-[calc(env(safe-area-inset-top)+16px)] backdrop-blur-sm sm:place-items-center">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold">{storyPeopleModal.title}</h2>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryPeopleModal(null)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid max-h-[55dvh] gap-2 overflow-auto scrollbar-hidden">
+              {storyPeopleModal.userIds.length === 0 ? (
+                <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Ainda não tem ninguém aqui.</p>
+              ) : (
+                storyPeopleModal.userIds.map((uid) => {
+                  const profile = storyPeopleProfiles.get(uid);
+                  return (
+                    <button
+                      className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 px-3 py-2 text-left text-sm text-slate-100 disabled:opacity-70"
+                      disabled={!profile}
+                      key={uid}
+                      onClick={() => openStoryPerson(uid)}
+                      type="button"
+                    >
+                      <span className="min-w-0 truncate font-semibold">{profile?.displayName ?? 'Pessoa do Raddo'}</span>
+                      {profile && <span className="text-xs text-slate-400">Ver bio</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {storyComposerOpen && (
         <div className="fixed inset-0 z-[1500] overflow-hidden bg-black/85 px-3 pb-[calc(var(--raddo-bottom-safe)+12px)] pt-[calc(env(safe-area-inset-top)+12px)] backdrop-blur-sm sm:grid sm:place-items-center sm:p-6">
           <section className="flex h-full max-h-full w-full flex-col overflow-hidden rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:max-w-lg sm:p-6">
@@ -1924,7 +2295,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {storyImageURL && storyMediaType === 'video' ? (
                 <video autoPlay className="min-h-0 w-full flex-1 rounded-lg bg-black object-contain" loop muted playsInline src={storyImageURL} />
               ) : storyImageURL ? (
-                <img alt="" className="min-h-0 w-full flex-1 rounded-lg bg-black object-contain" src={storyImageURL} />
+                <CachedMediaImage className="h-full w-full object-contain" fallbackClassName="min-h-0 w-full flex-1 rounded-lg bg-black" src={storyImageURL} />
               ) : (
                 <div className="grid min-h-[38dvh] place-items-center rounded-lg border border-dashed border-white/15 bg-slate-950/60 text-sm text-slate-400">
                   Foto opcional
@@ -1978,7 +2349,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             {previewEvent.coverURL && (
               <div className="-mx-5 -mt-5 mb-4 aspect-video overflow-hidden bg-slate-950">
-                <img alt="" className="h-full w-full object-cover" src={previewEvent.coverURL} />
+                <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={previewEvent.coverURL} />
               </div>
             )}
             <div className="flex items-start justify-between gap-3">
@@ -2050,7 +2421,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 {previewEventIsParticipant ? 'Conversar' : 'Entrar no chat'}
               </button>
             </div>
-            {previewEvent.creatorUid === me.uid && (
+            {(previewEvent.creatorUid === me.uid || canManageApp) && (
               <button
                 className="raddo-delete-chat-button mt-2 h-10 w-full rounded-lg bg-rose-400/20 text-sm font-semibold text-white"
                 onClick={() => handleDeleteEvent(previewEvent)}
@@ -2125,12 +2496,14 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             setStoryComposerOpen(true);
             setStoryText('');
             setStoryImageURL('');
+            setStoryUploadFile(null);
             setStoryMediaType('image');
           }}
           onDeleted={(eventId) => {
             setLocalEvents((current) => current.filter((event) => event.id !== eventId));
             setActiveEvent(null);
           }}
+          onEditEvent={openEditEvent}
           stories={storiesByEvent.get(activeEvent.id) ?? []}
         />
       )}
@@ -2198,7 +2571,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                         type="button"
                       >
                         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8 text-lg">{event.emoji || '\u{1F4AC}'}</span>
-                        {event.coverURL && <img alt="" className="h-9 w-9 shrink-0 rounded-lg object-cover" src={event.coverURL} />}
+                        {event.coverURL && <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-9 w-9 shrink-0 rounded-lg" src={event.coverURL} />}
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2">
                             <span className="truncate text-sm font-semibold">{event.title}</span>
@@ -2294,7 +2667,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                       }}
                       type="button"
                     >
-                      <img alt="" className="h-12 w-12 rounded-lg object-cover" src={profile.photoURL} />
+                      <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={profile.photoURL} />
                     </button>
                     <button
                       className="min-w-0 flex-1 text-left"
@@ -2403,7 +2776,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               </label>
               {eventCoverURL && (
                 <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">
-                  <img alt="" className="aspect-video w-full object-cover" src={eventCoverURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="aspect-video w-full rounded-lg" src={eventCoverURL} />
                 </div>
               )}
               <label className="grid gap-2 text-sm">
@@ -2503,6 +2876,111 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           </section>
         </div>
       )}
+      {editingEvent && (
+        <div className="fixed inset-0 z-[1300] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
+          <section className="scrollbar-hidden max-h-[92dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Editar mapa</h2>
+                <p className="text-sm text-slate-300">Ajuste as informações do chat local.</p>
+              </div>
+              <button
+                aria-label="Fechar"
+                className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
+                onClick={() => setEditingEvent(null)}
+                type="button"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <form className="grid gap-3" onSubmit={handleSaveEventEdit}>
+              <input
+                className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
+                onChange={(event) => setEditingTitle(event.target.value)}
+                placeholder="Nome do evento"
+                value={editingTitle}
+              />
+              <textarea
+                className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm outline-none"
+                onChange={(event) => setEditingDescription(event.target.value)}
+                placeholder="Descrição, ponto de encontro ou local exato"
+                value={editingDescription}
+              />
+              <label className="grid gap-2 text-sm">
+                Emoji do mapa
+                <div className="grid grid-cols-6 gap-2">
+                  {eventEmojiQuickOptions.map((emoji) => (
+                    <button
+                      className={`grid h-10 place-items-center rounded-lg border text-lg ${
+                        editingEmoji === emoji ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60'
+                      }`}
+                      key={emoji}
+                      onClick={() => setEditingEmoji(emoji)}
+                      type="button"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </label>
+              <label className="grid gap-2 text-sm">
+                Quem pode entrar
+                <select
+                  className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
+                  onChange={(event) => setEditingAccessMode(event.target.value as MapEvent['accessMode'])}
+                  value={editingAccessMode}
+                >
+                  <option value="open">Aberto para qualquer pessoa</option>
+                  <option value="approval">Precisa de autorização</option>
+                  <option value="password">Precisa de senha</option>
+                </select>
+              </label>
+              {editingAccessMode === 'password' && (
+                <input
+                  className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
+                  onChange={(event) => setEditingPassword(event.target.value)}
+                  placeholder={editingEvent.passwordHash ? 'Nova senha, ou deixe em branco para manter' : 'Senha do chat'}
+                  type="password"
+                  value={editingPassword}
+                />
+              )}
+              {me.isPremium && (
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
+                  <span>
+                    <span className="block font-semibold">Chat permanente</span>
+                    <span className="text-xs text-slate-300">Disponível para Premium.</span>
+                  </span>
+                  <input
+                    checked={editingIsPermanent}
+                    className="h-5 w-5"
+                    onChange={(event) => setEditingIsPermanent(event.target.checked)}
+                    type="checkbox"
+                  />
+                </label>
+              )}
+              <label className="grid gap-2 text-xs text-slate-300">
+                Raio do chat: {formatRadius(editingRadius)}
+                <input
+                  max={50}
+                  min={0.1}
+                  onChange={(event) => setEditingRadius(Number(event.target.value))}
+                  step={0.1}
+                  type="range"
+                  value={editingRadius}
+                />
+              </label>
+              {eventError && <p className="rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
+              <button
+                className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-70"
+                disabled={savingEventEdit}
+                type="submit"
+              >
+                {savingEventEdit ? 'Salvando...' : 'Salvar alterações'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
       {emojiPickerOpen && (
         <div className="fixed inset-0 z-[1300] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
           <section className="max-h-[82dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
@@ -2591,9 +3069,6 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               setPreviewEvent(event);
             }}
           />
-          <OwnerEventArrows events={visibleEvents} me={me} onFocusEvent={focusChatOnMap} />
-          <JoinedEventDots events={joinedActiveEvents} me={me} onFocusEvent={focusChatOnMap} />
-
           {false && profiles.map((profile) => {
             const position = visibleLocation(profile);
             if (!position) return null;
@@ -2635,12 +3110,12 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       {(me.isPremium ? selectedPoint : me.location) && (
         <button
           aria-label="Criar chat"
-          className="raddo-create-chat-cta absolute left-1/2 z-[560] grid h-20 w-20 -translate-x-1/2 place-items-center rounded-full text-white"
+          className="raddo-create-chat-cta absolute left-1/2 z-[560] grid h-14 w-14 -translate-x-1/2 place-items-center rounded-full text-white"
           onClick={() => setCreateChatOpen(true)}
           type="button"
         >
-          <Plus className="h-10 w-10" />
-          <span className="absolute -bottom-7 whitespace-nowrap text-xs font-semibold text-white drop-shadow">Criar chat</span>
+          <Plus className="h-7 w-7" />
+          <span className="absolute -bottom-6 whitespace-nowrap text-xs font-semibold text-white drop-shadow">Criar chat</span>
         </button>
       )}
 
@@ -2678,7 +3153,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 type="button"
               >
                 <span className="flex items-center gap-2 truncate text-sm font-semibold">
-                  {event.coverURL && <img alt="" className="h-8 w-8 rounded-lg object-cover" src={event.coverURL} />}
+                  {event.coverURL && <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-8 w-8 rounded-lg" src={event.coverURL} />}
                   <MessageCircle className="h-4 w-4 text-fuchsia-300" />
                   {event.title}
                 </span>
@@ -2726,7 +3201,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             {sortedProfiles.slice(0, 6).map((profile) => (
               <article className="flex items-center gap-3" key={profile.uid}>
                 <button className="shrink-0" onClick={() => setPreviewProfile(profile)} type="button">
-                  <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} />
                 </button>
                 <button className="min-w-0 flex-1 text-left" onClick={() => setPreviewProfile(profile)} type="button">
                   <h3 className="truncate text-sm font-semibold">{profile.displayName}</h3>

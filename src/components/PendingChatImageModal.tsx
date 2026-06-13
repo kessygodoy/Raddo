@@ -1,4 +1,5 @@
 import { Eye, Loader2, Send, X } from 'lucide-react';
+import CachedMediaImage from './CachedMediaImage';
 
 type Props = {
   imageURL?: string;
@@ -58,7 +59,7 @@ export default function PendingChatImageModal({
             <video className="max-h-[52dvh] w-full rounded-xl object-contain" controls playsInline src={imageURL} />
           )}
           {!uploading && imageURL && mediaType === 'image' && (
-            <img alt="" className="max-h-[52dvh] w-full rounded-xl object-contain" src={imageURL} />
+            <CachedMediaImage className="max-h-[52dvh] w-full object-contain" fallbackClassName="max-h-[52dvh] w-full rounded-xl" src={imageURL} />
           )}
         </div>
 

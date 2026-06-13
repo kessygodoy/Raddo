@@ -1,10 +1,11 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Eye, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, MoreVertical, Plus, Send, Shield, Trash2, UserMinus, Users, Video, X } from 'lucide-react';
+import { Camera, Edit3, Eye, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, MoreVertical, Plus, Send, Shield, Trash2, UserMinus, Users, Video, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
   deleteMapEvent,
   deleteMapEventMessage,
+  deleteMapEventStory,
   editMapEventMessage,
   hashMapEventPassword,
   leaveMapEvent,
@@ -24,15 +25,18 @@ import {
   useMapEventModerators,
   useMapEventParticipants,
 } from '../hooks/useMapEvents';
+import { useAppModeratorRole } from '../moderation';
 import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
 import type { MapEvent, MapEventStory, Match, UserProfile } from '../types';
 import ProfilePreview from './ProfilePreview';
 import { reportReasons, type ReportReason } from '../reportOptions';
 import ExternalGpsModal from './ExternalGpsModal';
 import ChatImageMessage from './ChatImageMessage';
-import { uploadChatMedia } from '../chatImages';
+import { prepareChatImageFile, uploadChatMedia } from '../chatImages';
 import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
+import CachedMediaImage from './CachedMediaImage';
+import { signedProfilePhotoUrl } from '../storageImages';
 
 function isVideoMedia(url: string, text?: string) {
   return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
@@ -45,6 +49,7 @@ type Props = {
   onClose: () => void;
   onCreateStory?: (event: MapEvent) => void;
   onDeleted?: (eventId: string) => void;
+  onEditEvent?: (event: MapEvent) => void;
   stories?: MapEventStory[];
 };
 
@@ -69,7 +74,7 @@ type AppDialog =
 
 function ProfileAvatar({ profile }: { profile: UserProfile }) {
   return profile.photoURL ? (
-    <img alt="" className="h-12 w-12 rounded-lg object-cover" src={profile.photoURL} />
+    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={profile.photoURL} />
   ) : (
     <div className="grid h-12 w-12 place-items-center rounded-lg bg-teal-300 text-sm font-bold text-slate-950">
       {profile.displayName.slice(0, 1).toUpperCase()}
@@ -134,13 +139,15 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
   );
 }
 
-export default function MapEventChat({ event, matches = [], me, onClose, onCreateStory, onDeleted, stories = [] }: Props) {
+export default function MapEventChat({ event, matches = [], me, onClose, onCreateStory, onDeleted, onEditEvent, stories = [] }: Props) {
   const messages = useMapEventMessages(event.id, me.uid);
   const participants = useMapEventParticipants(event.id, me);
   const moderators = useMapEventModerators(event.id);
+  const appModeratorRole = useAppModeratorRole(me.uid);
+  const canManageApp = Boolean(appModeratorRole);
   const isOwner = event.creatorUid === me.uid;
   const isModerator = moderators.includes(me.uid);
-  const canManage = isOwner || isModerator;
+  const canManage = isOwner || isModerator || canManageApp;
   const joinRequests = useMapEventJoinRequests(event.id, me, canManage);
   const bannedUsers = useMapEventBans(event.id, me, canManage);
   const [handledJoinRequestIds, setHandledJoinRequestIds] = useState<Set<string>>(new Set());
@@ -151,6 +158,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   const [sendingImage, setSendingImage] = useState(false);
   const [pendingImageURL, setPendingImageURL] = useState('');
   const [pendingImagePath, setPendingImagePath] = useState('');
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingMediaType, setPendingMediaType] = useState<'image' | 'video'>('image');
   const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [error, setError] = useState('');
@@ -171,6 +179,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   const [selectedStoryId, setSelectedStoryId] = useState('');
   const [storyProgressKey, setStoryProgressKey] = useState(0);
   const [storyProgressSeconds, setStoryProgressSeconds] = useState(7);
+  const [storyPeopleModal, setStoryPeopleModal] = useState<{ title: string; userIds: string[] } | null>(null);
+  const [optimisticStoryLikes, setOptimisticStoryLikes] = useState<Record<string, boolean>>({});
+  const [storyLikeBursts, setStoryLikeBursts] = useState<Set<string>>(new Set());
   const [viewedStoryIds, setViewedStoryIds] = useState<Set<string>>(() => {
     const saved = window.localStorage.getItem(`raddo:viewed-map-stories:${me.uid}`);
     if (!saved) return new Set();
@@ -189,10 +200,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
 
   const allMessages = useMemo(() => {
     const persistedKeys = new Set(
-      messages.map((message) => `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}`),
+      messages.map((message) => `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}:${message.imageURL}`),
     );
     const pendingMessages = optimisticMessages.filter((message) => {
-      const key = `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}`;
+      const key = `${message.eventId}:${message.senderUid}:${message.text.trim().toLowerCase()}:${message.imageURL}`;
       return !persistedKeys.has(key);
     });
 
@@ -205,7 +216,20 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   );
   const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do chat';
   const expiresAt = new Date(Date.parse(event.createdAt) + 24 * 60 * 60 * 1000);
-  const orderedStories = useMemo(() => stories.slice().sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)), [stories]);
+  const orderedStories = useMemo(
+    () =>
+      stories
+        .map((story) => {
+          const optimisticLiked = optimisticStoryLikes[story.id];
+          if (typeof optimisticLiked !== 'boolean') return story;
+          const likedBy = new Set(story.likedBy);
+          if (optimisticLiked) likedBy.add(me.uid);
+          else likedBy.delete(me.uid);
+          return { ...story, likedBy: [...likedBy] };
+        })
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)),
+    [me.uid, optimisticStoryLikes, stories],
+  );
   const storyGroups = useMemo(() => {
     const grouped = new Map<string, MapEventStory[]>();
     orderedStories.forEach((story) => {
@@ -221,10 +245,24 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   }, [orderedStories]);
   const latestStory = orderedStories[orderedStories.length - 1];
   const selectedStory = orderedStories.find((story) => story.id === selectedStoryId) ?? latestStory ?? null;
+  const storyPeopleProfiles = useMemo(() => {
+    const byUid = new Map<string, UserProfile>();
+    [me, ...participants].forEach((profile) => byUid.set(profile.uid, profile));
+    return byUid;
+  }, [me, participants]);
   const storyViewerStories = useMemo(
     () => (selectedStory ? storyGroups.find((group) => group.creatorUid === selectedStory.creatorUid)?.stories ?? [] : orderedStories),
     [orderedStories, selectedStory, storyGroups],
   );
+
+  useEffect(() => {
+    orderedStories.slice(0, 24).forEach((story) => {
+      if (!story.imageURL || story.mediaType === 'video') return;
+      void signedProfilePhotoUrl(story.imageURL).catch(() => undefined);
+      const image = new Image();
+      image.src = story.imageURL;
+    });
+  }, [orderedStories]);
 
   function scrollMessagesToBottom(behavior: ScrollBehavior = 'auto') {
     const area = messageAreaRef.current;
@@ -258,6 +296,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       }
 
       if (storyViewerOpen) {
+        if (storyPeopleModal) {
+          backEvent.preventDefault();
+          setStoryPeopleModal(null);
+          return;
+        }
+
         backEvent.preventDefault();
         setStoryViewerOpen(false);
         return;
@@ -334,7 +378,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     return () => {
       window.removeEventListener('raddo:android-back', handleBack, { capture: true });
     };
-  }, [actionProfile, coverOpen, coverPreviewOpen, dialog, gpsOpen, headerMenuOpen, infoOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, reportProfile, storyViewerOpen, uploadingImage]);
+  }, [actionProfile, coverOpen, coverPreviewOpen, dialog, gpsOpen, headerMenuOpen, infoOpen, managementView, openMessageMenuId, pendingImageURL, previewProfile, reportOpen, reportProfile, storyPeopleModal, storyViewerOpen, uploadingImage]);
 
   useEffect(() => {
     if (!headerMenuOpen) return undefined;
@@ -442,6 +486,14 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     openStory(previousStory.id);
   }
 
+  function openStoryPerson(uid: string) {
+    const profile = storyPeopleProfiles.get(uid);
+    if (!profile) return;
+    setStoryPeopleModal(null);
+    setStoryViewerOpen(false);
+    setPreviewProfile(profile);
+  }
+
   async function handleReportStory(story: MapEventStory) {
     try {
       await reportMapEventStory(story, event, me.uid);
@@ -451,10 +503,46 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     }
   }
 
+  async function handleDeleteStory(story: MapEventStory) {
+    setDialog({
+      confirmLabel: 'Apagar',
+      destructive: true,
+      message: 'Este story será removido do chat.',
+      onConfirm: async () => {
+        try {
+          await deleteMapEventStory(story.id);
+          if (selectedStoryId === story.id) {
+            setStoryViewerOpen(false);
+            setSelectedStoryId('');
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui apagar o story.');
+        }
+      },
+      title: 'Apagar story?',
+      type: 'confirm',
+    });
+  }
+
   async function handleLikeStory(story: MapEventStory) {
+    const nextLiked = !story.likedBy.includes(me.uid);
+    setOptimisticStoryLikes((current) => ({ ...current, [story.id]: nextLiked }));
+    setStoryLikeBursts((current) => new Set(current).add(story.id));
+    window.setTimeout(() => {
+      setStoryLikeBursts((current) => {
+        const next = new Set(current);
+        next.delete(story.id);
+        return next;
+      });
+    }, 520);
     try {
       await toggleMapEventStoryLike(story, me.uid);
     } catch (err) {
+      setOptimisticStoryLikes((current) => {
+        const next = { ...current };
+        delete next[story.id];
+        return next;
+      });
       setError(err instanceof Error ? err.message : 'Não consegui curtir o story.');
     }
   }
@@ -485,6 +573,22 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     if (sendingText || !cleanText) return;
     setError('');
     setSendingText(true);
+    const nextMessage = {
+      id: `local-${Date.now()}`,
+      eventId: event.id,
+      senderUid: me.uid,
+      senderName: me.displayName,
+      text: cleanText,
+      messageType: 'text' as const,
+      imageURL: '',
+      imagePath: '',
+      viewOnce: false,
+      viewedBy: [],
+      createdAt: new Date().toISOString(),
+    };
+    setOptimisticMessages((current) => [...current, nextMessage]);
+    shouldStickToBottomRef.current = true;
+    setText('');
 
     try {
       await sendMapEventMessage({
@@ -493,25 +597,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         senderName: me.displayName,
         text: cleanText,
       });
-      shouldStickToBottomRef.current = true;
-      setOptimisticMessages((current) => [
-        ...current,
-        {
-          id: `local-${Date.now()}`,
-          eventId: event.id,
-          senderUid: me.uid,
-          senderName: me.displayName,
-          text: cleanText,
-          messageType: 'text',
-          imageURL: '',
-          imagePath: '',
-          viewOnce: false,
-          viewedBy: [],
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-      setText('');
     } catch (err) {
+      setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+      setText(cleanText);
       setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
     } finally {
       setSendingText(false);
@@ -524,31 +612,28 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     if (!file) return;
     const mediaType = 'image';
 
-    setUploadingImage(true);
     setError('');
+    setUploadingImage(true);
     try {
-      const media = await uploadChatMedia({
-        allowRejected: event.accessMode !== 'open',
-        contextId: event.id,
-        context: 'map-chat-image',
-        file,
-        ownerUid: me.uid,
-      });
-      setPendingImageURL(media.url);
-      setPendingImagePath(media.path);
-      setPendingMediaType(mediaType);
-      setPendingImageViewOnce(false);
+      const preparedFile = await prepareChatImageFile(file);
+      setPendingImageURL(URL.createObjectURL(preparedFile));
+      setPendingImageFile(preparedFile);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui enviar a mídia.');
+      setError(err instanceof Error ? err.message : 'Não consegui preparar a imagem.');
+      return;
     } finally {
       setUploadingImage(false);
     }
+    setPendingImagePath('');
+    setPendingMediaType(mediaType);
+    setPendingImageViewOnce(false);
   }
 
   function cancelPendingImage() {
     if (uploadingImage || sendingImage) return;
     setPendingImageURL('');
     setPendingImagePath('');
+    setPendingImageFile(null);
     setPendingMediaType('image');
     setPendingImageViewOnce(false);
   }
@@ -556,46 +641,87 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   async function confirmPendingImage() {
     if (!pendingImageURL) return;
 
-    const imageURL = pendingImageURL;
-    const imagePath = pendingImagePath;
+    const previewURL = pendingImageURL;
+    let imageURL = pendingImageURL;
+    let imagePath = pendingImagePath;
+    const uploadFile = pendingImageFile;
     const mediaType = pendingMediaType;
     const viewOnce = pendingImageViewOnce;
     setPendingImageURL('');
     setPendingImagePath('');
+    setPendingImageFile(null);
     setPendingMediaType('image');
     setPendingImageViewOnce(false);
     setSendingImage(true);
-    try {
-      const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
-      await sendMapEventMessage({
-        eventId: event.id,
-        image: { imagePath, imageURL, viewOnce },
-        senderUid: me.uid,
-        senderName: me.displayName,
-        text: mediaText,
-      });
-      shouldStickToBottomRef.current = true;
-      setOptimisticMessages((current) => [
-        ...current,
-        {
-          id: `local-image-${Date.now()}`,
+    const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
+    const nextMessage = {
+      id: `local-image-${Date.now()}`,
+      eventId: event.id,
+      senderUid: me.uid,
+      senderName: me.displayName,
+      text: mediaText,
+      messageType: 'image' as const,
+      imageURL: previewURL,
+      imagePath,
+      viewOnce,
+      viewedBy: [],
+      createdAt: new Date().toISOString(),
+    };
+    setOptimisticMessages((current) => [...current, nextMessage]);
+    shouldStickToBottomRef.current = true;
+    let uploadedImageURL = '';
+    let uploadedImagePath = '';
+    const trySendImage = async (attempt = 0): Promise<void> => {
+      try {
+        if (uploadFile && !uploadedImageURL) {
+          const media = await uploadChatMedia({
+            allowRejected: event.accessMode !== 'open',
+            contextId: event.id,
+            context: 'map-chat-image',
+            file: uploadFile,
+            ownerUid: me.uid,
+          });
+          uploadedImageURL = media.url;
+          uploadedImagePath = media.path;
+          imageURL = media.url;
+          imagePath = media.path;
+        }
+        await sendMapEventMessage({
           eventId: event.id,
+          image: { imagePath, imageURL, viewOnce },
           senderUid: me.uid,
           senderName: me.displayName,
           text: mediaText,
-          messageType: 'image',
-          imageURL,
-          imagePath,
-          viewOnce,
-          viewedBy: [],
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui enviar a imagem.');
-    } finally {
-      setSendingImage(false);
-    }
+        });
+        window.setTimeout(() => {
+          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+        }, 5000);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Não consegui enviar a imagem.';
+        const retryable =
+          message.toLowerCase().includes('fetch') ||
+          message.toLowerCase().includes('network') ||
+          message.toLowerCase().includes('timeout') ||
+          !navigator.onLine;
+        if (!retryable) {
+          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
+          setError(message);
+          return;
+        }
+        if (uploadedImageURL) {
+          imageURL = uploadedImageURL;
+          imagePath = uploadedImagePath;
+        }
+        const delayMs = Math.min(30000, 4000 * 2 ** Math.min(attempt, 3));
+        setError('Internet instável. Vou continuar tentando enviar a imagem automaticamente.');
+        window.setTimeout(() => {
+          void trySendImage(attempt + 1);
+        }, delayMs);
+      }
+    };
+
+    setSendingImage(false);
+    void trySendImage();
   }
 
   async function handleLeave() {
@@ -885,7 +1011,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         </div>
       )}
       {storyViewerOpen && selectedStory && (
-        <div className="fixed inset-0 z-[1700] bg-black/90 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[1700] bg-black/90 pt-[env(safe-area-inset-top)] backdrop-blur-sm">
           <section className="relative flex h-full w-full flex-col bg-[#07111f] text-white shadow-2xl">
             <div className="grid grid-flow-col gap-1 bg-black/40 p-2">
               {storyViewerStories.map((story) => (
@@ -928,14 +1054,29 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 src={selectedStory.imageURL}
               />
             ) : selectedStory.imageURL ? (
-              <img alt="" className="min-h-0 flex-1 bg-black object-contain" src={selectedStory.imageURL} />
+              <CachedMediaImage className="h-full w-full object-contain" fallbackClassName="min-h-0 flex-1 bg-black" src={selectedStory.imageURL} />
             ) : (
               <div className="grid min-h-0 flex-1 place-items-center bg-slate-950 p-6 text-center text-lg font-semibold">{selectedStory.text}</div>
             )}
             {selectedStory.text && selectedStory.imageURL && <p className="p-4 text-sm text-slate-100">{selectedStory.text}</p>}
+            {selectedStory.id.startsWith('local-story-') && (
+              <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+4.5rem)] z-20 rounded-full bg-[#ff3f68] px-3 py-1 text-xs font-bold text-white shadow-lg">
+                Publicando...
+              </div>
+            )}
             <button aria-label="Story anterior" className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent" onClick={showPreviousStory} type="button" />
             <button aria-label="Próximo story" className="absolute bottom-24 right-0 top-14 z-10 w-1/2 bg-transparent" onClick={showNextStory} type="button" />
             <div className="pointer-events-none absolute bottom-28 right-3 z-20 grid gap-2">
+              {(selectedStory.creatorUid === me.uid || canManageApp) && (
+                <button
+                  aria-label="Apagar story"
+                  className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
+                  onClick={() => handleDeleteStory(selectedStory)}
+                  type="button"
+                >
+                  <Trash2 className="h-5 w-5" />
+                </button>
+              )}
               {selectedStory.creatorUid !== me.uid && (
                 <button
                   aria-label="Curtir story"
@@ -943,13 +1084,17 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   onClick={() => handleLikeStory(selectedStory)}
                   type="button"
                 >
-                  <Heart className={`h-5 w-5 ${selectedStory.likedBy.includes(me.uid) ? 'fill-[#ff3f68] text-[#ff3f68]' : 'text-white'}`} />
+                  <Heart
+                    className={`h-5 w-5 ${
+                      selectedStory.likedBy.includes(me.uid) ? 'fill-[#ff3f68] text-[#ff3f68]' : 'text-white'
+                    } ${storyLikeBursts.has(selectedStory.id) ? 'raddo-like-burst' : ''}`}
+                  />
                 </button>
               )}
               {selectedStory.creatorUid === me.uid && selectedStory.likedBy.length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => window.alert(`Curtidas:\n${selectedStory.likedBy.join('\n') || 'Nenhuma curtida ainda.'}`)}
+                  onClick={() => setStoryPeopleModal({ title: 'Curtidas', userIds: [...new Set(selectedStory.likedBy)] })}
                   type="button"
                 >
                   <Heart className="h-4 w-4 fill-[#ff3f68] text-[#ff3f68]" />
@@ -959,7 +1104,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => window.alert(`Visualizaram:\n${selectedStory.viewedBy.join('\n') || 'Ninguém visualizou ainda.'}`)}
+                  onClick={() => setStoryPeopleModal({ title: 'Visualizaram', userIds: [...new Set(selectedStory.viewedBy)] })}
                   type="button"
                 >
                   <Eye className="h-4 w-4 text-white" />
@@ -993,6 +1138,39 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           </section>
         </div>
       )}
+      {storyPeopleModal && (
+        <div className="fixed inset-0 z-[1800] grid place-items-end bg-black/65 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] pt-[calc(env(safe-area-inset-top)+16px)] backdrop-blur-sm sm:place-items-center">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold">{storyPeopleModal.title}</h2>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryPeopleModal(null)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid max-h-[55dvh] gap-2 overflow-auto scrollbar-hidden">
+              {storyPeopleModal.userIds.length === 0 ? (
+                <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Ainda não tem ninguém aqui.</p>
+              ) : (
+                storyPeopleModal.userIds.map((uid) => {
+                  const profile = storyPeopleProfiles.get(uid);
+                  return (
+                    <button
+                      className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 px-3 py-2 text-left text-sm text-slate-100 disabled:opacity-70"
+                      disabled={!profile}
+                      key={uid}
+                      onClick={() => openStoryPerson(uid)}
+                      type="button"
+                    >
+                      <span className="min-w-0 truncate font-semibold">{profile?.displayName ?? 'Pessoa do Raddo'}</span>
+                      {profile && <span className="text-xs text-slate-400">Ver bio</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {(uploadingImage || pendingImageURL) && (
         <PendingChatImageModal
           imageURL={pendingImageURL}
@@ -1015,7 +1193,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           >
             <X className="h-5 w-5" />
           </button>
-          <img alt="" className="max-h-[86dvh] max-w-full rounded-lg object-contain shadow-2xl" src={event.coverURL} />
+          <CachedMediaImage className="max-h-[86dvh] max-w-full object-contain shadow-2xl" fallbackClassName="max-h-[86dvh] max-w-full rounded-lg" src={event.coverURL} />
         </div>
       )}
       <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] max-h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
@@ -1028,7 +1206,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 onClick={() => setCoverPreviewOpen(true)}
                 type="button"
               >
-                <img alt="" className="h-full w-full object-cover" src={event.coverURL} />
+                <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={event.coverURL} />
               </button>
             )}
             <h1 className="truncate text-xl font-semibold">{event.title}</h1>
@@ -1095,6 +1273,19 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
                     onClick={() => {
                       setHeaderMenuOpen(false);
+                      onEditEvent?.(event);
+                    }}
+                    type="button"
+                  >
+                    <Edit3 className="h-4 w-4 text-teal-300" />
+                    Editar mapa
+                  </button>
+                )}
+                {canManage && (
+                  <button
+                    className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                    onClick={() => {
+                      setHeaderMenuOpen(false);
                       handleChangePassword();
                     }}
                     type="button"
@@ -1103,7 +1294,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     Trocar senha
                   </button>
                 )}
-                {isOwner && (
+                {(isOwner || canManageApp) && (
                   <button
                     className="raddo-delete-chat-button flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold text-white hover:bg-rose-400/10"
                     onClick={() => {
@@ -1227,7 +1418,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
 
         <section className="border-b border-white/10 p-3">
           <div
-            className="raddo-story-strip mb-2 flex gap-2 overflow-x-auto scrollbar-hidden"
+            className="raddo-story-strip mb-2 flex gap-[3px] overflow-x-auto scrollbar-hidden"
             onClickCapture={(event) => {
               if ((event.currentTarget as HTMLDivElement).dataset.dragging === 'true') {
                 event.preventDefault();
@@ -1238,7 +1429,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           >
             {onCreateStory && (
               <button
-                className="grid h-14 w-14 shrink-0 place-items-center rounded-full border border-dashed border-[#ff3f68]/70 bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
+                className="raddo-story-ring raddo-story-ring-new mx-2 grid h-14 w-14 shrink-0 place-items-center rounded-full bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
                 onClick={() => onCreateStory(event)}
                 type="button"
               >
@@ -1254,9 +1445,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               const story = group.latestStory;
               return (
               <button
-                className={`relative grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border bg-slate-950 ${
-                  allViewed ? 'border-slate-700' : 'border-[#ff3f68]/70'
-                }`}
+                className={`raddo-story-ring ${allViewed ? 'raddo-story-ring-viewed' : 'raddo-story-ring-new'} relative mx-2 grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-950`}
                 key={group.creatorUid}
                 onClick={() => openStory(story.id)}
                 type="button"
@@ -1264,9 +1453,14 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 {story.imageURL && story.mediaType === 'video' ? (
                   <Video className="h-5 w-5 text-white" />
                 ) : story.imageURL ? (
-                  <img alt="" className="h-full w-full object-cover" src={story.imageURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={story.imageURL} />
                 ) : (
                   <span className="px-1 text-center text-[10px] text-slate-100">{story.text || 'Story'}</span>
+                )}
+                {story.id.startsWith('local-story-') && (
+                  <span className="absolute inset-x-1 bottom-1 rounded bg-[#ff3f68] px-1 py-0.5 text-[8px] font-bold text-white">
+                    Publicando...
+                  </span>
                 )}
               </button>
               );
@@ -1362,6 +1556,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     ) : (
                       <p>{message.text}</p>
                     )}
+                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">Enviando...</p>}
                   </div>
                 </div>
               </div>

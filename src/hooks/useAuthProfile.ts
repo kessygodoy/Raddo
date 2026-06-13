@@ -124,6 +124,30 @@ function getErrorMessage(error: unknown) {
   return 'Não foi possível carregar seu perfil.';
 }
 
+function authProfileCacheKey(uid: string) {
+  return `raddo-auth-profile-cache:${uid}`;
+}
+
+export function readCachedAuthProfile(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(authProfileCacheKey(uid));
+    if (!saved) return null;
+    const parsed = JSON.parse(saved) as UserProfile;
+    return parsed?.uid === uid ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeCachedAuthProfile(profile: UserProfile) {
+  try {
+    window.localStorage.setItem(authProfileCacheKey(profile.uid), JSON.stringify(profile));
+    window.dispatchEvent(new CustomEvent('raddo:auth-profile-updated', { detail: profile }));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
 async function loadOrCreateProfile(user: User) {
   const { data: activeBan, error: banError } = await supabase
     .from('app_bans')
@@ -145,7 +169,11 @@ async function loadOrCreateProfile(user: User) {
     .maybeSingle<ProfileRow>();
 
   if (error) throw error;
-  if (data) return withSignedProfilePhotos(rowToProfile(data));
+  if (data) {
+    const profile = await withSignedProfilePhotos(rowToProfile(data));
+    writeCachedAuthProfile(profile);
+    return profile;
+  }
 
   const { data: created, error: createError } = await supabase
     .from('profiles')
@@ -156,10 +184,14 @@ async function loadOrCreateProfile(user: User) {
   if (createError) {
     const { data: ensured, error: ensureError } = await supabase.rpc('ensure_profile').single<ProfileRow>();
     if (ensureError) throw ensureError;
-    return withSignedProfilePhotos(rowToProfile(ensured));
+    const profile = await withSignedProfilePhotos(rowToProfile(ensured));
+    writeCachedAuthProfile(profile);
+    return profile;
   }
 
-  return withSignedProfilePhotos(rowToProfile(created));
+  const profile = await withSignedProfilePhotos(rowToProfile(created));
+  writeCachedAuthProfile(profile);
+  return profile;
 }
 
 export function useAuthProfile() {
@@ -188,8 +220,13 @@ export function useAuthProfile() {
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setProfile(null);
+      const nextUser = session?.user ?? null;
+      setUser((currentUser) => {
+        if (currentUser?.id !== nextUser?.id) {
+          setProfile(null);
+        }
+        return nextUser;
+      });
       setProfileError('');
       setLoading(false);
     });
@@ -209,8 +246,16 @@ export function useAuthProfile() {
       return undefined;
     }
     let active = true;
+    const currentUserId = user.id;
     setProfileLoading(true);
     setProfileError('');
+    const cachedProfile = readCachedAuthProfile(currentUserId);
+    if (cachedProfile) {
+      setProfile(cachedProfile);
+      withSignedProfilePhotos(cachedProfile).then((signedProfile) => {
+        if (active) setProfile(signedProfile);
+      });
+    }
 
     loadOrCreateProfile(user)
       .then((nextProfile) => {
@@ -227,20 +272,31 @@ export function useAuthProfile() {
       });
 
     const channel = supabase
-      .channel(`profile:${user.id}`)
+      .channel(`profile:${currentUserId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+        { event: '*', schema: 'public', table: 'profiles', filter: `id=eq.${currentUserId}` },
         (payload) => {
           if (payload.new) {
-            withSignedProfilePhotos(rowToProfile(payload.new as ProfileRow)).then((nextProfile) => setProfile(nextProfile));
+            withSignedProfilePhotos(rowToProfile(payload.new as ProfileRow)).then((nextProfile) => {
+              writeCachedAuthProfile(nextProfile);
+              setProfile(nextProfile);
+            });
           }
         },
       )
       .subscribe();
 
+    function handleCachedProfileUpdate(event: Event) {
+      const nextProfile = (event as CustomEvent<UserProfile>).detail;
+      if (nextProfile?.uid === currentUserId) setProfile(nextProfile);
+    }
+
+    window.addEventListener('raddo:auth-profile-updated', handleCachedProfileUpdate);
+
     return () => {
       active = false;
+      window.removeEventListener('raddo:auth-profile-updated', handleCachedProfileUpdate);
       supabase.removeChannel(channel);
     };
   }, [user]);

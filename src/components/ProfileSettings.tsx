@@ -44,8 +44,10 @@ import { languageOptions, useI18n } from '../i18n';
 import { supabase } from '../supabase';
 import type { AppLanguage, AppTheme, GenderIdentity, ProfileInterest, RelationshipGoal, Sexuality, UserProfile } from '../types';
 import { unblockProfile, undoProfileInteraction, useBlockedProfiles, useProfileInteractions } from '../hooks/useMatches';
+import { writeCachedAuthProfile } from '../hooks/useAuthProfile';
 import PremiumScreen from './PremiumScreen';
 import ProfilePreview from './ProfilePreview';
+import CachedMediaImage from './CachedMediaImage';
 import { getNotificationPermission, requestNativeNotifications, showAppNotification } from '../nativeNotifications';
 import { registerDeviceForPush } from '../pushNotifications';
 import {
@@ -56,7 +58,7 @@ import {
   type NotificationPreferences,
 } from '../notificationPreferences';
 import { moderateUploadedImage } from '../imageModeration';
-import { uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
+import { permanentProfilePhotoValue, uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
 import {
   banAppUser,
   type ModerationCase,
@@ -141,12 +143,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const moderationCases = useModerationCases(Boolean(appModeratorRole));
   const moderationDashboard = useModerationDashboard(Boolean(appModeratorRole));
   const appBannedUsers = useAppBannedUsers(Boolean(appModeratorRole));
+  const reportedModerationCases = moderationCases.cases.filter((item) => item.source === 'report');
 
   useEffect(() => {
     getNotificationPermission().then(setNotificationStatus);
   }, []);
 
   useEffect(() => {
+    if (hasProfileChanges || manualSaving || uploadingCarouselPhotos || uploadingProfilePhoto) return;
     const nextProfile = { ...profile, bio: profile.bio.slice(0, BIO_MAX_LENGTH) };
     setDraft(nextProfile);
     latestDraftRef.current = nextProfile;
@@ -155,7 +159,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     setNotificationPreferences(loadNotificationPreferences(profile.uid));
     const savedInteractionsUnlock = window.localStorage.getItem(`raddo-interactions-unlock-until:${profile.uid}`);
     setInteractionsUnlockUntil(savedInteractionsUnlock ? Number(savedInteractionsUnlock) : 0);
-  }, [profile]);
+  }, [hasProfileChanges, manualSaving, profile, uploadingCarouselPhotos, uploadingProfilePhoto]);
 
   useEffect(
     () => () => {
@@ -243,6 +247,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const previousDraft = latestDraftRef.current;
+    const previewURL = URL.createObjectURL(file);
+    const previewDraft = { ...previousDraft, photoURL: previewURL };
+    setDraft(previewDraft);
     setUploadingProfilePhoto(true);
     try {
       const uploadedUrl = await uploadFile(file, 'profile-photo');
@@ -253,6 +261,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         await saveDraftNow(nextDraft, saveVersion);
       }
     } catch (error) {
+      setDraft(previousDraft);
       setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar a imagem.');
     }
     setUploadingProfilePhoto(false);
@@ -263,6 +272,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
 
+    const previousDraft = latestDraftRef.current;
+    const previewUrls = files.map((file) => URL.createObjectURL(file));
+    const previewPhotos = [...previousDraft.photos, ...previewUrls].slice(0, CAROUSEL_PHOTO_MAX);
+    setDraft({ ...previousDraft, photos: previewPhotos });
     setUploadingCarouselPhotos(true);
     const uploadedUrls: string[] = [];
 
@@ -276,11 +289,13 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     }
 
     if (uploadedUrls.length > 0) {
-      const nextPhotos = [...draft.photos, ...uploadedUrls].slice(0, CAROUSEL_PHOTO_MAX);
+      const nextPhotos = [...previousDraft.photos, ...uploadedUrls].slice(0, CAROUSEL_PHOTO_MAX);
       const nextDraft = { ...latestDraftRef.current, photos: nextPhotos };
       setDraft(nextDraft);
       const saveVersion = markProfileChanged(nextDraft);
       await saveDraftNow(nextDraft, saveVersion);
+    } else {
+      setDraft(previousDraft);
     }
 
     setUploadingCarouselPhotos(false);
@@ -300,12 +315,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       return true;
     }
 
-    const { error } = await supabase
+    const savedPhotoURL = permanentProfilePhotoValue(nextDraft.photoURL);
+    const savedPhotos = nextDraft.photos.map(permanentProfilePhotoValue).filter(Boolean);
+    const { data, error } = await supabase
       .from('profiles')
       .update({
         display_name: nextDraft.displayName,
-        photo_url: nextDraft.photoURL || '',
-        photos: nextDraft.photos,
+        photo_url: savedPhotoURL,
+        photos: savedPhotos,
         privacy_mode: nextDraft.privacyMode,
         appear_in_cards: nextDraft.appearInCards,
         show_distance: nextDraft.showDistance,
@@ -325,10 +342,34 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         is_premium: nextDraft.isPremium,
         last_seen: new Date().toISOString(),
       })
-      .eq('id', profile.uid);
+      .eq('id', profile.uid)
+      .select('photo_url,photos')
+      .maybeSingle<{ photo_url: string | null; photos: string[] | null }>();
 
-    setSaveStatus(error ? t('savedError', { message: error.message }) : t(successKey));
-    return !error;
+    if (error) {
+      setSaveStatus(t('savedError', { message: error.message }));
+      return false;
+    }
+
+    if (!data) {
+      setSaveStatus(t('savedError', { message: 'O Supabase não confirmou a gravação do perfil.' }));
+      return false;
+    }
+
+    const databasePhotoURL = data.photo_url ?? '';
+    const databasePhotos = data.photos ?? [];
+    const photosMatch =
+      databasePhotoURL === savedPhotoURL &&
+      databasePhotos.length === savedPhotos.length &&
+      databasePhotos.every((photo, index) => photo === savedPhotos[index]);
+    if (!photosMatch) {
+      setSaveStatus(t('savedError', { message: 'As fotos não foram confirmadas no banco. Tente novamente.' }));
+      return false;
+    }
+
+    writeCachedAuthProfile({ ...nextDraft, photos: nextDraft.photos.filter(Boolean) });
+    setSaveStatus(t(successKey));
+    return true;
   }
 
   function markProfileChanged(nextDraft: UserProfile) {
@@ -556,7 +597,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       <aside className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <div className="grid place-items-center bg-slate-950/60 p-5">
           {draft.photoURL ? (
-            <img alt="" className="aspect-square w-1/2 min-w-24 rounded-full border border-white/10 object-cover" src={draft.photoURL} />
+            <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="aspect-square w-1/2 min-w-24 rounded-full border border-white/10" src={draft.photoURL} />
           ) : (
             <div className="grid aspect-square w-1/2 min-w-24 place-items-center rounded-full border border-white/10 bg-slate-950 text-sm text-slate-300">
               Sem foto
@@ -566,7 +607,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         <div className="grid grid-cols-4 gap-2 p-3">
           {draft.photos.map((photo) => (
             <div className="aspect-square overflow-hidden rounded-lg border border-white/10" key={photo}>
-              <img alt="" className="h-full w-full object-cover" src={photo} />
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={photo} />
             </div>
           ))}
         </div>
@@ -644,7 +685,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 </div>
                 {draft.photoURL && (
                   <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2">
-                    <img alt="" className="h-12 w-12 rounded-lg object-cover" src={draft.photoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={draft.photoURL} />
                     <div className="min-w-0">
                       <p className="text-sm font-semibold">Foto principal</p>
                       <p className="text-xs text-slate-300">Essa aparece no card, mapa e lista de conversas.</p>
@@ -670,7 +711,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   <div className="grid gap-2">
                     {draft.photos.map((photo) => (
                       <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={photo}>
-                        <img alt="" className="h-10 w-10 rounded-lg object-cover" src={photo} />
+                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={photo} />
                         <span className="min-w-0 flex-1 truncate text-xs text-slate-300">Foto do carrossel</span>
                         <button
                           className="ml-auto h-9 rounded-lg border border-white/10 px-3 text-xs text-slate-200"
@@ -953,7 +994,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   <div className="grid gap-2">
                     {interactions.map((interaction) => (
                       <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
-                        <img alt="" className="h-12 w-12 rounded-lg object-cover" src={interaction.profile.photoURL} />
+                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={interaction.profile.photoURL} />
                         <div className="min-w-0 flex-1">
                           <h3 className="truncate text-sm font-semibold">{interaction.profile.displayName}</h3>
                           <p className="mt-1 flex items-center gap-1 text-xs text-slate-300">
@@ -1120,7 +1161,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <div className="grid gap-2">
                 {blockedProfiles.map((blockedProfile) => (
                   <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={blockedProfile.uid}>
-                    <img alt="" className="h-10 w-10 rounded-lg object-cover" src={blockedProfile.photoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={blockedProfile.photoURL} />
                     <span className="min-w-0 flex-1 truncate text-sm font-semibold">{blockedProfile.displayName}</span>
                     <button
                       className="h-9 rounded-lg border border-white/10 px-3 text-xs text-slate-200"
@@ -1228,14 +1269,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                       Denúncias recentes
                     </div>
                     <span className="rounded-full bg-white/8 px-2 py-1 text-xs text-slate-300">
-                      {moderationCases.loading ? 'Carregando' : `${moderationCases.cases.length} casos`}
+                      {moderationCases.loading ? 'Carregando' : `${reportedModerationCases.length} casos`}
                     </span>
                   </div>
                   <div className="grid max-h-72 overflow-auto">
-                    {!moderationCases.loading && moderationCases.cases.length === 0 && (
+                    {!moderationCases.loading && reportedModerationCases.length === 0 && (
                       <p className="p-3 text-sm text-slate-300">Nenhuma denúncia com mensagens recentes.</p>
                     )}
-                    {moderationCases.cases.map((item) => (
+                    {reportedModerationCases.map((item) => (
                       <button
                         className={`flex items-center gap-3 border-b border-white/5 p-3 text-left transition hover:bg-white/8 ${
                           selectedModerationCase?.id === item.id ? 'bg-white/10' : ''
@@ -1248,7 +1289,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                         type="button"
                       >
                         {item.userPhotoURL ? (
-                          <img alt="" className="h-11 w-11 rounded-full object-cover" src={item.userPhotoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={item.userPhotoURL} />
                         ) : (
                           <div className="grid h-11 w-11 place-items-center rounded-full bg-amber-300 text-sm font-bold text-slate-950">
                             {item.userDisplayName.slice(0, 1).toUpperCase()}
@@ -1298,7 +1339,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     </div>
                     {selectedModerationCase.imageUrl && (
                       <div className="border-b border-white/10 p-3">
-                        <img alt="" className="max-h-56 w-full rounded-lg object-cover" src={selectedModerationCase.imageUrl} />
+                        <CachedMediaImage className="max-h-56 w-full object-cover" fallbackClassName="max-h-56 w-full rounded-lg" src={selectedModerationCase.imageUrl} />
                       </div>
                     )}
                     <div className="grid max-h-80 gap-2 overflow-auto p-3">
@@ -1314,7 +1355,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                             )}
                           </div>
                           {message.imageUrl ? (
-                            <img alt="" className="max-h-48 rounded-lg object-cover" src={message.imageUrl} />
+                            <CachedMediaImage className="max-h-48 object-cover" fallbackClassName="max-h-48 rounded-lg" src={message.imageUrl} />
                           ) : (
                             <p>{message.text || 'Mensagem sem texto'}</p>
                           )}
@@ -1370,7 +1411,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     {appBannedUsers.bannedUsers.map((bannedUser) => (
                       <article className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#07111f] p-3" key={bannedUser.uid}>
                         {bannedUser.photoURL ? (
-                          <img alt="" className="h-11 w-11 rounded-full object-cover" src={bannedUser.photoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={bannedUser.photoURL} />
                         ) : (
                           <div className="grid h-11 w-11 place-items-center rounded-full bg-rose-300 text-sm font-bold text-slate-950">
                             {bannedUser.displayName.slice(0, 1).toUpperCase()}

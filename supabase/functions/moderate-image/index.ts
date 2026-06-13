@@ -16,16 +16,6 @@ type SafeSearchAnnotation = {
   violence?: string;
 };
 
-type RecentMessage = {
-  createdAt?: string;
-  id?: string;
-  imageUrl?: string;
-  messageType?: string;
-  senderName?: string;
-  senderUid?: string;
-  text?: string;
-};
-
 const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Origin': '*',
@@ -120,130 +110,15 @@ async function createGoogleAccessToken() {
   return data.access_token;
 }
 
-function blockedReasons(safeSearch: SafeSearchAnnotation, context = 'image') {
+function blockedReasons(safeSearch: SafeSearchAnnotation) {
   const blocks: string[] = [];
   const adult = likelihoodRank[safeSearch.adult ?? 'UNKNOWN'] ?? 0;
   const racy = likelihoodRank[safeSearch.racy ?? 'UNKNOWN'] ?? 0;
   const violence = likelihoodRank[safeSearch.violence ?? 'UNKNOWN'] ?? 0;
-  if (adult >= likelihoodRank.LIKELY) blocks.push('conteúdo adulto');
-  if (adult >= likelihoodRank.POSSIBLE && racy >= likelihoodRank.VERY_LIKELY) blocks.push('conteúdo sexualizado');
-  if (violence >= likelihoodRank.VERY_LIKELY) blocks.push('violência explícita');
-
+  if (adult >= likelihoodRank.LIKELY) blocks.push('conteudo adulto');
+  if (adult >= likelihoodRank.POSSIBLE && racy >= likelihoodRank.VERY_LIKELY) blocks.push('conteudo sexualizado');
+  if (violence >= likelihoodRank.VERY_LIKELY) blocks.push('violencia explicita');
   return blocks;
-}
-
-async function createImageModerationReport(
-  admin: ReturnType<typeof createClient>,
-  values: {
-    bucket: string;
-    context: string;
-    ownerDisplayName: string;
-    ownerEmail: string;
-    ownerUid: string;
-    publicUrl: string;
-    reasons: string[];
-    recentMessages: RecentMessage[];
-    safeSearch: SafeSearchAnnotation;
-    storagePath: string;
-    status: string;
-  },
-) {
-  const payload = {
-    bucket: values.bucket,
-    context: values.context,
-    owner_display_name: values.ownerDisplayName,
-    owner_email: values.ownerEmail,
-    owner_uid: values.ownerUid,
-    public_url: values.publicUrl,
-    reasons: values.reasons,
-    recent_messages: values.recentMessages,
-    safe_search: values.safeSearch,
-    status: values.status,
-    storage_path: values.storagePath,
-  };
-
-  const { error } = await admin.from('image_moderation_reports').insert(payload);
-  if (!error) return { created: true, error: '' };
-
-  const fallbackPayload = {
-    bucket: values.bucket,
-    context: values.context,
-    owner_uid: values.ownerUid,
-    public_url: values.publicUrl,
-    reasons: values.reasons,
-    recent_messages: values.recentMessages,
-    safe_search: values.safeSearch,
-    storage_path: values.storagePath,
-  };
-  const { error: fallbackError } = await admin.from('image_moderation_reports').insert(fallbackPayload);
-
-  if (!fallbackError) return { created: true, error: '' };
-  const legacyPayload = {
-    bucket: values.bucket,
-    context: values.context,
-    owner_uid: values.ownerUid,
-    public_url: values.publicUrl,
-    reasons: values.reasons,
-    safe_search: values.safeSearch,
-    storage_path: values.storagePath,
-  };
-  const { error: legacyError } = await admin.from('image_moderation_reports').insert(legacyPayload);
-
-  if (!legacyError) return { created: true, error: '' };
-  console.warn('Could not create image moderation report', error.message, fallbackError.message, legacyError.message);
-  return { created: false, error: legacyError.message || fallbackError.message || error.message };
-}
-
-async function loadRecentMessagesForImage(
-  admin: ReturnType<typeof createClient>,
-  values: { context?: string; contextId?: string; ownerUid: string },
-) {
-  const fromMatchMessages = async () => {
-    let query = admin
-      .from('messages')
-      .select('id,sender_uid,text,message_type,image_url,created_at')
-      .eq('sender_uid', values.ownerUid)
-      .order('created_at', { ascending: false })
-      .limit(5);
-    if (values.contextId) query = query.eq('match_id', values.contextId);
-    const { data } = await query;
-    return (data ?? []).map((message) => ({
-      id: message.id,
-      createdAt: message.created_at,
-      imageUrl: message.image_url,
-      messageType: message.message_type,
-      senderUid: message.sender_uid,
-      text: message.text,
-    }));
-  };
-
-  const fromMapEventMessages = async () => {
-    let query = admin
-      .from('map_event_messages')
-      .select('id,sender_uid,sender_name,text,message_type,image_url,created_at')
-      .eq('sender_uid', values.ownerUid)
-      .order('created_at', { ascending: false })
-      .limit(5);
-    if (values.contextId) query = query.eq('event_id', values.contextId);
-    const { data } = await query;
-    return (data ?? []).map((message) => ({
-      id: message.id,
-      createdAt: message.created_at,
-      imageUrl: message.image_url,
-      messageType: message.message_type,
-      senderName: message.sender_name,
-      senderUid: message.sender_uid,
-      text: message.text,
-    }));
-  };
-
-  if (values.context === 'match-chat-image') return fromMatchMessages();
-  if (values.context === 'map-chat-image') return fromMapEventMessages();
-
-  const [matchMessages, mapMessages] = await Promise.all([fromMatchMessages(), fromMapEventMessages()]);
-  return [...matchMessages, ...mapMessages]
-    .sort((a, b) => Date.parse(b.createdAt ?? '') - Date.parse(a.createdAt ?? ''))
-    .slice(0, 5);
 }
 
 async function validateImageContext(
@@ -300,11 +175,6 @@ Deno.serve(async (req) => {
     });
     const { data: userData, error: userError } = await client.auth.getUser();
     if (userError || !userData.user) return jsonResponse({ error: 'Not authenticated' }, 401);
-    const userMetadata = userData.user.user_metadata as Record<string, unknown> | null;
-    const ownerDisplayName =
-      (typeof userMetadata?.full_name === 'string' && userMetadata.full_name) ||
-      (typeof userMetadata?.name === 'string' && userMetadata.name) ||
-      '';
 
     const body = await req.json() as ModerateImageRequest;
     const bucket = body.bucket || 'profile-photos';
@@ -319,13 +189,7 @@ Deno.serve(async (req) => {
     });
     if (!validContext) return jsonResponse({ error: 'Invalid image context' }, 403);
 
-    const imageUrl = body.imageUrl || admin.storage.from(bucket).getPublicUrl(body.path).data.publicUrl;
     const imageContent = await loadImageContentForVision(admin, { bucket, path: body.path });
-    const recentMessages = await loadRecentMessagesForImage(admin, {
-      context: body.context,
-      contextId: body.contextId,
-      ownerUid: userData.user.id,
-    });
     const accessToken = await createGoogleAccessToken();
 
     const visionResponse = await fetch('https://vision.googleapis.com/v1/images:annotate', {
@@ -345,19 +209,6 @@ Deno.serve(async (req) => {
     });
 
     if (!visionResponse.ok) {
-      await createImageModerationReport(admin, {
-        bucket,
-        context: body.context ?? 'image',
-        ownerUid: userData.user.id,
-        ownerEmail: userData.user.email ?? '',
-        ownerDisplayName,
-        publicUrl: imageUrl,
-        recentMessages,
-        reasons: ['falha na verificação automática'],
-        safeSearch: { error: await visionResponse.clone().text() } as SafeSearchAnnotation,
-        status: 'pending_human_review',
-        storagePath: body.path,
-      });
       await admin.storage.from(bucket).remove([body.path]);
       return jsonResponse({ allowed: false, error: `Google Vision failed: ${await visionResponse.text()}` }, 502);
     }
@@ -367,51 +218,20 @@ Deno.serve(async (req) => {
     };
     const response = visionData.responses?.[0];
     if (response?.error) {
-      await createImageModerationReport(admin, {
-        bucket,
-        context: body.context ?? 'image',
-        ownerUid: userData.user.id,
-        ownerEmail: userData.user.email ?? '',
-        ownerDisplayName,
-        publicUrl: imageUrl,
-        recentMessages,
-        reasons: ['imagem rejeitada pelo Google Vision'],
-        safeSearch: { error: response.error.message ?? 'Google Vision rejected the image' } as SafeSearchAnnotation,
-        status: 'pending_human_review',
-        storagePath: body.path,
-      });
       await admin.storage.from(bucket).remove([body.path]);
       return jsonResponse({ allowed: false, error: response.error.message || 'Google Vision rejected the image' }, 502);
     }
 
     const safeSearch = response?.safeSearchAnnotation ?? {};
-    const reasons = blockedReasons(safeSearch, body.context);
+    const reasons = blockedReasons(safeSearch);
     const allowed = reasons.length === 0;
-    let reportCreated = false;
-    let reportError = '';
-    if (!allowed) {
-      const report = await createImageModerationReport(admin, {
-        bucket,
-        context: body.context ?? 'image',
-        ownerUid: userData.user.id,
-        ownerEmail: userData.user.email ?? '',
-        ownerDisplayName,
-        publicUrl: imageUrl,
-        recentMessages,
-        reasons,
-        safeSearch,
-        status: 'pending_human_review',
-        storagePath: body.path,
-      });
-      reportCreated = report.created;
-      reportError = report.error;
-    }
+    if (!allowed) await admin.storage.from(bucket).remove([body.path]);
 
     return jsonResponse({
       allowed,
       context: body.context ?? 'image',
-      reportCreated,
-      reportError,
+      reportCreated: false,
+      reportError: '',
       reasons,
       safeSearch,
     });

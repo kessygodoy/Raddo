@@ -18,6 +18,7 @@ import { showRewardedVideoAd } from '../adMob';
 import ProfilePreview from './ProfilePreview';
 import { matchesGenderPreferences, profileQualityScore } from '../hooks/useNearbyProfiles';
 import { preloadImages, profileCoverUrl } from '../imagePreload';
+import CachedMediaImage from './CachedMediaImage';
 
 type Props = {
   me: UserProfile;
@@ -350,8 +351,8 @@ export default function Discovery({ me, profiles }: Props) {
               <h1 className="mt-4 text-3xl font-semibold">Deu match!</h1>
               <p className="mt-2 text-sm text-slate-300">Você e {matchProfile.displayName} se curtiram.</p>
               <div className="mt-5 flex justify-center -space-x-4">
-                <img alt="" className="h-20 w-20 rounded-lg border-2 border-[#07111f] object-cover" src={me.photoURL} />
-                <img alt="" className="h-20 w-20 rounded-lg border-2 border-[#07111f] object-cover" src={matchProfile.photoURL} />
+                <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={me.photoURL} />
+                <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={matchProfile.photoURL} />
               </div>
               <button
                 className="mt-6 h-11 w-full rounded-lg bg-teal-300 font-semibold text-slate-950"
@@ -406,7 +407,7 @@ export default function Discovery({ me, profiles }: Props) {
                           onClick={() => setPreviewProfile(profile)}
                           type="button"
                         >
-                          <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} />
                           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                         </button>
                         <button
@@ -503,7 +504,7 @@ export default function Discovery({ me, profiles }: Props) {
                           type="button"
                         >
                           {profile.photoURL ? (
-                            <img alt="" className="h-11 w-11 rounded-lg object-cover" src={profile.photoURL} />
+                            <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} />
                           ) : (
                             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white/10 text-sm font-semibold text-white">
                               {profile.displayName.slice(0, 2).toUpperCase()}
@@ -577,7 +578,7 @@ export default function Discovery({ me, profiles }: Props) {
               initial={{ opacity: 0, scale: 0.98, y: 20 }}
               key={current.uid}
             >
-              <img alt="" className="h-full w-full object-cover" src={current.photoURL} />
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={current.photoURL} />
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/72 via-black/24 to-transparent p-4 pt-28">
                 <div className="rounded-lg border border-white/15 bg-slate-950/82 p-4 text-white shadow-2xl backdrop-blur-md">
                   <div className="flex items-end justify-between gap-3">
@@ -702,7 +703,7 @@ export default function Discovery({ me, profiles }: Props) {
                   onClick={() => setPreviewProfile(profile)}
                   type="button"
                 >
-                  <img alt="" className="h-10 w-10 rounded-lg object-cover" src={profile.photoURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={profile.photoURL} />
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                 </button>
                 <button

@@ -6,7 +6,8 @@ import { useI18n } from '../i18n';
 import { supabase } from '../supabase';
 import type { GenderIdentity, ResolvedAppTheme, Sexuality, UserProfile } from '../types';
 import { moderateUploadedImage } from '../imageModeration';
-import { uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
+import { permanentProfilePhotoValue, uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
+import CachedMediaImage from './CachedMediaImage';
 
 type Props = {
   profile: UserProfile;
@@ -40,12 +41,14 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const previousPhotoURL = photoURL;
+    const previewURL = URL.createObjectURL(file);
+    setPhotoURL(previewURL);
     setUploadingPhoto(true);
     setError('');
 
     try {
       if (isDemoMode) {
-        setPhotoURL(URL.createObjectURL(file));
         return;
       }
 
@@ -55,6 +58,7 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
       await moderateUploadedImage({ context: 'profile-photo', path, publicUrl: signedUrl });
       setPhotoURL(signedUrl);
     } catch (photoError) {
+      setPhotoURL(previousPhotoURL);
       setError(photoError instanceof Error ? photoError.message : 'Não consegui enviar a foto.');
     } finally {
       setUploadingPhoto(false);
@@ -81,6 +85,12 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
       return;
     }
 
+    if (uploadingPhoto) {
+      setError('Aguarde a foto terminar de enviar.');
+      setSaving(false);
+      return;
+    }
+
     if (lookingFor.length === 0) {
       setError(t('chooseInterest'));
       setSaving(false);
@@ -92,13 +102,15 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
         .from('profiles')
         .update({
           display_name: displayName.trim(),
-          photo_url: photoURL || '',
-          photos: photoURL ? [photoURL] : [],
+          photo_url: permanentProfilePhotoValue(photoURL),
+          photos: permanentProfilePhotoValue(photoURL) ? [permanentProfilePhotoValue(photoURL)] : [],
           age,
           bio: bio.trim().slice(0, BIO_MAX_LENGTH),
           gender,
+          gender_identities: [gender],
           sexualities: [sexuality],
           looking_for: lookingFor,
+          interested_sexualities: [sexuality],
           privacy_mode: 'nearby',
           visibility_radius: visibilityRadius,
           last_seen: new Date().toISOString(),
@@ -169,7 +181,7 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
               </div>
               {photoURL && (
                 <div className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-2">
-                  <img alt="" className="h-14 w-14 rounded-full object-cover" src={photoURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-14 w-14 rounded-full" src={photoURL} />
                   <span className="text-sm text-slate-300">{t('selectedPhoto')}</span>
                 </div>
               )}

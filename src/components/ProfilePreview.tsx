@@ -5,6 +5,7 @@ import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
 import { reportProfile } from '../hooks/useMatches';
 import { reportReasons, type ReportReason } from '../reportOptions';
+import CachedMediaImage from './CachedMediaImage';
 
 type Props = {
   me: UserProfile;
@@ -47,7 +48,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
     <div className={`fixed inset-0 grid place-items-end bg-black/60 p-0 backdrop-blur-sm sm:place-items-center sm:p-6 ${overlayClassName}`}>
       <section className="max-h-[92dvh] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] text-white shadow-2xl sm:rounded-lg">
         <div className="relative aspect-[4/5] bg-slate-900">
-          <img alt="" className="h-full w-full object-cover" src={photo} />
+          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={photo} />
           <button
             aria-label={t('close')}
             className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-lg bg-black/45"

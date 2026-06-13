@@ -154,6 +154,29 @@ function rowToProfile(row: ProfileRow): UserProfile {
   };
 }
 
+function matchProfilesCacheKey(uid: string) {
+  return `raddo-match-profiles-cache:${uid}`;
+}
+
+function readCachedMatchProfiles(uid: string) {
+  try {
+    const saved = window.localStorage.getItem(matchProfilesCacheKey(uid));
+    if (!saved) return {};
+    const parsed = JSON.parse(saved) as Record<string, UserProfile>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCachedMatchProfiles(uid: string, profilesByUid: Record<string, UserProfile>) {
+  try {
+    window.localStorage.setItem(matchProfilesCacheKey(uid), JSON.stringify(profilesByUid));
+  } catch {
+    // Cache is best-effort only.
+  }
+}
+
 async function fetchMatches(uid: string) {
   const { data, error } = await supabase
     .from('matches')
@@ -389,12 +412,16 @@ export function useMessages(matchId?: string) {
 }
 
 export function useMatchProfiles(matches: Match[], currentUid: string) {
-  const [profilesByUid, setProfilesByUid] = useState<Record<string, UserProfile>>({});
+  const [profilesByUid, setProfilesByUid] = useState<Record<string, UserProfile>>(() => readCachedMatchProfiles(currentUid));
 
   const otherUids = useMemo(
     () => [...new Set(matches.map((match) => match.users.find((uid) => uid !== currentUid) ?? match.users[0]).filter(Boolean))],
     [currentUid, matches],
   );
+
+  useEffect(() => {
+    setProfilesByUid(readCachedMatchProfiles(currentUid));
+  }, [currentUid]);
 
   useEffect(() => {
     if (otherUids.length === 0) {
@@ -414,11 +441,22 @@ export function useMatchProfiles(matches: Match[], currentUid: string) {
     let active = true;
 
     async function loadProfiles() {
-      const { data } = await supabase.from('profiles').select('*').in('id', otherUids);
+      setProfilesByUid((current) => {
+        const cached = readCachedMatchProfiles(currentUid);
+        const next = { ...cached, ...current };
+        return Object.fromEntries(otherUids.map((uid) => [uid, next[uid]]).filter((entry): entry is [string, UserProfile] => Boolean(entry[1])));
+      });
+
+      const { data, error } = await supabase.from('profiles').select('*').in('id', otherUids);
       if (!active) return;
+      if (error) return;
       const signedProfiles = await Promise.all(((data ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))));
       if (!active) return;
-      setProfilesByUid(Object.fromEntries(signedProfiles.map((profile) => [profile.uid, profile])));
+      setProfilesByUid((current) => {
+        const next = { ...current, ...Object.fromEntries(signedProfiles.map((profile) => [profile.uid, profile])) };
+        writeCachedMatchProfiles(currentUid, next);
+        return next;
+      });
     }
 
     loadProfiles();
@@ -426,7 +464,7 @@ export function useMatchProfiles(matches: Match[], currentUid: string) {
     return () => {
       active = false;
     };
-  }, [otherUids]);
+  }, [currentUid, otherUids]);
 
   return profilesByUid;
 }
@@ -590,15 +628,16 @@ async function loadRecentReportedProfileMessages(reporterUid: string, reportedUi
 
   const { data } = await supabase
     .from('messages')
-    .select('id,sender_uid,text,message_type,image_url,created_at')
+    .select('id,sender_uid,text,message_type,image_url,image_path,created_at')
     .eq('match_id', matchId)
     .eq('sender_uid', reportedUid)
     .order('created_at', { ascending: false })
-    .limit(5);
+    .limit(30);
 
   return (data ?? []).map((message) => ({
     id: message.id,
     createdAt: message.created_at,
+    imagePath: message.image_path,
     imageUrl: message.image_url,
     messageType: message.message_type,
     senderUid: message.sender_uid,
@@ -1121,7 +1160,7 @@ export async function sendMessage(
   const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
   messageId = row?.id ?? '';
 
-  const { error: pushError } = await supabase.functions.invoke('send-match-push', {
+  supabase.functions.invoke('send-match-push', {
     body: {
       matchId,
       messageId,
@@ -1129,8 +1168,9 @@ export async function sendMessage(
       senderUid,
       text: cleanText,
     },
+  }).then(({ error: pushError }) => {
+    if (pushError) console.warn('Nao consegui enviar push do match', pushError);
   });
-  if (pushError) console.warn('Nao consegui enviar push do match', pushError);
 }
 
 export async function editMessage(message: Message, viewerUid: string, nextText: string) {

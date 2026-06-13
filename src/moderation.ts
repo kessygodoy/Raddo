@@ -1,11 +1,13 @@
 ﻿import { useEffect, useState } from 'react';
 import { isDemoMode } from './demoData';
+import { signedProfilePhotoUrl } from './storageImages';
 import { supabase } from './supabase';
 
 export type AppModeratorRole = 'admin' | 'moderator' | null;
 export type ModerationRecentMessage = {
   createdAt?: string;
   id?: string;
+  imagePath?: string;
   imageUrl?: string;
   messageType?: string;
   senderName?: string;
@@ -26,6 +28,7 @@ export type ModerationCase = {
   reporterUid?: string;
   source: 'image' | 'report';
   status?: string;
+  storagePath?: string;
   userDisplayName: string;
   userPhotoURL: string;
 };
@@ -178,7 +181,7 @@ export function useModerationCases(enabled: boolean) {
           .limit(50),
         supabase
           .from('image_moderation_reports')
-          .select('id,owner_uid,owner_display_name,public_url,context,reasons,recent_messages,status,created_at')
+          .select('id,owner_uid,owner_display_name,public_url,storage_path,context,reasons,recent_messages,status,created_at')
           .order('created_at', { ascending: false })
           .limit(50),
       ]);
@@ -204,6 +207,7 @@ export function useModerationCases(enabled: boolean) {
         reasons: string[] | null;
         recent_messages: ModerationRecentMessage[] | null;
         status: string;
+        storage_path: string;
       }>;
       const userIds = [
         ...new Set([
@@ -221,8 +225,39 @@ export function useModerationCases(enabled: boolean) {
         ]),
       );
 
-      const nextCases: ModerationCase[] = [
-        ...reportRows.map((item) => {
+      const imageCases = await Promise.all(
+        imageRows.map(async (item) => {
+          const user = profileById.get(item.owner_uid);
+          const imageUrl = item.storage_path
+            ? await signedProfilePhotoUrl(item.storage_path, { encryptedCache: false })
+            : item.public_url;
+          return {
+            id: `image:${item.id}`,
+            createdAt: item.created_at,
+            imageUrl,
+            recentMessages: item.recent_messages ?? [],
+            reason: item.reasons?.join(', ') || item.context,
+            reportedUid: item.owner_uid,
+            source: 'image' as const,
+            status: item.status,
+            storagePath: item.storage_path,
+            userDisplayName: user?.displayName || item.owner_display_name || 'Usuário denunciado',
+            userPhotoURL: user?.photoURL || '',
+          };
+        }),
+      );
+
+      async function signedEvidenceMessages(messages: ModerationRecentMessage[]) {
+        return Promise.all(
+          messages.map(async (message) => ({
+            ...message,
+            imageUrl: message.imagePath ? await signedProfilePhotoUrl(message.imagePath, { encryptedCache: false }) : message.imageUrl,
+          })),
+        );
+      }
+
+      const reportCases = await Promise.all(
+        reportRows.map(async (item) => {
           const user = profileById.get(item.reported_uid);
           return {
             id: `report:${item.id}`,
@@ -230,7 +265,7 @@ export function useModerationCases(enabled: boolean) {
             contextTitle: item.context_title ?? undefined,
             contextType: item.context_type ?? undefined,
             createdAt: item.created_at,
-            recentMessages: item.recent_messages ?? [],
+            recentMessages: await signedEvidenceMessages(item.recent_messages ?? []),
             reason: item.reason,
             reportedUid: item.reported_uid,
             reporterUid: item.reporter_uid,
@@ -239,21 +274,11 @@ export function useModerationCases(enabled: boolean) {
             userPhotoURL: user?.photoURL || '',
           };
         }),
-        ...imageRows.map((item) => {
-          const user = profileById.get(item.owner_uid);
-          return {
-            id: `image:${item.id}`,
-            createdAt: item.created_at,
-            imageUrl: item.public_url,
-            recentMessages: item.recent_messages ?? [],
-            reason: item.reasons?.join(', ') || item.context,
-            reportedUid: item.owner_uid,
-            source: 'image' as const,
-            status: item.status,
-            userDisplayName: user?.displayName || item.owner_display_name || 'UsuÃ¡rio denunciado',
-            userPhotoURL: user?.photoURL || '',
-          };
-        }),
+      );
+
+      const nextCases: ModerationCase[] = [
+        ...reportCases,
+        ...imageCases,
       ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
       if (active) {

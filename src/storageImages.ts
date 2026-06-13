@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import type { UserProfile } from './types';
-import { encryptedCachedObjectUrl, encryptedCachedObjectUrlOnly } from './encryptedMediaCache';
+import { encryptedCachedObjectUrl, encryptedCachedObjectUrlOnly, encryptedCacheKeyForObjectUrl } from './encryptedMediaCache';
 
 const PROFILE_BUCKET = 'profile-photos';
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60;
@@ -12,7 +12,7 @@ const MIN_UPLOAD_IMAGE_EDGE = 520;
 const MAX_UPLOAD_VIDEO_EDGE = 540;
 const UPLOAD_VIDEO_BITRATE = 650_000;
 
-function profilePhotoPathFromValue(value: string) {
+export function profilePhotoPathFromValue(value: string) {
   if (!value) return '';
   if (!value.startsWith('http')) return value.replace(/^profile-photos\//, '');
 
@@ -29,9 +29,19 @@ function profilePhotoPathFromValue(value: string) {
   return '';
 }
 
+export function permanentProfilePhotoValue(value: string) {
+  if (!value) return '';
+  if (value.startsWith('blob:')) return encryptedCacheKeyForObjectUrl(value);
+  return profilePhotoPathFromValue(value) || value;
+}
+
 export async function signedProfilePhotoUrl(value: string, options: { encryptedCache?: boolean } = {}) {
   const path = profilePhotoPathFromValue(value);
   if (!path) return value;
+  if (options.encryptedCache !== false) {
+    const cachedUrl = await encryptedCachedObjectUrlOnly(path, '');
+    if (cachedUrl) return cachedUrl;
+  }
 
   const { data, error } = await supabase.storage.from(PROFILE_BUCKET).createSignedUrl(path, SIGNED_URL_TTL_SECONDS);
   if (error || !data?.signedUrl) return encryptedCachedObjectUrlOnly(path, value).catch(() => value);
@@ -231,7 +241,7 @@ export async function uploadProfilePhoto(path: string, file: File) {
     upsert: true,
   });
   if (error) throw error;
-  return signedProfilePhotoUrl(path);
+  return signedProfilePhotoUrl(path, { encryptedCache: false });
 }
 
 export async function removeProfilePhoto(path: string) {
