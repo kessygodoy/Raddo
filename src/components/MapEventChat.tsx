@@ -547,17 +547,26 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     }
   }
 
-  async function handleReplyStory(story: MapEventStory) {
+  function handleReplyStory(story: MapEventStory) {
     const match = matches.find((item) => item.users.includes(me.uid) && item.users.includes(story.creatorUid));
     if (!match) return;
-    const message = window.prompt('Mensagem para responder ao story');
-    if (!message?.trim()) return;
-    try {
-      await sendMessage(match.id, me.uid, `Story: ${message.trim()}`, me.displayName);
-      setError('Mensagem enviada.');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
-    }
+    setDialog({
+      confirmLabel: 'Enviar',
+      initialValue: '',
+      message: 'Envie uma mensagem para responder ao story.',
+      onConfirm: async (value) => {
+        const message = value.trim();
+        if (!message) return;
+        try {
+          await sendMessage(match.id, me.uid, `Story: ${message}`, me.displayName);
+          setError('Mensagem enviada.');
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+        }
+      },
+      title: 'Comentar story',
+      type: 'prompt',
+    });
   }
 
   useEffect(() => {
@@ -1278,7 +1287,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     type="button"
                   >
                     <Edit3 className="h-4 w-4 text-teal-300" />
-                    Editar mapa
+                    Editar chat
                   </button>
                 )}
                 {canManage && (

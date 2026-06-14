@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import type { UserProfile } from './types';
-import { encryptedCachedObjectUrl, encryptedCachedObjectUrlOnly, encryptedCacheKeyForObjectUrl } from './encryptedMediaCache';
+import { encryptedCachedObjectUrl, encryptedCachedObjectUrlOnly, encryptedCacheKeyForObjectUrl, writeEncryptedCachedMedia } from './encryptedMediaCache';
 
 const PROFILE_BUCKET = 'profile-photos';
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60;
@@ -241,6 +241,7 @@ export async function uploadProfilePhoto(path: string, file: File) {
     upsert: true,
   });
   if (error) throw error;
+  await writeEncryptedCachedMedia(path, uploadFile).catch(() => undefined);
   return signedProfilePhotoUrl(path, { encryptedCache: false });
 }
 

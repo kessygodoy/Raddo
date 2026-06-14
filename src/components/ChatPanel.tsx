@@ -66,13 +66,6 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [chatView, setChatView] = useState<'list' | 'conversation'>('list');
   const [text, setText] = useState('');
   const [sendingText, setSendingText] = useState(false);
-  const [uploadingImage, setUploadingImage] = useState(false);
-  const [sendingImage, setSendingImage] = useState(false);
-  const [pendingImageURL, setPendingImageURL] = useState('');
-  const [pendingImagePath, setPendingImagePath] = useState('');
-  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
-  const [pendingMediaType, setPendingMediaType] = useState<'image' | 'video'>('image');
-  const [pendingImageViewOnce, setPendingImageViewOnce] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
   const [matchMenuOpen, setMatchMenuOpen] = useState(false);
@@ -174,12 +167,6 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
 
   useEffect(() => {
     const handleBack = (event: Event) => {
-      if (uploadingImage || pendingImageURL) {
-        event.preventDefault();
-        cancelPendingImage();
-        return;
-      }
-
       if (previewProfile) {
         event.preventDefault();
         setPreviewProfile(null);
@@ -210,7 +197,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [chatView, matchMenuOpen, openMessageMenuId, pendingImageURL, previewProfile, uploadingImage]);
+  }, [chatView, matchMenuOpen, openMessageMenuId, previewProfile]);
 
   useEffect(() => {
     if (!messageAreaRef.current || chatView !== 'conversation') return;
@@ -257,122 +244,6 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     } finally {
       setSendingText(false);
     }
-  }
-
-  async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file || !activeMatch) return;
-    const mediaType = 'image';
-
-    setActionMessage('');
-    setUploadingImage(true);
-    try {
-      const preparedFile = await prepareChatImageFile(file);
-      setPendingImageURL(URL.createObjectURL(preparedFile));
-      setPendingImageFile(preparedFile);
-    } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui preparar a imagem.');
-      return;
-    } finally {
-      setUploadingImage(false);
-    }
-    setPendingImagePath('');
-    setPendingMediaType(mediaType);
-    setPendingImageViewOnce(false);
-  }
-
-  function cancelPendingImage() {
-    if (uploadingImage || sendingImage) return;
-    setPendingImageURL('');
-    setPendingImagePath('');
-    setPendingImageFile(null);
-    setPendingMediaType('image');
-    setPendingImageViewOnce(false);
-  }
-
-  async function confirmPendingImage() {
-    if (!activeMatch || !pendingImageURL) return;
-
-    const previewURL = pendingImageURL;
-    let imageURL = pendingImageURL;
-    let imagePath = pendingImagePath;
-    const uploadFile = pendingImageFile;
-    const mediaType = pendingMediaType;
-    const viewOnce = pendingImageViewOnce;
-    setPendingImageURL('');
-    setPendingImagePath('');
-    setPendingImageFile(null);
-    setPendingMediaType('image');
-    setPendingImageViewOnce(false);
-    setSendingImage(true);
-    const mediaText = mediaType === 'video' ? 'Vídeo' : 'Imagem';
-    const nextMessage: Message = {
-      id: `local-image-${Date.now()}`,
-      senderUid: currentUid,
-      text: mediaText,
-      matchId: activeMatch.id,
-      messageType: 'image',
-      imageURL: previewURL,
-      imagePath,
-      viewOnce,
-      viewedBy: [],
-      createdAt: new Date().toISOString(),
-    };
-    setOptimisticMessages((current) => [...current, nextMessage]);
-    shouldStickToBottomRef.current = true;
-    let uploadedImageURL = '';
-    let uploadedImagePath = '';
-    const matchId = activeMatch.id;
-    const trySendImage = async (attempt = 0): Promise<void> => {
-      try {
-        if (uploadFile && !uploadedImageURL) {
-          const media = await uploadChatMedia({
-            allowRejected: true,
-            contextId: matchId,
-            context: 'match-chat-image',
-            file: uploadFile,
-            ownerUid: currentUid,
-          });
-          uploadedImageURL = media.url;
-          uploadedImagePath = media.path;
-          imageURL = media.url;
-          imagePath = media.path;
-        }
-        await sendMessage(matchId, currentUid, mediaText, currentProfile.displayName, {
-          imagePath,
-          imageURL,
-          viewOnce,
-        });
-        window.setTimeout(() => {
-          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
-        }, 5000);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Não consegui enviar a imagem.';
-        const retryable =
-          message.toLowerCase().includes('fetch') ||
-          message.toLowerCase().includes('network') ||
-          message.toLowerCase().includes('timeout') ||
-          !navigator.onLine;
-        if (!retryable) {
-          setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
-          setActionMessage(message);
-          return;
-        }
-        if (uploadedImageURL) {
-          imageURL = uploadedImageURL;
-          imagePath = uploadedImagePath;
-        }
-        const delayMs = Math.min(30000, 4000 * 2 ** Math.min(attempt, 3));
-        setActionMessage('Internet instável. Vou continuar tentando enviar a imagem automaticamente.');
-        window.setTimeout(() => {
-          void trySendImage(attempt + 1);
-        }, delayMs);
-      }
-    };
-
-    setSendingImage(false);
-    void trySendImage();
   }
 
   function selectMatch(matchId: string) {
@@ -476,19 +347,6 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           profile={previewProfile}
         />
       )}
-      {(uploadingImage || pendingImageURL) && (
-        <PendingChatImageModal
-          imageURL={pendingImageURL}
-          mediaType={pendingMediaType}
-          onCancel={cancelPendingImage}
-          onSend={confirmPendingImage}
-          sending={sendingImage}
-          setViewOnce={setPendingImageViewOnce}
-          uploading={uploadingImage}
-          viewOnce={pendingImageViewOnce}
-        />
-      )}
-
       {chatView === 'list' && (
       <aside className="flex min-h-0 flex-1 flex-col bg-[#0f1f2d]">
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
@@ -747,14 +605,6 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
         )}
 
         <form className="flex gap-2 border-t border-white/10 bg-[#0f1f2d] p-3" onSubmit={handleSubmit}>
-          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full border border-white/10 bg-white/8 text-slate-100" title="Abrir câmera">
-            <Camera className="h-5 w-5" />
-            <input accept="image/*" capture="environment" className="hidden" disabled={uploadingImage || !activeMatch} onChange={handleImageUpload} type="file" />
-          </label>
-          <label className="grid h-11 w-11 shrink-0 cursor-pointer place-items-center rounded-full border border-white/10 bg-white/8 text-slate-100" title="Escolher imagem">
-            <ImagePlus className="h-5 w-5" />
-            <input accept="image/*" className="hidden" disabled={uploadingImage || !activeMatch} onChange={handleImageUpload} type="file" />
-          </label>
           <input
             className="min-w-0 flex-1 rounded-full border border-white/10 bg-[#07111f] px-4 text-sm outline-none placeholder:text-slate-500"
             onChange={(event) => setText(event.target.value)}

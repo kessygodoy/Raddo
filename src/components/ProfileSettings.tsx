@@ -134,6 +134,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [deletingAccount, setDeletingAccount] = useState(false);
   const saveTimeoutRef = useRef<number | null>(null);
   const saveVersionRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+  const pendingSaveRef = useRef<{
+    draft: UserProfile;
+    successKey: 'savedAutomatically' | 'savedManually';
+    version: number;
+  } | null>(null);
   const latestDraftRef = useRef(profile);
   const blockedProfiles = useBlockedProfiles(profile.uid);
   const interactions = useProfileInteractions(profile.uid);
@@ -165,7 +171,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     () => () => {
       if (saveTimeoutRef.current !== null) {
         window.clearTimeout(saveTimeoutRef.current);
-        void saveProfile(latestDraftRef.current);
+        void persistLatestDraft(latestDraftRef.current, saveVersionRef.current);
       }
     },
     [],
@@ -317,34 +323,59 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
     const savedPhotoURL = permanentProfilePhotoValue(nextDraft.photoURL);
     const savedPhotos = nextDraft.photos.map(permanentProfilePhotoValue).filter(Boolean);
+    const savedGenderIdentities = nextDraft.genderIdentities.length ? nextDraft.genderIdentities : [nextDraft.gender];
+    const savedGender = primaryGender(savedGenderIdentities);
+    const savedBio = nextDraft.bio.slice(0, BIO_MAX_LENGTH);
+    const updatePayload = {
+      display_name: nextDraft.displayName,
+      photo_url: savedPhotoURL,
+      photos: savedPhotos,
+      privacy_mode: nextDraft.privacyMode,
+      appear_in_cards: nextDraft.appearInCards,
+      show_distance: nextDraft.showDistance,
+      show_online_status: nextDraft.showOnlineStatus,
+      visibility_radius: nextDraft.visibilityRadius,
+      age: nextDraft.age ?? 18,
+      gender: savedGender,
+      gender_identities: savedGenderIdentities,
+      sexualities: nextDraft.sexualities,
+      looking_for: nextDraft.lookingFor,
+      interested_sexualities: nextDraft.interestedSexualities,
+      interests: nextDraft.interests,
+      relationship_goals: nextDraft.relationshipGoals,
+      min_age_preference: nextDraft.minAgePreference ?? 18,
+      max_age_preference: nextDraft.maxAgePreference ?? 60,
+      bio: savedBio,
+      last_seen: new Date().toISOString(),
+    };
     const { data, error } = await supabase
       .from('profiles')
-      .update({
-        display_name: nextDraft.displayName,
-        photo_url: savedPhotoURL,
-        photos: savedPhotos,
-        privacy_mode: nextDraft.privacyMode,
-        appear_in_cards: nextDraft.appearInCards,
-        show_distance: nextDraft.showDistance,
-        show_online_status: nextDraft.showOnlineStatus,
-        visibility_radius: nextDraft.visibilityRadius,
-        age: nextDraft.age ?? 18,
-        gender: primaryGender(nextDraft.genderIdentities.length ? nextDraft.genderIdentities : [nextDraft.gender]),
-        gender_identities: nextDraft.genderIdentities.length ? nextDraft.genderIdentities : [nextDraft.gender],
-        sexualities: nextDraft.sexualities,
-        looking_for: nextDraft.lookingFor,
-        interested_sexualities: nextDraft.interestedSexualities,
-        interests: nextDraft.interests,
-        relationship_goals: nextDraft.relationshipGoals,
-        min_age_preference: nextDraft.minAgePreference ?? 18,
-        max_age_preference: nextDraft.maxAgePreference ?? 60,
-        bio: nextDraft.bio.slice(0, BIO_MAX_LENGTH),
-        is_premium: nextDraft.isPremium,
-        last_seen: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', profile.uid)
-      .select('photo_url,photos')
-      .maybeSingle<{ photo_url: string | null; photos: string[] | null }>();
+      .select(
+        'display_name,photo_url,photos,privacy_mode,appear_in_cards,show_distance,show_online_status,visibility_radius,age,gender,gender_identities,sexualities,looking_for,interested_sexualities,interests,relationship_goals,min_age_preference,max_age_preference,bio',
+      )
+      .maybeSingle<{
+        age: number | null;
+        appear_in_cards: boolean | null;
+        bio: string | null;
+        display_name: string | null;
+        gender: GenderIdentity | null;
+        gender_identities: GenderIdentity[] | null;
+        interested_sexualities: Sexuality[] | null;
+        interests: UserProfile['interests'] | null;
+        looking_for: GenderIdentity[] | null;
+        max_age_preference: number | null;
+        min_age_preference: number | null;
+        photo_url: string | null;
+        photos: string[] | null;
+        privacy_mode: UserProfile['privacyMode'] | null;
+        relationship_goals: UserProfile['relationshipGoals'] | null;
+        sexualities: Sexuality[] | null;
+        show_distance: boolean | null;
+        show_online_status: boolean | null;
+        visibility_radius: number | null;
+      }>();
 
     if (error) {
       setSaveStatus(t('savedError', { message: error.message }));
@@ -356,20 +387,76 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       return false;
     }
 
-    const databasePhotoURL = data.photo_url ?? '';
-    const databasePhotos = data.photos ?? [];
-    const photosMatch =
-      databasePhotoURL === savedPhotoURL &&
-      databasePhotos.length === savedPhotos.length &&
-      databasePhotos.every((photo, index) => photo === savedPhotos[index]);
-    if (!photosMatch) {
-      setSaveStatus(t('savedError', { message: 'As fotos não foram confirmadas no banco. Tente novamente.' }));
+    const arraysMatch = <T,>(left: T[] | null | undefined, right: T[]) =>
+      (left ?? []).length === right.length && (left ?? []).every((item, index) => item === right[index]);
+    const profileMatches =
+      (data.display_name ?? '') === updatePayload.display_name &&
+      (data.photo_url ?? '') === savedPhotoURL &&
+      arraysMatch(data.photos, savedPhotos) &&
+      data.privacy_mode === updatePayload.privacy_mode &&
+      (data.appear_in_cards ?? true) === updatePayload.appear_in_cards &&
+      (data.show_distance ?? true) === updatePayload.show_distance &&
+      (data.show_online_status ?? true) === updatePayload.show_online_status &&
+      Number(data.visibility_radius) === updatePayload.visibility_radius &&
+      (data.age ?? 18) === updatePayload.age &&
+      data.gender === updatePayload.gender &&
+      arraysMatch(data.gender_identities, updatePayload.gender_identities) &&
+      arraysMatch(data.sexualities, updatePayload.sexualities) &&
+      arraysMatch(data.looking_for, updatePayload.looking_for) &&
+      arraysMatch(data.interested_sexualities, updatePayload.interested_sexualities) &&
+      arraysMatch(data.interests, updatePayload.interests) &&
+      arraysMatch(data.relationship_goals, updatePayload.relationship_goals) &&
+      (data.min_age_preference ?? 18) === updatePayload.min_age_preference &&
+      (data.max_age_preference ?? 60) === updatePayload.max_age_preference &&
+      (data.bio ?? '') === updatePayload.bio;
+    if (!profileMatches) {
+      setSaveStatus(t('savedError', { message: 'O Supabase não confirmou todas as alterações. Tente novamente.' }));
       return false;
     }
 
-    writeCachedAuthProfile({ ...nextDraft, photos: nextDraft.photos.filter(Boolean) });
+    writeCachedAuthProfile({
+      ...nextDraft,
+      age: updatePayload.age,
+      bio: savedBio,
+      gender: savedGender,
+      genderIdentities: savedGenderIdentities,
+      maxAgePreference: updatePayload.max_age_preference,
+      minAgePreference: updatePayload.min_age_preference,
+      photoURL: savedPhotoURL,
+      photos: savedPhotos,
+    });
     setSaveStatus(t(successKey));
     return true;
+  }
+
+  async function persistLatestDraft(
+    nextDraft: UserProfile,
+    saveVersion: number,
+    successKey: 'savedAutomatically' | 'savedManually' = 'savedAutomatically',
+  ) {
+    if (saveInFlightRef.current) {
+      pendingSaveRef.current = { draft: nextDraft, successKey, version: saveVersion };
+      return false;
+    }
+
+    saveInFlightRef.current = true;
+    let currentSave: typeof pendingSaveRef.current = { draft: nextDraft, successKey, version: saveVersion };
+    let latestSaved = false;
+
+    try {
+      while (currentSave) {
+        const saved = await saveProfile(currentSave.draft, currentSave.successKey);
+        latestSaved = saved && saveVersionRef.current === currentSave.version;
+        if (latestSaved) setHasProfileChanges(false);
+        currentSave = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        if (currentSave) setSaveStatus(t('saving'));
+      }
+    } finally {
+      saveInFlightRef.current = false;
+    }
+
+    return latestSaved;
   }
 
   function markProfileChanged(nextDraft: UserProfile) {
@@ -385,8 +472,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     if (saveTimeoutRef.current !== null) window.clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = window.setTimeout(async () => {
       saveTimeoutRef.current = null;
-      const saved = await saveProfile(nextDraft);
-      if (saved && saveVersionRef.current === saveVersion) setHasProfileChanges(false);
+      await persistLatestDraft(nextDraft, saveVersion);
     }, delay);
   }
 
@@ -399,8 +485,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     setManualSaving(true);
     setSaveStatus(t('saving'));
     try {
-      const saved = await saveProfile(nextDraft, 'savedManually');
-      if (saved && saveVersionRef.current === saveVersion) setHasProfileChanges(false);
+      await persistLatestDraft(nextDraft, saveVersion, 'savedManually');
     } finally {
       setManualSaving(false);
     }

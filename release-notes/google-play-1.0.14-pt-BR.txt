@@ -1,0 +1,5 @@
+Melhorias de desempenho no mapa, com menos marcadores carregados ao navegar.
+Correções no salvamento do perfil e fotos.
+Chat privado agora aceita apenas mensagens de texto.
+Correções em notificações, curtidas de stories e animação de match.
+Melhor estabilidade ao publicar stories e usar imagens.

@@ -92,6 +92,10 @@ async function writeEncryptedBlob(cacheKey: string, blob: Blob) {
   await transaction<IDBValidKey>(STORE_MEDIA, 'readwrite', (store) => store.put(record));
 }
 
+export async function writeEncryptedCachedMedia(cacheKey: string, blob: Blob) {
+  await writeEncryptedBlob(cacheKey, blob);
+}
+
 function objectUrlForBlob(cacheKey: string, blob: Blob) {
   const existing = objectUrls.get(cacheKey);
   if (existing) {

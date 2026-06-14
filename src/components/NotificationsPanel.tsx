@@ -2,12 +2,15 @@ import { Bell, Heart, MessageCircle } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useMatchProfiles, useSortedMatches } from '../hooks/useMatches';
+import type { MapEventNotification } from '../hooks/useMapEvents';
 import type { NotificationPreferences } from '../notificationPreferences';
 import type { Match } from '../types';
 
 type Props = {
   currentUid: string;
+  mapNotifications?: MapEventNotification[];
   matches: Match[];
+  onOpenMapNotification: (notificationId: string) => void;
   onOpenNotification: (notificationId: string, matchId: string) => void;
   preferences: NotificationPreferences;
   readNotificationIds: Set<string>;
@@ -15,11 +18,12 @@ type Props = {
 
 type CachedNotification = {
   id: string;
-  matchId: string;
+  matchId?: string;
   timeValue: string | null;
   title: string;
   text: string;
-  tone: 'match' | 'message';
+  tone: 'match' | 'message' | 'story_like';
+  target: 'chat' | 'map';
 };
 
 function notificationsCacheKey(uid: string) {
@@ -31,7 +35,7 @@ function readNotificationsCache(uid: string) {
     const saved = window.localStorage.getItem(notificationsCacheKey(uid));
     if (!saved) return [];
     const parsed = JSON.parse(saved) as CachedNotification[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map((notification) => ({ ...notification, target: notification.target ?? 'chat' })) : [];
   } catch {
     return [];
   }
@@ -60,7 +64,15 @@ function notificationIdForMatch(match: Match) {
   return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
 }
 
-export default function NotificationsPanel({ currentUid, matches, onOpenNotification, preferences, readNotificationIds }: Props) {
+export default function NotificationsPanel({
+  currentUid,
+  mapNotifications = [],
+  matches,
+  onOpenMapNotification,
+  onOpenNotification,
+  preferences,
+  readNotificationIds,
+}: Props) {
   const { t } = useI18n();
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
@@ -89,18 +101,40 @@ export default function NotificationsPanel({ currentUid, matches, onOpenNotifica
           title: hasMessage ? t('notificationNewMessage') : t('notificationNewMatch'),
           text: hasMessage ? `${name}: ${match.lastMessage}` : t('notificationNewMatchText', { name }),
           tone: hasMessage ? 'message' as const : 'match' as const,
+          target: 'chat' as const,
         };
       }),
     [currentUid, preferences, profilesByUid, sortedMatches, t],
   );
-  const notifications = liveNotifications.length > 0 ? liveNotifications : cachedNotifications;
+
+  const liveMapNotifications = useMemo(
+    () =>
+      preferences.enabled
+        ? mapNotifications
+            .filter((notification) => (notification.tone === 'message' ? preferences.connectionMessages : true))
+            .map((notification) => ({
+              ...notification,
+              target: 'map' as const,
+            }))
+        : [],
+    [mapNotifications, preferences],
+  );
+
+  const liveCombinedNotifications = useMemo(
+    () =>
+      [...liveNotifications, ...liveMapNotifications].sort(
+        (a, b) => Date.parse(b.timeValue ?? '') - Date.parse(a.timeValue ?? ''),
+      ),
+    [liveMapNotifications, liveNotifications],
+  );
+  const notifications = liveCombinedNotifications.length > 0 ? liveCombinedNotifications : cachedNotifications;
 
   useEffect(() => {
-    if (liveNotifications.length === 0) return;
-    const nextCache = liveNotifications.slice(0, 80);
+    if (liveCombinedNotifications.length === 0) return;
+    const nextCache = liveCombinedNotifications.slice(0, 80);
     setCachedNotifications(nextCache);
     window.localStorage.setItem(notificationsCacheKey(currentUid), JSON.stringify(nextCache));
-  }, [currentUid, liveNotifications]);
+  }, [currentUid, liveCombinedNotifications]);
 
   return (
     <section className="mx-auto grid max-w-lg gap-4">
@@ -126,7 +160,13 @@ export default function NotificationsPanel({ currentUid, matches, onOpenNotifica
                 read ? 'opacity-70' : ''
               }`}
               key={notification.id}
-              onClick={() => onOpenNotification(notification.id, notification.matchId)}
+              onClick={() => {
+                if (notification.target === 'map') {
+                  onOpenMapNotification(notification.id);
+                  return;
+                }
+                if (notification.matchId) onOpenNotification(notification.id, notification.matchId);
+              }}
               type="button"
             >
               <div className={`notification-icon notification-icon-${notification.tone}`}>

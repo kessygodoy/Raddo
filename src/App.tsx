@@ -7,6 +7,7 @@ import { isDemoMode } from './demoData';
 import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
 import { useMatchProfiles, useMatches } from './hooks/useMatches';
+import { useMapEventNotifications } from './hooks/useMapEvents';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
 import type { AppLanguage, AppTheme, AppView, ResolvedAppTheme } from './types';
 import AuthOverlay from './components/AuthOverlay';
@@ -96,6 +97,7 @@ export default function App() {
   const { user, profile, loading, profileLoading, profileError } = useAuthProfile();
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
+  const mapEventNotifications = useMapEventNotifications(profile?.uid);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
 
   useEffect(() => {
@@ -504,6 +506,10 @@ export default function App() {
     });
   }
 
+  const hasUnreadNotifications =
+    matches.some((match) => !readNotificationIds.has(notificationIdForMatch(match))) ||
+    mapEventNotifications.some((notification) => !readNotificationIds.has(notification.id));
+
   function openNotification(notificationId: string, matchId: string) {
     markNotificationAsRead(notificationId);
     setOpenMatchId(matchId);
@@ -673,7 +679,7 @@ export default function App() {
                 type="button"
               >
                 <Bell className="h-5 w-5" />
-                {matches.some((match) => !readNotificationIds.has(notificationIdForMatch(match))) && (
+                {hasUnreadNotifications && (
                   <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#ff3f68] ring-2 ring-[#07111f]" />
                 )}
               </button>
@@ -748,7 +754,12 @@ export default function App() {
             {view === 'notifications' && (
               <NotificationsPanel
                 currentUid={profile.uid}
+                mapNotifications={mapEventNotifications}
                 matches={matches}
+                onOpenMapNotification={(notificationId) => {
+                  markNotificationAsRead(notificationId);
+                  navigateTo('radar');
+                }}
                 onOpenNotification={openNotification}
                 preferences={notificationPreferences}
                 readNotificationIds={readNotificationIds}

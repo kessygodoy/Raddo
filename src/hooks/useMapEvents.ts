@@ -58,6 +58,14 @@ type EventStoryRow = {
   expires_at: string;
 };
 
+export type MapEventNotification = {
+  id: string;
+  text: string;
+  timeValue: string | null;
+  title: string;
+  tone: 'message' | 'story_like';
+};
+
 type ParticipantRow = {
   event_id: string;
   user_uid: string;
@@ -294,6 +302,102 @@ export function useMapEventStories(events: MapEvent[], me: UserProfile, options:
   }, [eventIdsKey, includeOpenEventStories, includeStandaloneStories, me.uid]);
 
   return stories;
+}
+
+export function useMapEventNotifications(uid: string | undefined) {
+  const [notifications, setNotifications] = useState<MapEventNotification[]>([]);
+
+  useEffect(() => {
+    if (isDemoMode || !uid) {
+      setNotifications([]);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadNotifications() {
+      const { data: participantRows } = await supabase
+        .from('map_event_participants')
+        .select('event_id')
+        .eq('user_uid', uid)
+        .limit(80);
+      const eventIds = [...new Set(((participantRows ?? []) as Pick<ParticipantRow, 'event_id'>[]).map((row) => row.event_id))];
+
+      const [eventsResult, messagesResult, storiesResult] = await Promise.all([
+        eventIds.length
+          ? supabase.from('map_events').select('id,title').in('id', eventIds)
+          : Promise.resolve({ data: [], error: null }),
+        eventIds.length
+          ? supabase
+              .from('map_event_messages')
+              .select('id,event_id,sender_uid,sender_name,text,created_at')
+              .in('event_id', eventIds)
+              .order('created_at', { ascending: false })
+              .limit(40)
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from('map_event_stories')
+          .select('id,text,liked_by,created_at')
+          .eq('creator_uid', uid)
+          .gt('expires_at', new Date().toISOString())
+          .order('created_at', { ascending: false })
+          .limit(30),
+      ]);
+
+      if (!active) return;
+
+      const eventTitles = new Map<string, string>(
+        ((eventsResult.data ?? []) as Array<{ id: string; title: string }>).map((event) => [event.id, event.title]),
+      );
+      const messageNotifications = ((messagesResult.data ?? []) as Array<{
+        created_at: string;
+        event_id: string;
+        id: string;
+        sender_name: string;
+        sender_uid: string;
+        text: string;
+      }>)
+        .filter((message) => message.sender_uid !== uid)
+        .map((message) => ({
+          id: `map-message:${message.id}`,
+          text: `${message.sender_name}: ${message.text || 'Nova mensagem'}`,
+          timeValue: message.created_at,
+          title: eventTitles.get(message.event_id) ?? 'Chat do mapa',
+          tone: 'message' as const,
+        }));
+
+      const storyLikeNotifications = ((storiesResult.data ?? []) as Array<{
+        created_at: string;
+        id: string;
+        liked_by: string[] | null;
+        text: string | null;
+      }>)
+        .filter((story) => (story.liked_by ?? []).some((likedUid) => likedUid !== uid))
+        .map((story) => ({
+          id: `story-like:${story.id}:${(story.liked_by ?? []).length}`,
+          text: `${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length} curtiram seu story${story.text ? `: ${story.text}` : ''}`,
+          timeValue: story.created_at,
+          title: 'Curtida no story',
+          tone: 'story_like' as const,
+        }));
+
+      setNotifications([...messageNotifications, ...storyLikeNotifications].sort((a, b) => Date.parse(b.timeValue ?? '') - Date.parse(a.timeValue ?? '')));
+    }
+
+    loadNotifications();
+    const channel = supabase
+      .channel(`map-notifications:${uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_messages' }, loadNotifications)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'map_event_stories' }, loadNotifications)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [uid]);
+
+  return notifications;
 }
 
 export async function deleteMapEventStory(storyId: string) {
@@ -1248,6 +1352,7 @@ export async function isMapEventModerator(eventId: string, userUid: string) {
 
 type UpdateMapEventDetailsInput = {
   accessMode: MapEvent['accessMode'];
+  coverURL: string;
   description: string;
   emoji: string;
   isPermanent: boolean;
@@ -1272,6 +1377,7 @@ export async function updateMapEventDetails(eventId: string, input: UpdateMapEve
     .from('map_events')
     .update({
       access_mode: input.accessMode,
+      cover_url: input.coverURL,
       description: input.description,
       emoji: input.emoji,
       is_permanent: input.isPermanent,

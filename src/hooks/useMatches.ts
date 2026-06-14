@@ -1153,12 +1153,35 @@ export async function sendMessage(
   });
 
   if (rpcResult.error) {
-    throw new Error(rpcResult.error.message || 'Nao consegui enviar a mensagem.');
-  }
+    const ambiguousFunction =
+      rpcResult.error.message?.includes('Could not choose the best candidate function') ||
+      rpcResult.error.message?.includes('send_match_message');
+    if (!ambiguousFunction || image) {
+      throw new Error(rpcResult.error.message || 'Nao consegui enviar a mensagem.');
+    }
 
-  const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
-  const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-  messageId = row?.id ?? '';
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({
+        match_id: matchId,
+        sender_uid: senderUid,
+        text: cleanText,
+        message_type: 'text',
+        image_url: '',
+        image_path: '',
+        view_once: false,
+        viewed_by: [],
+        created_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single<{ id: string }>();
+    if (error) throw new Error(error.message || 'Nao consegui enviar a mensagem.');
+    messageId = data.id;
+  } else {
+    const rpcData = rpcResult.data as { id?: string }[] | { id?: string } | null;
+    const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+    messageId = row?.id ?? '';
+  }
 
   supabase.functions.invoke('send-match-push', {
     body: {

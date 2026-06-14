@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Camera, Eye, Flag, Heart, ImagePlus, Info, MapPin, Megaphone, MessageCircle, Plus, Send, Settings, Trash2, Users, Video, X } from 'lucide-react';
+import { ArrowRight, Camera, Eye, Flag, Heart, ImagePlus, Info, MapPin, Megaphone, MessageCircle, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
@@ -131,6 +131,9 @@ type MapPointSetter = (point: LatLng) => void;
 const MAP_MAX_ZOOM = 19;
 const MAP_SPREAD_MARKERS_ZOOM = MAP_MAX_ZOOM - 3;
 const MAP_SPREAD_OVERLAP_DISTANCE_PX = 30;
+const MAX_RENDERED_PROFILE_MARKERS = 80;
+const MAX_RENDERED_EVENT_MARKERS = 120;
+const MAX_RENDERED_STORY_GROUPS = 40;
 const MAX_STORY_VIDEO_BYTES = 10 * 1024 * 1024;
 const STORY_RECORDING_VIDEO_BITRATE = 1_200_000;
 const STORY_RECORDING_AUDIO_BITRATE = 64_000;
@@ -362,6 +365,13 @@ function profilePhotoIcon(photoURL: string) {
   });
 }
 
+const profileLiteIcon = L.divIcon({
+  className: '',
+  html: '<div class="map-profile-lite"></div>',
+  iconAnchor: [7, 7],
+  iconSize: [14, 14],
+});
+
 const draftIcon = L.divIcon({
   className: '',
   html: '<div class="map-pin map-pin-draft"></div>',
@@ -490,8 +500,30 @@ function spreadClusterPositions<T extends { position: LatLng }>(cluster: { items
   });
 }
 
-function isPositionInView(map: L.Map, position: LatLng) {
-  return map.getBounds().pad(0.08).contains(L.latLng(position.lat, position.lng));
+function isPositionInView(map: L.Map, position: LatLng, padding = 0.08) {
+  return map.getBounds().pad(padding).contains(L.latLng(position.lat, position.lng));
+}
+
+function closestToMapCenter<T extends { position: LatLng }>(items: T[], map: L.Map, maxItems: number) {
+  const center = map.getCenter();
+  return items
+    .slice()
+    .sort((a, b) => map.distance(center, L.latLng(a.position.lat, a.position.lng)) - map.distance(center, L.latLng(b.position.lat, b.position.lng)))
+    .slice(0, maxItems);
+}
+
+function clusterDistanceForZoom(map: L.Map, kind: 'event' | 'profile') {
+  const zoom = map.getZoom();
+  if (kind === 'profile') {
+    if (zoom < 12) return 72;
+    if (zoom < 14) return 52;
+    if (zoom < 16) return 28;
+    return 14;
+  }
+  if (zoom < 12) return 64;
+  if (zoom < 14) return 42;
+  if (zoom < 16) return 22;
+  return 8;
 }
 
 function edgePointForPosition(map: L.Map, position: LatLng) {
@@ -560,11 +592,11 @@ function MyLocationArrow({ me }: { me: UserProfile }) {
     }
 
     updateArrow();
-    map.on('move zoom moveend zoomend resize', scheduleUpdate);
+    map.on('moveend zoomend resize', scheduleUpdate);
 
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
-      map.off('move zoom moveend zoomend resize', scheduleUpdate);
+      map.off('moveend zoomend resize', scheduleUpdate);
     };
   }, [map, me.location]);
 
@@ -685,11 +717,11 @@ function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me
     }
 
     updateArrows();
-    map.on('move zoom moveend zoomend resize', scheduleUpdate);
+    map.on('moveend zoomend resize', scheduleUpdate);
 
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
-      map.off('move zoom moveend zoomend resize', scheduleUpdate);
+      map.off('moveend zoomend resize', scheduleUpdate);
     };
   }, [map, ownerEvents]);
 
@@ -726,13 +758,15 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
     zoomend: () => setMapVersion((version) => version + 1),
   });
 
-  const items = profiles
+  const zoom = map.getZoom();
+  const showProfilePhotos = zoom >= 15;
+  const items = closestToMapCenter(profiles
     .map((profile) => {
       const position = visibleLocation(profile);
-      return position && isPositionInView(map, position) ? { profile, position } : null;
+      return position && isPositionInView(map, position, 0.04) ? { profile, position } : null;
     })
-    .filter(Boolean) as Array<{ profile: UserProfile; position: LatLng }>;
-  const clusters = clusterMapItems(items, map, 2);
+    .filter(Boolean) as Array<{ profile: UserProfile; position: LatLng }>, map, MAX_RENDERED_PROFILE_MARKERS);
+  const clusters = clusterMapItems(items, map, clusterDistanceForZoom(map, 'profile'));
 
   return (
     <>
@@ -752,7 +786,7 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
 
         const { profile, position } = cluster.items[0];
         return (
-          <Marker icon={profilePhotoIcon(profile.photoURL)} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
+          <Marker icon={showProfilePhotos && profile.photoURL ? profilePhotoIcon(profile.photoURL) : profileLiteIcon} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
@@ -789,7 +823,13 @@ function ClusteredEventMarkers({
     zoomend: () => setMapVersion((version) => version + 1),
   });
 
-  const visibleInBounds = events.filter((event) => isPositionInView(map, event.location));
+  const visibleInBounds = closestToMapCenter(
+    events
+      .filter((event) => isPositionInView(map, event.location, 0.04))
+      .map((event) => ({ event, position: event.location })),
+    map,
+    MAX_RENDERED_EVENT_MARKERS,
+  ).map((item) => item.event);
   const shouldSpreadOverlappingMarkers = map.getZoom() >= MAP_SPREAD_MARKERS_ZOOM;
   const maxZoomClusters = clusterMapItems(
     visibleInBounds.map((event) => ({ event, position: event.location })),
@@ -801,7 +841,7 @@ function ClusteredEventMarkers({
   const clusters = clusterMapItems(
     expiringEvents.map((event) => ({ event, position: event.location })),
     map,
-    4,
+    clusterDistanceForZoom(map, 'event'),
   );
 
   return (
@@ -932,11 +972,13 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const [editingEvent, setEditingEvent] = useState<MapEvent | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [editingDescription, setEditingDescription] = useState('');
+  const [editingCoverURL, setEditingCoverURL] = useState('');
   const [editingEmoji, setEditingEmoji] = useState(modernEventEmojiOptions[0]);
   const [editingAccessMode, setEditingAccessMode] = useState<MapEvent['accessMode']>('open');
   const [editingPassword, setEditingPassword] = useState('');
   const [editingRadius, setEditingRadius] = useState(5);
   const [editingIsPermanent, setEditingIsPermanent] = useState(false);
+  const [uploadingEditingCover, setUploadingEditingCover] = useState(false);
   const [savingEventEdit, setSavingEventEdit] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [showChatsList, setShowChatsList] = useState(false);
@@ -944,6 +986,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const [showNearbyChatsList, setShowNearbyChatsList] = useState(false);
   const [showPeopleList, setShowPeopleList] = useState(false);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
+  const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
   const [gpsEvent, setGpsEvent] = useState<MapEvent | null>(null);
   const [localEvents, setLocalEvents] = useState<MapEvent[]>(() => readLocalMapEvents(me.uid));
   const [focusTarget, setFocusTarget] = useState<{ event: MapEvent; nonce: number } | null>(null);
@@ -1028,7 +1071,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     [sortedVisibleEvents, me.location],
   );
   const storyRadiusEvents = useMemo(
-    () => sortedVisibleEvents.filter((event) => eventDistance(event) <= mapStorySettings.radiusKm),
+    () => sortedVisibleEvents.filter((event) => eventDistance(event) <= mapStorySettings.radiusKm).slice(0, 120),
     [mapStorySettings.radiusKm, sortedVisibleEvents, me.location],
   );
   const storySourceEvents = useMemo(
@@ -1042,11 +1085,14 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   );
   const currentChatModalEvents = showMyChatsList ? myEvents : showNearbyChatsList ? nearbyReachableEvents : joinedOnlyEvents;
   const eventContextList = useMemo(
-    () => [
-      ...visibleEvents,
-      ...joinedActiveEvents.filter((event) => !visibleEvents.some((visibleEvent) => visibleEvent.id === event.id)),
-    ],
-    [joinedActiveEvents, visibleEvents],
+    () => {
+      const primaryEvents = sortedVisibleEvents.slice(0, 180);
+      return [
+        ...primaryEvents,
+        ...joinedActiveEvents.filter((event) => !primaryEvents.some((visibleEvent) => visibleEvent.id === event.id)),
+      ];
+    },
+    [joinedActiveEvents, sortedVisibleEvents],
   );
   const sortedProfiles = [...profiles].sort((a, b) => {
     const goalDiff = sharedRelationshipGoalCount(me, b) - sharedRelationshipGoalCount(me, a);
@@ -1130,6 +1176,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       }))
       .sort((a, b) => Date.parse(b.latestStory.createdAt) - Date.parse(a.latestStory.createdAt));
   }, [mapEventStories]);
+  const visibleStoryGroups = useMemo(() => storyGroups.slice(0, MAX_RENDERED_STORY_GROUPS), [storyGroups]);
   const selectedStory = mapEventStories.find((story) => story.id === selectedStoryId) ?? mapEventStories[0] ?? null;
   const selectedStoryEvent = selectedStory ? eventContextList.find((event) => event.id === selectedStory.eventId) ?? null : null;
   const storyPeopleProfiles = useMemo(() => {
@@ -1191,6 +1238,12 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       if (previewProfile) {
         event.preventDefault();
         setPreviewProfile(null);
+        return;
+      }
+
+      if (matchProfile) {
+        event.preventDefault();
+        setMatchProfile(null);
         return;
       }
 
@@ -1269,6 +1322,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     createChatOpen,
     emojiPickerOpen,
     gpsEvent,
+    matchProfile,
     previewEvent,
     previewProfile,
     storyComposerEvent,
@@ -1311,15 +1365,8 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     setEventError('');
     setStoryMediaType(mediaType);
 
-    let uploadFile = file;
     try {
-      uploadFile = await prepareStorageUploadFile(file);
-    } catch {
-      uploadFile = file;
-    }
-
-    try {
-      setStoryUploadFile(uploadFile);
+      setStoryUploadFile(file);
     } catch (error) {
       setStoryImageURL('');
       setStoryUploadFile(null);
@@ -1572,17 +1619,26 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     }
   }
 
-  async function replyToStory(story: MapEventStory) {
+  function replyToStory(story: MapEventStory) {
     const match = matches.find((item) => item.users.includes(me.uid) && item.users.includes(story.creatorUid));
     if (!match) return;
-    const text = window.prompt('Mensagem para responder ao story');
-    if (!text?.trim()) return;
-    try {
-      await sendMessage(match.id, me.uid, `Story: ${text.trim()}`, me.displayName);
-      setEventError('Mensagem enviada.');
-    } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
-    }
+    setDialog({
+      confirmLabel: 'Enviar',
+      initialValue: '',
+      message: 'Envie uma mensagem para responder ao story.',
+      onConfirm: async (value) => {
+        const text = value.trim();
+        if (!text) return;
+        try {
+          await sendMessage(match.id, me.uid, `Story: ${text}`, me.displayName);
+          setEventError('Mensagem enviada.');
+        } catch (error) {
+          setEventError(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
+        }
+      },
+      title: 'Comentar story',
+      type: 'prompt',
+    });
   }
 
   function markStoryViewed(storyId: string) {
@@ -1702,6 +1758,37 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     event.target.value = '';
   }
 
+  async function uploadEditingEventCover(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !editingEvent) return;
+
+    const previousCoverURL = editingCoverURL;
+    const previewURL = URL.createObjectURL(file);
+    setEditingCoverURL(previewURL);
+    setUploadingEditingCover(true);
+    setEventError('');
+
+    if (isDemoMode) {
+      setUploadingEditingCover(false);
+      return;
+    }
+
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+    const path = `${me.uid}/map-events/${Date.now()}-${safeName}`;
+    try {
+      const uploadFile = await prepareStorageUploadFile(file);
+      const signedUrl = await uploadProfilePhoto(path, uploadFile);
+      await moderateUploadedImage({ allowRejected: false, context: 'chat-cover', contextId: editingEvent.id, path, publicUrl: signedUrl });
+      setEditingCoverURL(signedUrl);
+    } catch (uploadError) {
+      setEditingCoverURL(previousCoverURL);
+      setEventError(uploadError instanceof Error ? uploadError.message : 'Não consegui enviar a capa.');
+    } finally {
+      setUploadingEditingCover(false);
+    }
+  }
+
   async function handleCreateEvent(submitEvent: FormEvent) {
     submitEvent.preventDefault();
     if (creatingEvent) return;
@@ -1768,6 +1855,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     setEditingEvent(event);
     setEditingTitle(event.title);
     setEditingDescription(event.description);
+    setEditingCoverURL(event.coverURL);
     setEditingEmoji(event.emoji);
     setEditingAccessMode(event.accessMode);
     setEditingPassword('');
@@ -1800,6 +1888,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           : '';
       const updated = await updateMapEventDetails(editingEvent.id, {
         accessMode: editingAccessMode,
+        coverURL: editingCoverURL,
         description: editingDescription.trim(),
         emoji: editingEmoji,
         isPermanent: me.isPremium && editingIsPermanent,
@@ -1948,7 +2037,10 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   async function likeNearbyProfile(profile: UserProfile) {
     const result = await trySendLike(me, profile.uid);
     setProfileActionMessage(result.ok ? (result.matched ? `Deu match com ${profile.displayName}.` : `Você curtiu ${profile.displayName}.`) : result.message);
-    if (result.ok) setPreviewProfile(null);
+    if (result.ok) {
+      setPreviewProfile(null);
+      if (result.matched) setMatchProfile(profile);
+    }
   }
 
   async function dislikeNearbyProfile(profile: UserProfile) {
@@ -2005,7 +2097,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               Story
             </button>
           )}
-          {storyGroups.map((group) => {
+          {visibleStoryGroups.map((group) => {
             const latestStory = group.latestStory;
             const event = eventContextList.find((item) => item.id === latestStory.eventId);
             const allViewed = group.stories.every((story) => viewedStoryIds.has(story.id));
@@ -2343,6 +2435,28 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           onLike={likeNearbyProfile}
           profile={previewProfile}
         />
+      )}
+      {matchProfile && (
+        <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/70 p-6 text-white backdrop-blur">
+          <section className="raddo-match-pop w-full max-w-sm rounded-lg border border-[#ff3f68]/50 bg-[#07111f] p-6 text-center shadow-2xl shadow-rose-950/50">
+            <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg bg-[#ff3f68] text-white">
+              <Sparkles className="h-8 w-8" />
+            </div>
+            <h1 className="mt-4 text-3xl font-semibold">Deu match!</h1>
+            <p className="mt-2 text-sm text-slate-300">Você e {matchProfile.displayName} se curtiram.</p>
+            <div className="mt-5 flex justify-center -space-x-4">
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={me.photoURL} />
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={matchProfile.photoURL} />
+            </div>
+            <button
+              className="mt-6 h-11 w-full rounded-lg bg-[#ff3f68] font-semibold text-white"
+              onClick={() => setMatchProfile(null)}
+              type="button"
+            >
+              Continuar
+            </button>
+          </section>
+        </div>
       )}
       {previewEvent && (
         <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
@@ -2881,7 +2995,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           <section className="scrollbar-hidden max-h-[92dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Editar mapa</h2>
+                <h2 className="text-lg font-semibold">Editar chat</h2>
                 <p className="text-sm text-slate-300">Ajuste as informações do chat local.</p>
               </div>
               <button
@@ -2906,6 +3020,56 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 placeholder="Descrição, ponto de encontro ou local exato"
                 value={editingDescription}
               />
+              <label className="grid gap-2 text-sm">
+                Capa do chat
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    className="relative h-11 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
+                    disabled={uploadingEditingCover}
+                    type="button"
+                  >
+                    <Camera className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
+                    Abrir câmera
+                    <input
+                      accept="image/*"
+                      capture="environment"
+                      className="absolute inset-0 cursor-pointer opacity-0"
+                      disabled={uploadingEditingCover}
+                      onChange={uploadEditingEventCover}
+                      type="file"
+                    />
+                  </button>
+                  <button
+                    className="relative h-11 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
+                    disabled={uploadingEditingCover}
+                    type="button"
+                  >
+                    <ImagePlus className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
+                    Enviar capa
+                    <input
+                      accept="image/*"
+                      className="absolute inset-0 cursor-pointer opacity-0"
+                      disabled={uploadingEditingCover}
+                      onChange={uploadEditingEventCover}
+                      type="file"
+                    />
+                  </button>
+                </div>
+                {editingCoverURL && (
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">
+                    <CachedMediaImage alt="" className="h-32 w-full object-cover" src={editingCoverURL} />
+                    <button
+                      className="w-full border-t border-white/10 px-3 py-2 text-left text-xs font-semibold text-rose-100 hover:bg-rose-400/10"
+                      disabled={uploadingEditingCover}
+                      onClick={() => setEditingCoverURL('')}
+                      type="button"
+                    >
+                      Remover capa
+                    </button>
+                  </div>
+                )}
+                {uploadingEditingCover && <span className="text-xs text-slate-300">Enviando capa...</span>}
+              </label>
               <label className="grid gap-2 text-sm">
                 Emoji do mapa
                 <div className="grid grid-cols-6 gap-2">
@@ -2972,7 +3136,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {eventError && <p className="rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
               <button
                 className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-70"
-                disabled={savingEventEdit}
+                disabled={savingEventEdit || uploadingEditingCover}
                 type="submit"
               >
                 {savingEventEdit ? 'Salvando...' : 'Salvar alterações'}
