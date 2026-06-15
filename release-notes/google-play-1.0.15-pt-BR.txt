@@ -1,0 +1,5 @@
+Melhorias no envio e carregamento de imagens em chats, perfil e stories.
+Correcoes no comentario de stories e nos menus de acoes.
+Chats fechados agora tratam midias de forma mais consistente entre dispositivos.
+Melhorias no cache visual para reduzir imagens quebradas.
+Correcoes de estabilidade em chats do mapa.

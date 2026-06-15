@@ -1,0 +1,5 @@
+Melhorias no mapa e criacao de chats.
+Correcoes no envio e exibicao de imagens em chats.
+Melhorias no visual das listas de chats.
+Mais estabilidade em notificacoes, conexoes e cache local.
+Menus de moderacao e pedidos mais organizados.

@@ -1,5 +1,5 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Edit3, Eye, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, MoreVertical, Plus, Send, Shield, Trash2, UserMinus, Users, Video, X } from 'lucide-react';
+import { Camera, Edit3, Eye, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, MoreVertical, Plus, Send, Shield, ShieldOff, Trash2, UserMinus, Users, Video, X } from 'lucide-react';
 import {
   approveMapEventRequest,
   banMapEventUser,
@@ -66,6 +66,7 @@ type AppDialog =
   | {
       confirmLabel?: string;
       initialValue: string;
+      inputKind?: 'password' | 'text' | 'textarea';
       message?: string;
       onConfirm: (value: string) => void | Promise<void>;
       title: string;
@@ -74,7 +75,7 @@ type AppDialog =
 
 function ProfileAvatar({ profile }: { profile: UserProfile }) {
   return profile.photoURL ? (
-    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={profile.photoURL} />
+    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={profile.photoURL} thumbnailOnly />
   ) : (
     <div className="grid h-12 w-12 place-items-center rounded-lg bg-teal-300 text-sm font-bold text-slate-950">
       {profile.displayName.slice(0, 1).toUpperCase()}
@@ -111,11 +112,20 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
             <X className="h-5 w-5" />
           </button>
         </div>
-        {dialog.type === 'prompt' && (
+        {dialog.type === 'prompt' && dialog.inputKind === 'textarea' && (
           <textarea
             autoFocus
             className="min-h-28 w-full resize-none rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm outline-none"
             onChange={(inputEvent) => setValue(inputEvent.target.value)}
+            value={value}
+          />
+        )}
+        {dialog.type === 'prompt' && dialog.inputKind !== 'textarea' && (
+          <input
+            autoFocus
+            className="h-11 w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
+            onChange={(inputEvent) => setValue(inputEvent.target.value)}
+            type={dialog.inputKind === 'password' ? 'password' : 'text'}
             value={value}
           />
         )}
@@ -256,12 +266,20 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   );
 
   useEffect(() => {
+    let active = true;
     orderedStories.slice(0, 24).forEach((story) => {
       if (!story.imageURL || story.mediaType === 'video') return;
-      void signedProfilePhotoUrl(story.imageURL).catch(() => undefined);
-      const image = new Image();
-      image.src = story.imageURL;
+      void signedProfilePhotoUrl(story.imageURL)
+        .then((resolvedUrl) => {
+          if (!active || !resolvedUrl) return;
+          const image = new Image();
+          image.src = resolvedUrl;
+        })
+        .catch(() => undefined);
     });
+    return () => {
+      active = false;
+    };
   }, [orderedStories]);
 
   function scrollMessagesToBottom(behavior: ScrollBehavior = 'auto') {
@@ -552,6 +570,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     if (!match) return;
     setDialog({
       confirmLabel: 'Enviar',
+      inputKind: 'textarea',
       initialValue: '',
       message: 'Envie uma mensagem para responder ao story.',
       onConfirm: async (value) => {
@@ -684,17 +703,33 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       try {
         if (uploadFile && !uploadedImageURL) {
           const media = await uploadChatMedia({
+            allowAdultInRestrictedChat: event.accessMode === 'approval' || event.accessMode === 'password',
             allowRejected: event.accessMode !== 'open',
             contextId: event.id,
             context: 'map-chat-image',
             file: uploadFile,
             ownerUid: me.uid,
           });
-          uploadedImageURL = media.url;
+          uploadedImageURL = media.path || media.url;
           uploadedImagePath = media.path;
-          imageURL = media.url;
+          imageURL = media.path || media.url;
           imagePath = media.path;
+          setOptimisticMessages((current) =>
+            current.map((message) =>
+              message.id === nextMessage.id
+                ? {
+                    ...message,
+                    imagePath,
+                    imageURL,
+                  }
+                : message,
+            ),
+          );
         }
+        if (imageURL.startsWith('blob:') || imagePath.startsWith('blob:')) {
+          throw new Error('Não consegui concluir o envio da imagem. Tente escolher a foto novamente.');
+        }
+        if (!imagePath && imageURL) imagePath = imageURL;
         await sendMapEventMessage({
           eventId: event.id,
           image: { imagePath, imageURL, viewOnce },
@@ -920,6 +955,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   function handleChangePassword() {
     setDialog({
       confirmLabel: 'Salvar senha',
+      inputKind: 'password',
       initialValue: '',
       message: 'Defina a nova senha deste chat.',
       onConfirm: async (nextPassword) => {
@@ -946,6 +982,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setOpenMessageMenuId('');
     setDialog({
       confirmLabel: 'Salvar',
+      inputKind: 'text',
       initialValue: message.text,
       onConfirm: async (nextText) => {
         if (nextText.trim() === message.text.trim()) return;
@@ -979,7 +1016,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   }
 
   return (
-    <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-[calc(env(safe-area-inset-top)+14px)] backdrop-blur-sm sm:place-items-center sm:p-6">
+    <div className="fixed inset-0 z-[1200] bg-black/60 backdrop-blur-sm">
       {gpsOpen && <ExternalGpsModal location={event.location} onClose={() => setGpsOpen(false)} title={event.title} />}
       {infoOpen && (
         <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
@@ -1110,14 +1147,14 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   {selectedStory.likedBy.length}
                 </button>
               )}
-              {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.length > 0 && (
+              {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid).length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => setStoryPeopleModal({ title: 'Visualizaram', userIds: [...new Set(selectedStory.viewedBy)] })}
+                  onClick={() => setStoryPeopleModal({ title: 'Visualizaram', userIds: [...new Set(selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid))] })}
                   type="button"
                 >
                   <Eye className="h-4 w-4 text-white" />
-                  {selectedStory.viewedBy.length}
+                  {selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid).length}
                 </button>
               )}
               {selectedStory.creatorUid !== me.uid && matches.some((item) => item.users.includes(me.uid) && item.users.includes(selectedStory.creatorUid)) && (
@@ -1205,7 +1242,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           <CachedMediaImage className="max-h-[86dvh] max-w-full object-contain shadow-2xl" fallbackClassName="max-h-[86dvh] max-w-full rounded-lg" src={event.coverURL} />
         </div>
       )}
-      <section className="flex h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] max-h-[calc(100dvh-env(safe-area-inset-top)-var(--raddo-bottom-safe)-38px)] w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-lg">
+      <section className="absolute inset-x-0 bottom-[calc(var(--raddo-bottom-safe)+24px)] top-[calc(env(safe-area-inset-top)+14px)] mx-auto flex min-h-0 w-full max-w-lg flex-col overflow-hidden border border-white/10 bg-[#07111f] text-white shadow-2xl sm:inset-auto sm:left-1/2 sm:top-1/2 sm:h-[calc(100dvh-3rem)] sm:max-h-[calc(100dvh-3rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-lg">
         <header className="flex items-start justify-between gap-3 border-b border-white/10 p-4">
           <div className="flex min-w-0 items-center gap-3">
             {event.coverURL && (
@@ -1234,11 +1271,14 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             </button>
             <button
               aria-label="Opções do chat"
-              className="grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
+              className="relative grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
               onClick={() => setHeaderMenuOpen((current) => !current)}
               type="button"
             >
               <MoreVertical className="h-5 w-5" />
+              {canManage && visibleJoinRequests.length > 0 && (
+                <span className="absolute bottom-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-[#ff3f68] ring-2 ring-[#07111f]" />
+              )}
             </button>
             {headerMenuOpen && (
               <div className="absolute right-12 top-0 z-10 w-56 overflow-hidden rounded-xl border border-white/10 bg-[#07111f] p-1 text-sm text-white shadow-2xl">
@@ -1276,6 +1316,46 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     <Megaphone className="h-4 w-4 text-amber-300" />
                     Denunciar chat
                   </button>
+                )}
+                {canManage && (
+                  <>
+                    <button
+                      className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                      onClick={() => {
+                        setHeaderMenuOpen(false);
+                        setManagementView('moderators');
+                      }}
+                      type="button"
+                    >
+                      <Shield className="h-4 w-4 text-teal-300" />
+                      Moderadores ({moderatorProfiles.length})
+                    </button>
+                    <button
+                      className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                      onClick={() => {
+                        setHeaderMenuOpen(false);
+                        setManagementView('banned');
+                      }}
+                      type="button"
+                    >
+                      <ShieldOff className="h-4 w-4 text-rose-300" />
+                      Banidos ({bannedUsers.length})
+                    </button>
+                    <button
+                      className="relative flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
+                      onClick={() => {
+                        setHeaderMenuOpen(false);
+                        setManagementView('requests');
+                      }}
+                      type="button"
+                    >
+                      <Users className="h-4 w-4 text-[#ff3f68]" />
+                      Pedidos ({visibleJoinRequests.length})
+                      {visibleJoinRequests.length > 0 && (
+                        <span className="ml-auto h-2.5 w-2.5 rounded-full bg-[#ff3f68]" />
+                      )}
+                    </button>
+                  </>
                 )}
                 {canManage && (
                   <button
@@ -1425,9 +1505,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           </div>
         )}
 
-        <section className="border-b border-white/10 p-3">
+        <section className="border-b border-white/10 px-3 py-2">
           <div
-            className="raddo-story-strip mb-2 flex gap-[3px] overflow-x-auto scrollbar-hidden"
+            className="raddo-story-strip flex min-h-[4.25rem] items-center gap-4 overflow-x-auto px-3 py-1 scrollbar-hidden"
             onClickCapture={(event) => {
               if ((event.currentTarget as HTMLDivElement).dataset.dragging === 'true') {
                 event.preventDefault();
@@ -1438,7 +1518,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           >
             {onCreateStory && (
               <button
-                className="raddo-story-ring raddo-story-ring-new mx-2 grid h-14 w-14 shrink-0 place-items-center rounded-full bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
+                className="raddo-story-ring raddo-story-ring-new grid h-14 w-14 shrink-0 place-items-center rounded-full bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
                 onClick={() => onCreateStory(event)}
                 type="button"
               >
@@ -1454,15 +1534,19 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               const story = group.latestStory;
               return (
               <button
-                className={`raddo-story-ring ${allViewed ? 'raddo-story-ring-viewed' : 'raddo-story-ring-new'} relative mx-2 grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-950`}
+                className={`raddo-story-ring ${allViewed ? 'raddo-story-ring-viewed' : 'raddo-story-ring-new'} relative grid h-14 w-14 shrink-0 place-items-center rounded-full bg-slate-950`}
                 key={group.creatorUid}
                 onClick={() => openStory(story.id)}
                 type="button"
               >
                 {story.imageURL && story.mediaType === 'video' ? (
-                  <Video className="h-5 w-5 text-white" />
+                  <span className="grid h-full w-full place-items-center overflow-hidden rounded-full">
+                    <Video className="h-5 w-5 text-white" />
+                  </span>
                 ) : story.imageURL ? (
-                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={story.imageURL} />
+                  <span className="block h-full w-full overflow-hidden rounded-full">
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={story.imageURL} thumbnailOnly />
+                  </span>
                 ) : (
                   <span className="px-1 text-center text-[10px] text-slate-100">{story.text || 'Story'}</span>
                 )}
@@ -1475,31 +1559,6 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               );
             })}
           </div>
-          {canManage && (
-            <div className="grid grid-cols-3 gap-2 text-xs">
-              <button
-                className="h-9 rounded-lg border border-white/10 bg-white/8 font-semibold text-slate-100"
-                onClick={() => setManagementView('moderators')}
-                type="button"
-              >
-                Moderadores ({moderatorProfiles.length})
-              </button>
-              <button
-                className="h-9 rounded-lg border border-white/10 bg-white/8 font-semibold text-slate-100"
-                onClick={() => setManagementView('banned')}
-                type="button"
-              >
-                Banidos ({bannedUsers.length})
-              </button>
-              <button
-                className="h-9 rounded-lg border border-white/10 bg-white/8 font-semibold text-slate-100"
-                onClick={() => setManagementView('requests')}
-                type="button"
-              >
-                Pedidos ({visibleJoinRequests.length})
-              </button>
-            </div>
-          )}
         </section>
 
         <div
@@ -1512,7 +1571,8 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             const mine = message.senderUid === me.uid;
             const canEditMessage = mine && message.messageType === 'text';
             const canDeleteMessage = mine || canManage;
-            const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL);
+            const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL || message.imagePath);
+            const imageDisplayURL = message.imageURL || message.imagePath;
             const mediaType = isVideoMedia(message.imageURL, message.text) ? 'video' : 'image';
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
@@ -1543,15 +1603,20 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     onFeedback={setError}
                     onReportProfile={!mine && senderProfile ? () => handleReportProfile(senderProfile) : undefined}
                     onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
+                    onViewOnceViewers={
+                      mine && isImageMessage && message.viewOnce
+                        ? () => setStoryPeopleModal({ title: 'Quem viu a imagem', userIds: [...new Set(message.viewedBy.filter((uid) => uid !== message.senderUid))] })
+                        : undefined
+                    }
                     onViewProfile={senderProfile ? () => setPreviewProfile(senderProfile) : undefined}
                     open={openMessageMenuId === message.id}
                   />
                   <div className="pr-6">
                     {!mine && <p className="mb-1 text-xs font-semibold text-teal-200">{message.senderName}</p>}
-                    {message.messageType === 'image' && message.imageURL ? (
+                    {message.messageType === 'image' && imageDisplayURL ? (
                       <ChatImageMessage
-                        cacheKey={message.imagePath || message.imageURL}
-                        imageURL={message.imageURL}
+                        cacheKey={message.imagePath || imageDisplayURL}
+                        imageURL={imageDisplayURL}
                         mediaType={mediaType}
                         mine={mine}
                         onLoaded={() => {
@@ -1562,6 +1627,8 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         viewedStorageKey={`raddo:view-once:map:${me.uid}:${message.imageURL || message.id}`}
                         viewOnce={message.viewOnce}
                       />
+                    ) : message.messageType === 'image' ? (
+                      <p className="text-xs text-slate-300">Imagem indisponível.</p>
                     ) : (
                       <p>{message.text}</p>
                     )}

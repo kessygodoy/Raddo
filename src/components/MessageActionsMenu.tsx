@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Download, Edit3, Flag, MoreVertical, Trash2, UserRound } from 'lucide-react';
+import { Copy, Download, Edit3, Eye, Flag, MoreVertical, Trash2, UserRound } from 'lucide-react';
 
 type Props = {
   canCopy?: boolean;
@@ -18,6 +18,7 @@ type Props = {
   onFeedback: (message: string) => void;
   onReportProfile?: () => void;
   onToggle: () => void;
+  onViewOnceViewers?: () => void;
   onViewProfile?: () => void;
   open: boolean;
 };
@@ -48,6 +49,7 @@ export default function MessageActionsMenu({
   onFeedback,
   onReportProfile,
   onToggle,
+  onViewOnceViewers,
   onViewProfile,
   open,
 }: Props) {
@@ -61,13 +63,13 @@ export default function MessageActionsMenu({
 
     const rect = buttonRef.current.getBoundingClientRect();
     const menuWidth = 160;
-    const menuHeight = 184;
+    const menuHeight = onViewOnceViewers ? 224 : 184;
     const gap = 6;
     setMenuPosition({
       left: Math.max(8, Math.min(window.innerWidth - menuWidth - 8, rect.right - menuWidth)),
       top: Math.max(8, Math.min(window.innerHeight - menuHeight - 8, rect.bottom + gap)),
     });
-  }, [open]);
+  }, [onViewOnceViewers, open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -160,6 +162,19 @@ export default function MessageActionsMenu({
             <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/8" onClick={handleDownload} type="button">
               <Download className="h-4 w-4" />
               Baixar
+            </button>
+          )}
+          {onViewOnceViewers && (
+            <button
+              className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/8"
+              onClick={() => {
+                onViewOnceViewers();
+                onClose();
+              }}
+              type="button"
+            >
+              <Eye className="h-4 w-4" />
+              Quem viu
             </button>
           )}
           {canEdit && (

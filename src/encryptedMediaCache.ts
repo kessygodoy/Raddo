@@ -98,10 +98,7 @@ export async function writeEncryptedCachedMedia(cacheKey: string, blob: Blob) {
 
 function objectUrlForBlob(cacheKey: string, blob: Blob) {
   const existing = objectUrls.get(cacheKey);
-  if (existing) {
-    URL.revokeObjectURL(existing);
-    objectUrlCacheKeys.delete(existing);
-  }
+  if (existing) return existing;
   const url = URL.createObjectURL(blob);
   objectUrls.set(cacheKey, url);
   objectUrlCacheKeys.set(url, cacheKey);

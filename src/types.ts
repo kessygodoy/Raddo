@@ -70,6 +70,7 @@ export type Match = {
   createdAt: string;
   lastMessage: string;
   lastMessageAt: string | null;
+  lastMessageSenderUid?: string;
 };
 
 export type Message = {

@@ -39,8 +39,51 @@ const navItems = [
 
 const LAST_VIEW_KEY = 'raddo:last-view';
 
+function clearDisposableLocalCaches() {
+  try {
+    const prefixes = [
+      'raddo-media-thumb-v2:',
+      'raddo-match-messages-cache:',
+      'raddo-map-event-messages-cache:',
+      'raddo-map-events-cache:',
+      'raddo-nearby-profiles-cache:',
+      'raddo-connections-matches:',
+      'raddo-match-profiles-cache:',
+    ];
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key && prefixes.some((prefix) => key.startsWith(prefix))) keys.push(key);
+    }
+    keys.forEach((key) => window.localStorage.removeItem(key));
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function safeSetLocalStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    try {
+      clearDisposableLocalCaches();
+      window.localStorage.setItem(key, value);
+    } catch {
+      // Local persistence is best-effort; never crash the app.
+    }
+  }
+}
+
+function safeGetLocalStorage(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 function savedAppView() {
-  const saved = window.localStorage.getItem(LAST_VIEW_KEY);
+  const saved = safeGetLocalStorage(LAST_VIEW_KEY);
   return saved === 'radar' || saved === 'discover' || saved === 'chat' || saved === 'profile' || saved === 'notifications' ? saved : 'radar';
 }
 
@@ -71,7 +114,7 @@ export default function App() {
     apkUrl?: string;
   } | null>(null);
   const [updateInstallMessage, setUpdateInstallMessage] = useState('');
-  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set());
+  const [notificationsClearedAt, setNotificationsClearedAt] = useState(0);
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
   const [accountLoggedBefore, setAccountLoggedBefore] = useState(false);
   const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
@@ -82,14 +125,14 @@ export default function App() {
   const [passwordRecoveryError, setPasswordRecoveryError] = useState('');
   const [passwordRecoveryUrl, setPasswordRecoveryUrl] = useState('');
   const [theme, setTheme] = useState<AppTheme>(() => {
-    const savedTheme = window.localStorage.getItem('radar-match-theme');
+    const savedTheme = safeGetLocalStorage('radar-match-theme');
     return savedTheme === 'light' || savedTheme === 'green' || savedTheme === 'pride' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
   });
   const [systemTheme, setSystemTheme] = useState<ResolvedAppTheme>(() =>
     window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
   );
   const [language, setLanguageState] = useState<AppLanguage>(() => {
-    const savedLanguage = window.localStorage.getItem('raddo-language');
+    const savedLanguage = safeGetLocalStorage('raddo-language');
     return savedLanguage ? normalizeLanguage(savedLanguage) : normalizeLanguage(navigator.language);
   });
   const t = createTranslator(language);
@@ -117,7 +160,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    window.localStorage.setItem(LAST_VIEW_KEY, view);
+    safeSetLocalStorage(LAST_VIEW_KEY, view);
   }, [view]);
 
   function goBackOneScreen() {
@@ -150,7 +193,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    window.localStorage.setItem('radar-match-theme', theme);
+    safeSetLocalStorage('radar-match-theme', theme);
     document.documentElement.dataset.appTheme = theme === 'system' ? systemTheme : theme;
   }, [systemTheme, theme]);
 
@@ -165,7 +208,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem('raddo-language', language);
+    safeSetLocalStorage('raddo-language', language);
     document.documentElement.lang = language;
   }, [language]);
 
@@ -176,10 +219,10 @@ export default function App() {
     }
 
     const keys = previousLoginKeys(user.id, user.email);
-    const hasLocalLogin = keys.some((key) => window.localStorage.getItem(key) === 'yes');
+    const hasLocalLogin = keys.some((key) => safeGetLocalStorage(key) === 'yes');
     const hasAuthHistory = authDatesIndicatePreviousLogin(user.created_at, user.last_sign_in_at);
     setAccountLoggedBefore(hasLocalLogin || hasAuthHistory);
-    keys.forEach((key) => window.localStorage.setItem(key, 'yes'));
+    keys.forEach((key) => safeSetLocalStorage(key, 'yes'));
   }, [user]);
 
   useEffect(() => {
@@ -192,13 +235,13 @@ export default function App() {
 
   useEffect(() => {
     if (!profile) {
-      setReadNotificationIds(new Set());
+      setNotificationsClearedAt(0);
       setNotificationPreferences(defaultNotificationPreferences);
       return;
     }
 
-    const saved = window.localStorage.getItem(`raddo-read-notifications:${profile.uid}`);
-    setReadNotificationIds(new Set(saved ? JSON.parse(saved) as string[] : []));
+    const saved = safeGetLocalStorage(`raddo-notifications-cleared-at:${profile.uid}`);
+    setNotificationsClearedAt(saved ? Number(saved) || 0 : 0);
     setNotificationPreferences(loadNotificationPreferences(profile.uid));
   }, [profile?.uid]);
 
@@ -220,7 +263,7 @@ export default function App() {
     if (!profile) return;
 
     const promptKey = `raddo-notification-prompt:${profile.uid}`;
-    const alreadyAsked = window.localStorage.getItem(promptKey) === 'done';
+    const alreadyAsked = safeGetLocalStorage(promptKey) === 'done';
     if (alreadyAsked) return;
 
     getNotificationPermission().then((permission) => {
@@ -245,9 +288,9 @@ export default function App() {
       setPasswordRecoveryOpen(true);
       if (url) {
         setPasswordRecoveryUrl(url);
-        window.localStorage.setItem('raddo:password-recovery-url', url);
+        safeSetLocalStorage('raddo:password-recovery-url', url);
       } else {
-        setPasswordRecoveryUrl(window.localStorage.getItem('raddo:password-recovery-url') ?? '');
+        setPasswordRecoveryUrl(safeGetLocalStorage('raddo:password-recovery-url') ?? '');
       }
       setPasswordRecoveryMessage('');
       setPasswordRecoveryError('');
@@ -259,7 +302,7 @@ export default function App() {
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     if (urlParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery') {
       const recoveryUrl = window.location.href;
-      window.localStorage.setItem('raddo:password-recovery-url', recoveryUrl);
+      safeSetLocalStorage('raddo:password-recovery-url', recoveryUrl);
       void processAuthUrl(recoveryUrl).catch((error) => {
         setPasswordRecoveryError(error instanceof Error ? error.message : 'Link de recuperação inválido.');
       });
@@ -301,7 +344,7 @@ export default function App() {
     try {
       let { data: sessionData } = await supabase.auth.getSession();
       if (!sessionData.session) {
-        const recoveryUrl = passwordRecoveryUrl || window.localStorage.getItem('raddo:password-recovery-url') || '';
+      const recoveryUrl = passwordRecoveryUrl || safeGetLocalStorage('raddo:password-recovery-url') || '';
         if (recoveryUrl) {
           await processAuthUrl(recoveryUrl);
           sessionData = (await supabase.auth.getSession()).data;
@@ -340,7 +383,7 @@ export default function App() {
   async function requestNotifications() {
     if (!profile) return;
 
-    window.localStorage.setItem(`raddo-notification-prompt:${profile.uid}`, 'done');
+    safeSetLocalStorage(`raddo-notification-prompt:${profile.uid}`, 'done');
     setShowNotificationPrompt(false);
     const permission = await requestNativeNotifications();
     if (permission === 'granted') {
@@ -351,7 +394,7 @@ export default function App() {
   }
 
   function dismissNotifications() {
-    if (profile) window.localStorage.setItem(`raddo-notification-prompt:${profile.uid}`, 'done');
+    if (profile) safeSetLocalStorage(`raddo-notification-prompt:${profile.uid}`, 'done');
     setShowNotificationPrompt(false);
   }
 
@@ -398,29 +441,56 @@ export default function App() {
     };
   }
 
+  function writeDeviceNotificationIds(storageKey: string, ids: string[]) {
+    const compactIds = ids.slice(-200);
+    try {
+      safeSetLocalStorage(storageKey, JSON.stringify(compactIds));
+    } catch {
+      try {
+        window.localStorage.removeItem(storageKey);
+        safeSetLocalStorage(storageKey, JSON.stringify(compactIds.slice(-80)));
+      } catch {
+        // Device notifications are best-effort; storage quota must never crash the app.
+      }
+    }
+  }
+
   useEffect(() => {
     if (!profile || matches.length === 0) return;
 
     let active = true;
     const currentProfileUid = profile.uid;
     const storageKey = `raddo-device-notifications:${profile.uid}`;
-    const saved = window.localStorage.getItem(storageKey);
+    let saved = '';
+    try {
+      saved = safeGetLocalStorage(storageKey) ?? '';
+    } catch {
+      saved = '';
+    }
     const currentIds = matches.map(notificationIdForMatch);
 
     if (!saved) {
-      window.localStorage.setItem(storageKey, JSON.stringify(currentIds));
+      writeDeviceNotificationIds(storageKey, currentIds);
       return;
     }
 
-    const notifiedIds = new Set(JSON.parse(saved) as string[]);
+    let savedIds: string[] = [];
+    try {
+      savedIds = JSON.parse(saved) as string[];
+    } catch {
+      savedIds = [];
+    }
+    const notifiedIds = new Set(savedIds);
     const nextIds = new Set([...notifiedIds, ...currentIds]);
 
     async function notifyNewMatches() {
       for (const match of matches) {
         const notificationId = notificationIdForMatch(match);
         if (notifiedIds.has(notificationId)) continue;
+        const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+        if (!hasMessage) continue;
 
-        if (match.lastMessage && match.lastMessageAt) {
+        if (hasMessage) {
           const { data } = await supabase
             .from('messages')
             .select('sender_uid')
@@ -433,10 +503,8 @@ export default function App() {
           if (data?.sender_uid === currentProfileUid) continue;
         }
 
-        const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
         if (!notificationPreferences.enabled) continue;
         if (hasMessage && !notificationPreferences.connectionMessages) continue;
-        if (!hasMessage && !notificationPreferences.connections) continue;
 
         const { body, title } = notificationTextForMatch(match);
         void showAppNotification(title, body, {
@@ -449,7 +517,7 @@ export default function App() {
 
     void notifyNewMatches();
 
-    window.localStorage.setItem(storageKey, JSON.stringify([...nextIds]));
+    writeDeviceNotificationIds(storageKey, [...nextIds]);
 
     return () => {
       active = false;
@@ -461,7 +529,6 @@ export default function App() {
 
     onAppNotificationTap((data) => {
       if (data.view === 'chat' && data.matchId) {
-        if (data.notificationId) markNotificationAsRead(data.notificationId);
         setOpenMatchId(data.matchId);
         navigateTo('chat');
       } else if (data.view === 'radar') {
@@ -495,23 +562,27 @@ export default function App() {
     };
   }, []);
 
-  function markNotificationAsRead(notificationId: string) {
-    if (!profile) return;
+  function notificationTimeValue(value: string | null | undefined) {
+    const time = Date.parse(value ?? '');
+    return Number.isFinite(time) ? time : 0;
+  }
 
-    setReadNotificationIds((current) => {
-      const next = new Set(current);
-      next.add(notificationId);
-      window.localStorage.setItem(`raddo-read-notifications:${profile.uid}`, JSON.stringify([...next]));
-      return next;
-    });
+  function clearNotificationBadges() {
+    if (!profile) return;
+    const now = Date.now();
+    setNotificationsClearedAt(now);
+    safeSetLocalStorage(`raddo-notifications-cleared-at:${profile.uid}`, String(now));
   }
 
   const hasUnreadNotifications =
-    matches.some((match) => !readNotificationIds.has(notificationIdForMatch(match))) ||
-    mapEventNotifications.some((notification) => !readNotificationIds.has(notification.id));
+    matches.some((match) => {
+      const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+      if (hasMessage && match.lastMessageSenderUid === profile?.uid) return false;
+      return notificationTimeValue(match.lastMessageAt ?? match.createdAt) > notificationsClearedAt;
+    }) ||
+    mapEventNotifications.some((notification) => notificationTimeValue(notification.timeValue) > notificationsClearedAt);
 
-  function openNotification(notificationId: string, matchId: string) {
-    markNotificationAsRead(notificationId);
+  function openNotification(_notificationId: string, matchId: string) {
     setOpenMatchId(matchId);
     navigateTo('chat');
   }
@@ -581,7 +652,7 @@ export default function App() {
     const needsOnboarding =
       !onboardingDone &&
       !accountLoggedBefore &&
-      window.localStorage.getItem(`raddo-onboarding:${profile.uid}`) !== 'done' &&
+      safeGetLocalStorage(`raddo-onboarding:${profile.uid}`) !== 'done' &&
       (!profile.bio || profile.sexualities.length === 0 || profile.lookingFor.length === 0);
 
     content = needsOnboarding ? (
@@ -590,19 +661,19 @@ export default function App() {
       <main className={`app-shell theme-${resolvedTheme} h-dvh overflow-hidden text-white`}>
         {showNotificationPrompt && (
           <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-            <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+            <section className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl">
               <h1 className="text-xl font-semibold">{t('notificationTitle')}</h1>
               <p className="mt-2 text-sm text-slate-300">{t('notificationText')}</p>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
-                  className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                  className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={dismissNotifications}
                   type="button"
                 >
                   {t('notNow')}
                 </button>
                 <button
-                  className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950"
+                  className="raddo-primary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={requestNotifications}
                   type="button"
                 >
@@ -614,7 +685,7 @@ export default function App() {
         )}
         {availableUpdate && (
           <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-            <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+            <section className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl">
               <h1 className="text-xl font-semibold">Nova versão disponível</h1>
               <p className="mt-2 text-sm text-slate-300">
                 {availableUpdate.message || 'Existe uma atualização do Raddo. Deseja atualizar agora?'}
@@ -622,10 +693,10 @@ export default function App() {
               {updateInstallMessage && <p className="mt-3 rounded-lg bg-white/8 p-3 text-xs text-slate-200">{updateInstallMessage}</p>}
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
-                  className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                  className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={() => {
                     if (availableUpdate.version) {
-                      window.localStorage.setItem(`raddo-update-dismissed:${availableUpdate.version}`, 'yes');
+                      safeSetLocalStorage(`raddo-update-dismissed:${availableUpdate.version}`, 'yes');
                     }
                     setUpdateInstallMessage('');
                     setAvailableUpdate(null);
@@ -635,7 +706,7 @@ export default function App() {
                   Agora não
                 </button>
                 <button
-                  className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950"
+                  className="raddo-primary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={installAvailableUpdate}
                   type="button"
                 >
@@ -675,6 +746,7 @@ export default function App() {
                   onClick={() => {
                     setHeaderMenuOpen(false);
                     navigateTo('notifications');
+                    clearNotificationBadges();
                   }}
                 type="button"
               >
@@ -738,6 +810,8 @@ export default function App() {
                 ? 'min-h-0 flex-1 overflow-hidden'
                 : view === 'chat'
                   ? 'min-h-0 flex-1 overflow-hidden px-0 pb-[calc(var(--raddo-bottom-safe)+92px)] pt-2'
+                  : view === 'notifications'
+                    ? 'scrollbar-hidden min-h-0 flex-1 overflow-auto px-4 pb-[calc(var(--raddo-bottom-safe)+140px)] pt-4 sm:px-6'
                   : 'scrollbar-hidden min-h-0 flex-1 overflow-auto px-4 pb-[calc(var(--raddo-bottom-safe)+220px)] sm:px-6'
             }
           >
@@ -750,19 +824,28 @@ export default function App() {
               />
             )}
             {view === 'discover' && <Discovery me={profile} profiles={nearbyProfiles} />}
-            {view === 'chat' && <ChatPanel currentProfile={profile} currentUid={profile.uid} matches={matches} openMatchId={openMatchId} />}
+            {view === 'chat' && (
+              <ChatPanel
+                currentProfile={profile}
+                currentUid={profile.uid}
+                matches={matches}
+                onOpenMatch={setOpenMatchId}
+                onShowList={() => setOpenMatchId('')}
+                openMatchId={openMatchId}
+              />
+            )}
             {view === 'notifications' && (
               <NotificationsPanel
                 currentUid={profile.uid}
                 mapNotifications={mapEventNotifications}
+                matchProfilesByUid={matchProfilesByUid}
                 matches={matches}
                 onOpenMapNotification={(notificationId) => {
-                  markNotificationAsRead(notificationId);
                   navigateTo('radar');
                 }}
                 onOpenNotification={openNotification}
+                notificationsClearedAt={notificationsClearedAt}
                 preferences={notificationPreferences}
-                readNotificationIds={readNotificationIds}
               />
             )}
             {view === 'profile' && (
@@ -783,8 +866,8 @@ export default function App() {
                 const isActive = view === item.id;
                 return (
                   <button
-                    className={`grid min-h-14 place-items-center rounded-lg text-xs transition ${
-                      isActive ? 'bg-teal-300 text-slate-950' : 'text-slate-300 hover:bg-white/8'
+                    className={`grid min-h-14 place-items-center rounded-lg text-xs font-medium transition ${
+                      isActive ? 'raddo-primary-action' : 'text-slate-300 hover:bg-white/8'
                     }`}
                     key={item.id}
                     onClick={() => navigateTo(item.id)}
@@ -808,7 +891,7 @@ export default function App() {
       {passwordRecoveryOpen && (
         <div className="fixed inset-0 z-[2000] grid place-items-center bg-black/70 p-4 backdrop-blur-sm sm:p-6">
           <form
-            className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl"
+            className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl"
             onSubmit={handlePasswordRecoverySubmit}
           >
             <h1 className="text-xl font-semibold">Criar nova senha</h1>
@@ -840,7 +923,7 @@ export default function App() {
             {passwordRecoveryError && <p className="mt-3 rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{passwordRecoveryError}</p>}
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button
-                className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
+                className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                 disabled={passwordRecoveryBusy}
                 onClick={() => setPasswordRecoveryOpen(false)}
                 type="button"
@@ -848,7 +931,7 @@ export default function App() {
                 Agora não
               </button>
               <button
-                className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-70"
+                className="raddo-primary-action h-11 rounded-lg text-sm font-semibold disabled:cursor-wait disabled:opacity-70"
                 disabled={passwordRecoveryBusy}
                 type="submit"
               >

@@ -4,16 +4,17 @@ import { encryptedCachedObjectUrl, encryptedCachedObjectUrlOnly, encryptedCacheK
 
 const PROFILE_BUCKET = 'profile-photos';
 const SIGNED_URL_TTL_SECONDS = 6 * 60 * 60;
-const MAX_UPLOAD_IMAGE_EDGE = 960;
-const MAX_UPLOAD_IMAGE_BYTES = 140 * 1024;
-const UPLOAD_IMAGE_QUALITY = 0.7;
-const MIN_UPLOAD_IMAGE_QUALITY = 0.38;
-const MIN_UPLOAD_IMAGE_EDGE = 520;
+const MAX_UPLOAD_IMAGE_EDGE = 820;
+const MAX_UPLOAD_IMAGE_BYTES = 160 * 1024;
+const UPLOAD_IMAGE_QUALITY = 0.64;
+const MIN_UPLOAD_IMAGE_QUALITY = 0.36;
+const MIN_UPLOAD_IMAGE_EDGE = 480;
 const MAX_UPLOAD_VIDEO_EDGE = 540;
 const UPLOAD_VIDEO_BITRATE = 650_000;
 
 export function profilePhotoPathFromValue(value: string) {
   if (!value) return '';
+  if (value.startsWith('blob:') || value.startsWith('data:')) return '';
   if (!value.startsWith('http')) return value.replace(/^profile-photos\//, '');
 
   try {
@@ -47,6 +48,11 @@ export async function signedProfilePhotoUrl(value: string, options: { encryptedC
   if (error || !data?.signedUrl) return encryptedCachedObjectUrlOnly(path, value).catch(() => value);
   if (options.encryptedCache === false) return data.signedUrl;
   return encryptedCachedObjectUrl(path, data.signedUrl).catch(() => data.signedUrl);
+}
+
+export async function signedProfilePhotoThumbnailUrl(value: string, size = 96) {
+  void size;
+  return signedProfilePhotoUrl(value, { encryptedCache: false });
 }
 
 export async function signedProfilePhotoUrls(values: string[]) {
@@ -116,7 +122,7 @@ async function compressImageForUpload(file: File) {
   let currentWidth = width;
   let currentHeight = height;
   while (blob.size > MAX_UPLOAD_IMAGE_BYTES && Math.max(currentWidth, currentHeight) > MIN_UPLOAD_IMAGE_EDGE) {
-    const resizeScale = Math.max(MIN_UPLOAD_IMAGE_EDGE / Math.max(currentWidth, currentHeight), 0.84);
+    const resizeScale = Math.max(MIN_UPLOAD_IMAGE_EDGE / Math.max(currentWidth, currentHeight), 0.72);
     currentWidth = Math.max(1, Math.round(currentWidth * resizeScale));
     currentHeight = Math.max(1, Math.round(currentHeight * resizeScale));
     canvas.width = currentWidth;

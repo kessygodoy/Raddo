@@ -474,7 +474,7 @@ input[type="range"] {
 .raddo-glass {
   background: var(--theme-panel);
   border: 1px solid var(--theme-border);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.26);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(18px);
 }
 
@@ -490,6 +490,95 @@ input[type="range"] {
 .theme-pride .raddo-glass {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(255, 241, 248, 0.9), rgba(239, 246, 255, 0.88));
   box-shadow: 0 18px 48px rgba(236, 72, 153, 0.14);
+}
+
+.raddo-surface {
+  border: 1px solid var(--theme-border);
+  border-radius: 0.625rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015)),
+    var(--theme-panel);
+  box-shadow:
+    0 12px 34px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.theme-light .raddo-surface,
+.theme-green .raddo-surface,
+.theme-pride .raddo-surface {
+  box-shadow:
+    0 12px 28px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.76);
+}
+
+.raddo-muted-surface {
+  border: 1px solid var(--theme-border);
+  border-radius: 0.625rem;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.raddo-empty-state {
+  display: grid;
+  min-height: 10rem;
+  place-items: center;
+  border: 1px dashed color-mix(in srgb, var(--theme-border), var(--theme-accent) 18%);
+  border-radius: 0.625rem;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--theme-accent), transparent 88%), transparent 58%),
+    rgba(255, 255, 255, 0.035);
+  padding: 1.25rem;
+  text-align: center;
+}
+
+.raddo-empty-icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-accent), transparent 84%);
+  color: var(--theme-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-accent), transparent 64%);
+}
+
+.raddo-primary-action {
+  background: linear-gradient(135deg, #ff5f7f, #ff3f68 52%, #e11d48) !important;
+  color: #ffffff !important;
+  box-shadow:
+    0 12px 26px rgba(255, 63, 104, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.raddo-secondary-action {
+  border: 1px solid var(--theme-border) !important;
+  background: rgba(255, 255, 255, 0.065) !important;
+  color: var(--theme-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.raddo-soft-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--theme-border), transparent);
+}
+
+.raddo-media-skeleton {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    linear-gradient(110deg, rgba(148, 163, 184, 0.1) 8%, rgba(255, 255, 255, 0.18) 18%, rgba(148, 163, 184, 0.1) 33%),
+    rgba(15, 23, 42, 0.72);
+  background-size: 220% 100%;
+  animation: raddoSkeleton 1.2s ease-in-out infinite;
+}
+
+.theme-light .raddo-media-skeleton,
+.theme-green .raddo-media-skeleton,
+.theme-pride .raddo-media-skeleton {
+  background:
+    linear-gradient(110deg, rgba(15, 23, 42, 0.055) 8%, rgba(255, 255, 255, 0.86) 18%, rgba(15, 23, 42, 0.055) 33%),
+    rgba(226, 232, 240, 0.72);
+  background-size: 220% 100%;
 }
 
 .notification-icon {
@@ -584,9 +673,25 @@ input[type="range"] {
     linear-gradient(135deg, rgba(15, 23, 42, 0.86), rgba(18, 13, 31, 0.82)),
     rgba(3, 9, 20, 0.72) !important;
   box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.34),
+    0 14px 38px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(18px);
+}
+
+.raddo-header-icon,
+.raddo-top-pill,
+.raddo-bottom-nav button {
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.raddo-header-icon:active,
+.raddo-top-pill:active,
+.raddo-bottom-nav button:active {
+  transform: scale(0.97);
 }
 
 .raddo-story-strip {
@@ -671,7 +776,19 @@ input[type="range"] {
   bottom: calc(var(--raddo-bottom-safe) + 0.625rem);
   border-radius: 0.5rem;
   border-width: 1px;
-  padding-bottom: 0.5rem;
+  padding: 0.5rem;
+}
+
+.raddo-bottom-nav button {
+  min-height: 3.35rem;
+  border: 1px solid transparent;
+}
+
+.raddo-bottom-nav button[class*="bg-teal-300"] {
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    0 10px 24px rgba(255, 63, 104, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
 @media (min-width: 768px) {
@@ -1222,6 +1339,16 @@ input[type="range"] {
   50% {
     opacity: 1;
     transform: scale(1.08);
+  }
+}
+
+@keyframes raddoSkeleton {
+  0% {
+    background-position: 180% 0;
+  }
+
+  100% {
+    background-position: -40% 0;
   }
 }
 

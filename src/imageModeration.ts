@@ -10,6 +10,7 @@ type ModerationResult = {
 };
 
 export async function moderateUploadedImage(input: {
+  allowAdultInRestrictedChat?: boolean;
   allowRejected?: boolean;
   contextId?: string;
   context: 'chat-cover' | 'map-chat-image' | 'match-chat-image' | 'profile-carousel' | 'profile-photo';
@@ -19,6 +20,8 @@ export async function moderateUploadedImage(input: {
   const { data, error } = await supabase.functions.invoke<ModerationResult>('moderate-image', {
     body: {
       bucket: 'profile-photos',
+      allowAdultInRestrictedChat: input.allowAdultInRestrictedChat ?? input.allowRejected ?? false,
+      allowRejected: input.allowRejected ?? false,
       context: input.context,
       contextId: input.contextId,
       imageUrl: input.publicUrl,
@@ -27,14 +30,23 @@ export async function moderateUploadedImage(input: {
   });
 
   if (error) {
+    if (input.allowRejected || input.allowAdultInRestrictedChat) {
+      return {
+        allowed: true,
+        error: error.message,
+        reportCreated: false,
+        reportError: '',
+        reasons: ['moderation_unavailable_private_chat'],
+      };
+    }
     await removeProfilePhoto(input.path);
     const details = error.message ? ` Detalhe: ${error.message}` : '';
     throw new Error(`Não consegui verificar a imagem. Tente outra imagem ou tente novamente.${details}`);
   }
 
   if (!data?.allowed) {
-    await removeProfilePhoto(input.path);
     if (input.allowRejected) return data;
+    await removeProfilePhoto(input.path);
     if (data?.error) throw new Error(`Não consegui verificar a imagem. ${data.error}`);
     const reasonText = data?.reasons?.length ? ` Motivo: ${data.reasons.join(', ')}.` : '';
     const reportText = data?.reportError ? ` A denúncia automática não foi registrada: ${data.reportError}` : '';

@@ -1,6 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.105.3';
 
 type ModerateImageRequest = {
+  allowAdultInRestrictedChat?: boolean;
+  allowRejected?: boolean;
   bucket?: string;
   context?: string;
   contextId?: string;
@@ -20,6 +22,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Origin': '*',
 };
+const FUNCTION_VERSION = '2026-06-14-private-chat-bypass-vision-v4';
 
 const likelihoodRank: Record<string, number> = {
   UNKNOWN: 0,
@@ -138,6 +141,21 @@ async function validateImageContext(
   }
 
   if (values.context === 'map-chat-image') {
+    const { data: eventData, error: eventError } = await admin
+      .from('map_events')
+      .select('creator_uid')
+      .eq('id', values.contextId)
+      .maybeSingle<{ creator_uid: string | null }>();
+    if (!eventError && eventData?.creator_uid === values.ownerUid) return true;
+
+    const { data: moderatorData, error: moderatorError } = await admin
+      .from('map_event_moderators')
+      .select('user_uid')
+      .eq('event_id', values.contextId)
+      .eq('user_uid', values.ownerUid)
+      .maybeSingle<{ user_uid: string }>();
+    if (!moderatorError && moderatorData) return true;
+
     const { data, error } = await admin
       .from('map_event_participants')
       .select('user_uid')
@@ -148,6 +166,25 @@ async function validateImageContext(
   }
 
   return true;
+}
+
+async function canBypassPrivateChatModeration(
+  admin: ReturnType<typeof createClient>,
+  values: { allowAdultInRestrictedChat?: boolean; allowRejected?: boolean; context?: string; contextId?: string; ownerUid: string },
+) {
+  if (!(values.allowAdultInRestrictedChat || values.allowRejected)) return false;
+
+  if (values.context === 'match-chat-image') return true;
+
+  if (values.context !== 'map-chat-image' || !values.contextId) return false;
+
+  const { data, error } = await admin
+    .from('map_events')
+    .select('access_mode')
+    .eq('id', values.contextId)
+    .maybeSingle<{ access_mode: string | null }>();
+  if (error || !data) return false;
+  return ['approval', 'password', 'private', 'closed', 'restricted'].includes(data.access_mode ?? '');
 }
 
 async function loadImageContentForVision(
@@ -189,6 +226,27 @@ Deno.serve(async (req) => {
     });
     if (!validContext) return jsonResponse({ error: 'Invalid image context' }, 403);
 
+    const bypassPrivateChat = await canBypassPrivateChatModeration(admin, {
+      allowRejected: body.allowRejected,
+      allowAdultInRestrictedChat: body.allowAdultInRestrictedChat,
+      context: body.context,
+      contextId: body.contextId,
+      ownerUid: userData.user.id,
+    });
+    if (bypassPrivateChat) {
+      return jsonResponse({
+        allowed: true,
+        allowedByPrivateChat: true,
+        context: body.context ?? 'image',
+        functionVersion: FUNCTION_VERSION,
+        reportCreated: false,
+        reportError: '',
+        reasons: [],
+        safeSearch: {},
+        skippedVision: true,
+      });
+    }
+
     const imageContent = await loadImageContentForVision(admin, { bucket, path: body.path });
     const accessToken = await createGoogleAccessToken();
 
@@ -224,12 +282,15 @@ Deno.serve(async (req) => {
 
     const safeSearch = response?.safeSearchAnnotation ?? {};
     const reasons = blockedReasons(safeSearch);
+    const allowedByPrivateChat = false;
     const allowed = reasons.length === 0;
     if (!allowed) await admin.storage.from(bucket).remove([body.path]);
 
     return jsonResponse({
       allowed,
+      allowedByPrivateChat,
       context: body.context ?? 'image',
+      functionVersion: FUNCTION_VERSION,
       reportCreated: false,
       reportError: '',
       reasons,

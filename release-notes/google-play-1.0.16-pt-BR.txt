@@ -1,0 +1,5 @@
+Melhorias em stories e chats do mapa.
+Notificacoes mais estaveis e agrupadas.
+Correcoes no cache para evitar tela preta e imagens quebradas.
+Conexoes agora voltam para a conversa ou lista anterior.
+Menus de moderacao de chats reorganizados.

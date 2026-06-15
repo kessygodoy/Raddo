@@ -78,8 +78,9 @@ export function useAppModeratorRole(uid: string | undefined) {
 
     loadRole();
 
+    const channelName = `app-moderator-role:${uid}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
     const channel = supabase
-      .channel(`app-moderator-role:${uid}`)
+      .channel(channelName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_moderators', filter: `user_uid=eq.${uid}` }, loadRole)
       .subscribe();
 

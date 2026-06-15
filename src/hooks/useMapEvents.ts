@@ -59,6 +59,8 @@ type EventStoryRow = {
 };
 
 export type MapEventNotification = {
+  count?: number;
+  groupKey?: string;
   id: string;
   text: string;
   timeValue: string | null;
@@ -109,11 +111,12 @@ type ProfileRow = {
 };
 
 function rowToEvent(row: EventRow): MapEvent {
+  const coverURL = row.cover_url ?? '';
   return {
     id: row.id,
     title: row.title,
     description: row.description ?? '',
-    coverURL: row.cover_url ?? '',
+    coverURL: coverURL.startsWith('blob:') ? '' : coverURL,
     emoji: row.emoji ?? 'ðŸ’¬',
     accessMode: row.access_mode ?? 'open',
     passwordHash: row.password_hash ?? '',
@@ -133,8 +136,14 @@ async function withSignedEventImages(event: MapEvent) {
 }
 
 async function withSignedMapEventMessageImage(message: MapEventMessage) {
-  if (message.messageType !== 'image' || !message.imageURL) return message;
-  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL, { encryptedCache: false }) };
+  if (message.messageType !== 'image') return message;
+  const imageSource = message.imagePath || message.imageURL;
+  if (!imageSource) return message;
+  return {
+    ...message,
+    imagePath: message.imagePath || imageSource,
+    imageURL: await signedProfilePhotoUrl(imageSource, { encryptedCache: false }),
+  };
 }
 
 function mapEventMessageCacheKey(message: MapEventMessage) {
@@ -206,6 +215,8 @@ export async function hashMapEventPassword(password: string) {
 }
 
 function rowToMessage(row: EventMessageRow): MapEventMessage {
+  const imagePath = row.image_path ?? '';
+  const imageURL = row.image_url ?? imagePath;
   return {
     id: row.id,
     eventId: row.event_id,
@@ -213,8 +224,8 @@ function rowToMessage(row: EventMessageRow): MapEventMessage {
     senderName: row.sender_name,
     text: row.text,
     messageType: row.message_type ?? 'text',
-    imageURL: row.image_url ?? '',
-    imagePath: row.image_path ?? '',
+    imageURL,
+    imagePath,
     viewOnce: Boolean(row.view_once),
     viewedBy: row.viewed_by ?? [],
     createdAt: row.created_at,
@@ -349,22 +360,34 @@ export function useMapEventNotifications(uid: string | undefined) {
       const eventTitles = new Map<string, string>(
         ((eventsResult.data ?? []) as Array<{ id: string; title: string }>).map((event) => [event.id, event.title]),
       );
-      const messageNotifications = ((messagesResult.data ?? []) as Array<{
+      const messageRows = ((messagesResult.data ?? []) as Array<{
         created_at: string;
         event_id: string;
         id: string;
         sender_name: string;
         sender_uid: string;
         text: string;
-      }>)
-        .filter((message) => message.sender_uid !== uid)
-        .map((message) => ({
-          id: `map-message:${message.id}`,
-          text: `${message.sender_name}: ${message.text || 'Nova mensagem'}`,
-          timeValue: message.created_at,
-          title: eventTitles.get(message.event_id) ?? 'Chat do mapa',
+      }>).filter((message) => message.sender_uid !== uid);
+      const messagesByEvent = new Map<string, typeof messageRows>();
+      messageRows.forEach((message) => {
+        const current = messagesByEvent.get(message.event_id) ?? [];
+        current.push(message);
+        messagesByEvent.set(message.event_id, current);
+      });
+      const messageNotifications = [...messagesByEvent.entries()].map(([eventId, rows]) => {
+        const sortedRows = rows.slice().sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+        const latest = sortedRows[0];
+        const title = eventTitles.get(eventId) ?? 'Chat do mapa';
+        return {
+          count: sortedRows.length,
+          groupKey: `map-message:${eventId}`,
+          id: `map-message:${eventId}:${latest.id}`,
+          text: sortedRows.length === 1 ? `${latest.sender_name}: ${latest.text || 'Nova mensagem'}` : `${title} tem ${sortedRows.length} mensagens novas`,
+          timeValue: latest.created_at,
+          title,
           tone: 'message' as const,
-        }));
+        };
+      });
 
       const storyLikeNotifications = ((storiesResult.data ?? []) as Array<{
         created_at: string;
@@ -374,7 +397,9 @@ export function useMapEventNotifications(uid: string | undefined) {
       }>)
         .filter((story) => (story.liked_by ?? []).some((likedUid) => likedUid !== uid))
         .map((story) => ({
-          id: `story-like:${story.id}:${(story.liked_by ?? []).length}`,
+          count: (story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length,
+          groupKey: `story-like:${story.id}`,
+          id: `story-like:${story.id}:${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length}`,
           text: `${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length} curtiram seu story${story.text ? `: ${story.text}` : ''}`,
           timeValue: story.created_at,
           title: 'Curtida no story',
@@ -523,7 +548,11 @@ function mapEventsCacheKey(uid: string) {
 function readCachedEventRows(uid: string) {
   try {
     const saved = window.localStorage.getItem(mapEventsCacheKey(uid));
-    return saved ? JSON.parse(saved) as EventRow[] : [];
+    const rows = saved ? JSON.parse(saved) as EventRow[] : [];
+    return rows.map((row) => ({
+      ...row,
+      cover_url: row.cover_url?.startsWith('blob:') ? '' : row.cover_url,
+    }));
   } catch {
     return [];
   }
@@ -531,7 +560,11 @@ function readCachedEventRows(uid: string) {
 
 function writeCachedEventRows(uid: string, rows: EventRow[]) {
   try {
-    window.localStorage.setItem(mapEventsCacheKey(uid), JSON.stringify(rows.slice(0, 250)));
+    const safeRows = rows.slice(0, 250).map((row) => ({
+      ...row,
+      cover_url: row.cover_url?.startsWith('blob:') ? '' : row.cover_url,
+    }));
+    window.localStorage.setItem(mapEventsCacheKey(uid), JSON.stringify(safeRows));
   } catch {
     // Cache is best-effort only.
   }
@@ -1710,7 +1743,7 @@ export async function sendMapEventMessage(input: {
 }
 
 export async function markMapEventMessageImageViewed(message: MapEventMessage, viewerUid: string) {
-  if (isDemoMode || message.viewedBy.includes(viewerUid)) return;
+  if (isDemoMode || message.senderUid === viewerUid || message.viewedBy.includes(viewerUid)) return;
 
   const rpcResult = await supabase.rpc('mark_map_event_image_viewed', {
     target_message_id: message.id,

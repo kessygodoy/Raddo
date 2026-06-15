@@ -1,5 +1,5 @@
 import { SyntheticEvent, useEffect, useState } from 'react';
-import { profilePhotoPathFromValue, signedProfilePhotoUrl } from '../storageImages';
+import { profilePhotoPathFromValue, signedProfilePhotoThumbnailUrl, signedProfilePhotoUrl } from '../storageImages';
 import { encryptedCachedObjectUrlOnly } from '../encryptedMediaCache';
 
 type Props = {
@@ -8,10 +8,14 @@ type Props = {
   fallbackClassName?: string;
   onLoaded?: () => void;
   src: string;
+  thumbnailOnly?: boolean;
 };
 
-const SNAPSHOT_PREFIX = 'raddo-media-snapshot:';
-const SNAPSHOT_SIZE = 96;
+const SNAPSHOT_PREFIX = 'raddo-media-thumb-v2:';
+const SNAPSHOT_SIZE = 72;
+const SNAPSHOT_MAX_LENGTH = 18000;
+const SNAPSHOT_MAX_ITEMS = 120;
+const lastGoodSources = new Map<string, string>();
 
 function snapshotKey(src: string) {
   const stableValue = profilePhotoPathFromValue(src) || src;
@@ -43,37 +47,77 @@ function writeSnapshot(src: string, image: HTMLImageElement) {
     const sourceX = Math.max(0, Math.round((image.naturalWidth - sourceSize) / 2));
     const sourceY = Math.max(0, Math.round((image.naturalHeight - sourceSize) / 2));
     context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, SNAPSHOT_SIZE, SNAPSHOT_SIZE);
-    const dataUrl = canvas.toDataURL('image/webp', 0.62);
-    if (dataUrl.length < 45000) window.localStorage.setItem(snapshotKey(src), dataUrl);
+    const dataUrl = canvas.toDataURL('image/webp', 0.5);
+    if (dataUrl.length < SNAPSHOT_MAX_LENGTH) {
+      pruneSnapshots();
+      window.localStorage.setItem(snapshotKey(src), dataUrl);
+    }
   } catch {
     // Some remote images cannot be drawn to canvas because of CORS. Full cache still handles them.
   }
 }
 
-export default function CachedMediaImage({ alt = '', className = '', fallbackClassName = '', onLoaded, src }: Props) {
-  const [displaySrc, setDisplaySrc] = useState(() => readSnapshot(src));
-  const [loaded, setLoaded] = useState(false);
+function pruneSnapshots() {
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith(SNAPSHOT_PREFIX)) keys.push(key);
+    }
+    keys.slice(0, Math.max(0, keys.length - SNAPSHOT_MAX_ITEMS)).forEach((key) => window.localStorage.removeItem(key));
+  } catch {
+    // Snapshot cache is best-effort only.
+  }
+}
+
+function stableMediaKey(src: string) {
+  return profilePhotoPathFromValue(src) || src;
+}
+
+export default function CachedMediaImage({ alt = '', className = '', fallbackClassName = '', onLoaded, src, thumbnailOnly = false }: Props) {
+  const [displaySrc, setDisplaySrc] = useState(() => {
+    const path = profilePhotoPathFromValue(src);
+    return lastGoodSources.get(stableMediaKey(src)) || readSnapshot(src) || (path ? '' : src);
+  });
+  const [loaded, setLoaded] = useState(Boolean(displaySrc));
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
+    const mediaKey = stableMediaKey(src);
+    const path = profilePhotoPathFromValue(src);
     const snapshot = readSnapshot(src);
-    setLoaded(Boolean(snapshot));
+    const lastGood = lastGoodSources.get(mediaKey);
+    const immediateSrc = lastGood || snapshot || (path ? '' : src);
+    setLoaded(Boolean(immediateSrc));
     setFailed(false);
-    setDisplaySrc(snapshot);
+    setDisplaySrc(immediateSrc);
 
     async function resolveCachedSource() {
-      const path = profilePhotoPathFromValue(src);
       if (!path) {
-        if (active) setDisplaySrc(src);
+        if (active) {
+          setDisplaySrc(src);
+          lastGoodSources.set(mediaKey, src);
+        }
         return;
       }
-      const cached = await encryptedCachedObjectUrlOnly(path, '').catch(() => '');
-      if (active && cached) {
-        setDisplaySrc(cached);
-        return;
+      if (!thumbnailOnly) {
+        const cached = await encryptedCachedObjectUrlOnly(path, '').catch(() => '');
+        if (active && cached) {
+          setDisplaySrc(cached);
+          setLoaded(true);
+          lastGoodSources.set(mediaKey, cached);
+          return;
+        }
       }
-      if (active) setDisplaySrc(src);
+      const renewed = await (thumbnailOnly
+        ? signedProfilePhotoThumbnailUrl(src)
+        : signedProfilePhotoUrl(src, { encryptedCache: true })
+      ).catch(() => '');
+      if (active && renewed) {
+        setDisplaySrc(renewed);
+        lastGoodSources.set(mediaKey, renewed);
+      }
     }
 
     void resolveCachedSource();
@@ -81,15 +125,20 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
     return () => {
       active = false;
     };
-  }, [src]);
+  }, [src, thumbnailOnly]);
 
   async function handleError() {
     if (failed) return;
     setFailed(true);
-    const renewed = await signedProfilePhotoUrl(src, { encryptedCache: true }).catch(() => '');
+    const mediaKey = stableMediaKey(src);
+    const renewed = await (thumbnailOnly
+      ? signedProfilePhotoThumbnailUrl(src)
+      : signedProfilePhotoUrl(src, { encryptedCache: true })
+    ).catch(() => '');
     if (renewed && renewed !== displaySrc) {
       setFailed(false);
       setDisplaySrc(renewed);
+      lastGoodSources.set(mediaKey, renewed);
     }
   }
 
@@ -97,21 +146,21 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
     setLoaded(true);
     setFailed(false);
     writeSnapshot(src, event.currentTarget);
+    lastGoodSources.set(stableMediaKey(src), event.currentTarget.currentSrc || displaySrc);
     onLoaded?.();
   }
 
   return (
     <span className={`relative block overflow-hidden ${fallbackClassName}`}>
       {!loaded && (
-        <span className="absolute inset-0 grid place-items-center bg-slate-900/90">
+        <span className="raddo-media-skeleton grid place-items-center">
           <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/15 border-t-[#ff3f68]" />
         </span>
       )}
-      {failed && <span className="absolute inset-0 bg-slate-900" />}
       {displaySrc && (
         <img
           alt={alt}
-          className={`${className} ${loaded && !failed ? 'opacity-100' : 'opacity-0'} transition-opacity duration-150`}
+          className={`${className} ${loaded ? 'opacity-100' : 'opacity-0'} transition-opacity duration-150`}
           draggable={false}
           onError={handleError}
         onLoad={handleLoad}

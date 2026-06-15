@@ -22,6 +22,7 @@ export function useCachedChatMediaUrl(input: {
 
   useEffect(() => {
     setCachedUrl(input.url);
+    if (input.url.startsWith('blob:') || input.url.startsWith('data:')) return undefined;
     if (!input.enabled || !input.url || !input.cacheKey) return undefined;
 
     let active = true;

@@ -407,7 +407,7 @@ export default function Discovery({ me, profiles }: Props) {
                           onClick={() => setPreviewProfile(profile)}
                           type="button"
                         >
-                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} thumbnailOnly />
                           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                         </button>
                         <button
@@ -504,7 +504,7 @@ export default function Discovery({ me, profiles }: Props) {
                           type="button"
                         >
                           {profile.photoURL ? (
-                            <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} />
+                            <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-lg" src={profile.photoURL} thumbnailOnly />
                           ) : (
                             <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-white/10 text-sm font-semibold text-white">
                               {profile.displayName.slice(0, 2).toUpperCase()}
@@ -568,7 +568,7 @@ export default function Discovery({ me, profiles }: Props) {
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="relative h-[68dvh] min-h-[480px] overflow-hidden rounded-lg border border-white/10 bg-white/8">
+      <div className="raddo-surface relative h-[68dvh] min-h-[480px] overflow-hidden">
         <AnimatePresence mode="popLayout">
           {current ? (
             <motion.article
@@ -607,21 +607,23 @@ export default function Discovery({ me, profiles }: Props) {
               </div>
             </motion.article>
           ) : (
-            <div className="grid h-full place-items-center bg-slate-950/70 p-6 text-center text-slate-200">
-              <div className="max-w-xs">
-                <p className="text-base font-semibold text-white">Sem cards disponíveis</p>
-                <p className="mt-2 text-sm text-slate-300">
+            <div className="grid h-full place-items-center p-6 text-center text-slate-200">
+              <div className="raddo-empty-state max-w-xs">
+                <div>
+                  <p className="text-base font-semibold text-white">Sem cards disponíveis</p>
+                  <p className="mt-2 text-sm text-slate-300">
                   Você pode ter curtido ou recusado todos os perfis disponíveis nos filtros atuais.
-                </p>
-                {seenIds.size > 0 && (
-                  <button
-                    className="mt-4 h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
-                    onClick={() => resetCardInteractions()}
-                    type="button"
-                  >
-                    {me.isPremium ? 'Liberar perfis novamente' : 'Ver anúncio para liberar perfis novamente'}
-                  </button>
-                )}
+                  </p>
+                  {seenIds.size > 0 && (
+                    <button
+                      className="raddo-primary-action mt-4 h-10 rounded-lg px-4 text-sm font-semibold"
+                      onClick={() => resetCardInteractions()}
+                      type="button"
+                    >
+                      {me.isPremium ? 'Liberar perfis novamente' : 'Ver anúncio para liberar perfis novamente'}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -631,7 +633,7 @@ export default function Discovery({ me, profiles }: Props) {
       <div className="grid grid-cols-2 gap-3">
         <button
           aria-label="Dislike"
-          className="grid h-14 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
+          className="raddo-secondary-action grid h-14 place-items-center rounded-lg text-rose-100"
           onClick={handleDislike}
           type="button"
         >
@@ -639,7 +641,7 @@ export default function Discovery({ me, profiles }: Props) {
         </button>
         <button
           aria-label="Like"
-          className="grid h-14 place-items-center rounded-lg bg-teal-300 text-slate-950"
+          className="raddo-primary-action grid h-14 place-items-center rounded-lg"
           onClick={handleLike}
           type="button"
         >
@@ -647,7 +649,7 @@ export default function Discovery({ me, profiles }: Props) {
         </button>
       </div>
 
-      <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+      <section className="raddo-surface p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
           <SlidersHorizontal className="h-4 w-4 text-teal-300" />
           Filtros dos cards
@@ -703,7 +705,7 @@ export default function Discovery({ me, profiles }: Props) {
                   onClick={() => setPreviewProfile(profile)}
                   type="button"
                 >
-                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={profile.photoURL} />
+                  <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={profile.photoURL} thumbnailOnly />
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                 </button>
                 <button

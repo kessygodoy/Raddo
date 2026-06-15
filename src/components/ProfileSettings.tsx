@@ -114,6 +114,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [preferenceStep, setPreferenceStep] = useState<PreferenceStep>('find');
   const [preferenceSearch, setPreferenceSearch] = useState('');
   const [showPublicPreview, setShowPublicPreview] = useState(false);
+  const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
+  const [profilePhotoPickerOpen, setProfilePhotoPickerOpen] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState(
     typeof Notification === 'undefined' ? 'indisponível' : Notification.permission,
   );
@@ -185,6 +187,18 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         return;
       }
 
+      if (photoViewerOpen) {
+        event.preventDefault();
+        setPhotoViewerOpen(false);
+        return;
+      }
+
+      if (profilePhotoPickerOpen) {
+        event.preventDefault();
+        setProfilePhotoPickerOpen(false);
+        return;
+      }
+
       if (selectedModerationCase) {
         event.preventDefault();
         setSelectedModerationCase(null);
@@ -208,7 +222,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [moderationOpen, selectedModerationCase, showPublicPreview, termsOpen]);
+  }, [moderationOpen, photoViewerOpen, profilePhotoPickerOpen, selectedModerationCase, showPublicPreview, termsOpen]);
 
   function updateDraft<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setDraft((prev) => {
@@ -664,6 +678,54 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           </section>
         </div>
       )}
+      {profilePhotoPickerOpen && (
+        <div className="fixed inset-0 z-[1600] grid place-items-end bg-black/65 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] backdrop-blur-sm sm:place-items-center">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">Foto de perfil</h2>
+                <p className="text-xs text-slate-400">Escolha como quer atualizar sua foto.</p>
+              </div>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setProfilePhotoPickerOpen(false)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="grid h-24 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-center text-sm font-semibold">
+                <span className="grid gap-2 justify-items-center">
+                  <Camera className="h-5 w-5 text-[#ff3f68]" />
+                  Câmera
+                </span>
+                <input
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(event) => {
+                    setProfilePhotoPickerOpen(false);
+                    void uploadProfilePhoto(event);
+                  }}
+                  type="file"
+                />
+              </label>
+              <label className="grid h-24 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-center text-sm font-semibold">
+                <span className="grid gap-2 justify-items-center">
+                  <Upload className="h-5 w-5 text-[#ff3f68]" />
+                  Galeria
+                </span>
+                <input
+                  accept={GALLERY_IMAGE_ACCEPT}
+                  className="hidden"
+                  onChange={(event) => {
+                    setProfilePhotoPickerOpen(false);
+                    void uploadProfilePhoto(event);
+                  }}
+                  type="file"
+                />
+              </label>
+            </div>
+          </section>
+        </div>
+      )}
       {hasProfileChanges && (
         <button
           aria-label={t('saveSettings')}
@@ -679,20 +741,55 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           <span className="truncate">{manualSaving ? t('saving') : 'Salvar'}</span>
         </button>
       )}
+      {photoViewerOpen && draft.photoURL && (
+        <div className="fixed inset-0 z-[1800] flex flex-col bg-black text-white">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end p-4 pt-[calc(env(safe-area-inset-top)+12px)]">
+            <button
+              aria-label="Fechar foto"
+              className="pointer-events-auto grid h-11 w-11 place-items-center rounded-full bg-slate-950/80 text-white shadow-2xl backdrop-blur"
+              onClick={() => setPhotoViewerOpen(false)}
+              type="button"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+          <button
+            aria-label="Fechar visualização da foto"
+            className="min-h-0 flex-1 px-0 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-[calc(env(safe-area-inset-top)+12px)]"
+            onClick={() => setPhotoViewerOpen(false)}
+            type="button"
+          >
+            <CachedMediaImage className="h-full w-full object-contain" fallbackClassName="h-full w-full bg-black" src={draft.photoURL} />
+          </button>
+        </div>
+      )}
       <aside className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-white/8">
-        <div className="grid place-items-center bg-slate-950/60 p-5">
+        <div className="relative h-72 overflow-hidden bg-slate-950/60 md:h-80">
           {draft.photoURL ? (
-            <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="aspect-square w-1/2 min-w-24 rounded-full border border-white/10" src={draft.photoURL} />
+            <button
+              aria-label="Abrir foto de perfil"
+              className="block h-full w-full cursor-zoom-in text-left"
+              onClick={() => setPhotoViewerOpen(true)}
+              type="button"
+            >
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={draft.photoURL} />
+            </button>
           ) : (
-            <div className="grid aspect-square w-1/2 min-w-24 place-items-center rounded-full border border-white/10 bg-slate-950 text-sm text-slate-300">
-              Sem foto
-            </div>
+            <div className="grid h-full w-full place-items-center bg-slate-950 text-sm text-slate-300">Sem foto</div>
           )}
+          <button
+            aria-label="Trocar foto de perfil"
+            className="absolute bottom-3 right-3 grid h-6 w-6 place-items-center rounded-full border border-white/15 bg-[#ff3f68] text-white shadow-lg shadow-black/30"
+            onClick={() => setProfilePhotoPickerOpen(true)}
+            type="button"
+          >
+            <Camera className="h-3 w-3" />
+          </button>
         </div>
         <div className="grid grid-cols-4 gap-2 p-3">
           {draft.photos.map((photo) => (
             <div className="aspect-square overflow-hidden rounded-lg border border-white/10" key={photo}>
-              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={photo} />
+              <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={photo} thumbnailOnly />
             </div>
           ))}
         </div>
@@ -754,31 +851,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   />
                 </label>
                 <div className="grid gap-2 text-sm">
-                  <span>Foto de perfil</span>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
-                      <Camera className="h-4 w-4 text-teal-300" />
-                      {uploadingProfilePhoto ? 'Enviando...' : 'Abrir câmera'}
-                      <input accept="image/*" capture="environment" className="hidden" onChange={uploadProfilePhoto} type="file" />
-                    </label>
-                    <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
-                      <Upload className="h-4 w-4 text-teal-300" />
-                      {uploadingProfilePhoto ? 'Enviando...' : 'Escolher foto'}
-                      <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" onChange={uploadProfilePhoto} type="file" />
-                    </label>
-                  </div>
-                </div>
-                {draft.photoURL && (
-                  <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2">
-                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={draft.photoURL} />
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold">Foto principal</p>
-                      <p className="text-xs text-slate-300">Essa aparece no card, mapa e lista de conversas.</p>
-                    </div>
-                  </div>
-                )}
-                <div className="grid gap-2 text-sm">
-                  <span>Fotos do carrossel</span>
+                  <span>Fotos</span>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Camera className="h-4 w-4 text-teal-300" />
@@ -796,8 +869,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   <div className="grid gap-2">
                     {draft.photos.map((photo) => (
                       <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={photo}>
-                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={photo} />
-                        <span className="min-w-0 flex-1 truncate text-xs text-slate-300">Foto do carrossel</span>
+                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={photo} thumbnailOnly />
+                        <span className="min-w-0 flex-1 truncate text-xs text-slate-300">Foto</span>
                         <button
                           className="ml-auto h-9 rounded-lg border border-white/10 px-3 text-xs text-slate-200"
                           onClick={() => removePhoto(photo)}
@@ -1079,7 +1152,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   <div className="grid gap-2">
                     {interactions.map((interaction) => (
                       <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
-                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={interaction.profile.photoURL} />
+                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={interaction.profile.photoURL} thumbnailOnly />
                         <div className="min-w-0 flex-1">
                           <h3 className="truncate text-sm font-semibold">{interaction.profile.displayName}</h3>
                           <p className="mt-1 flex items-center gap-1 text-xs text-slate-300">
@@ -1246,7 +1319,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <div className="grid gap-2">
                 {blockedProfiles.map((blockedProfile) => (
                   <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={blockedProfile.uid}>
-                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={blockedProfile.photoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={blockedProfile.photoURL} thumbnailOnly />
                     <span className="min-w-0 flex-1 truncate text-sm font-semibold">{blockedProfile.displayName}</span>
                     <button
                       className="h-9 rounded-lg border border-white/10 px-3 text-xs text-slate-200"
@@ -1374,7 +1447,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                         type="button"
                       >
                         {item.userPhotoURL ? (
-                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={item.userPhotoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={item.userPhotoURL} thumbnailOnly />
                         ) : (
                           <div className="grid h-11 w-11 place-items-center rounded-full bg-amber-300 text-sm font-bold text-slate-950">
                             {item.userDisplayName.slice(0, 1).toUpperCase()}
@@ -1496,7 +1569,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     {appBannedUsers.bannedUsers.map((bannedUser) => (
                       <article className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#07111f] p-3" key={bannedUser.uid}>
                         {bannedUser.photoURL ? (
-                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={bannedUser.photoURL} />
+                          <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-11 w-11 rounded-full" src={bannedUser.photoURL} thumbnailOnly />
                         ) : (
                           <div className="grid h-11 w-11 place-items-center rounded-full bg-rose-300 text-sm font-bold text-slate-950">
                             {bannedUser.displayName.slice(0, 1).toUpperCase()}

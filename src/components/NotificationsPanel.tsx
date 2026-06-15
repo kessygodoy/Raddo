@@ -1,51 +1,40 @@
-import { Bell, Heart, MessageCircle } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Bell, Heart, MessageCircle, Sparkles } from 'lucide-react';
+import { useMemo } from 'react';
 import { useI18n } from '../i18n';
-import { useMatchProfiles, useSortedMatches } from '../hooks/useMatches';
 import type { MapEventNotification } from '../hooks/useMapEvents';
 import type { NotificationPreferences } from '../notificationPreferences';
-import type { Match } from '../types';
+import type { Match, UserProfile } from '../types';
 
 type Props = {
   currentUid: string;
   mapNotifications?: MapEventNotification[];
+  matchProfilesByUid?: Record<string, UserProfile>;
   matches: Match[];
+  notificationsClearedAt: number;
   onOpenMapNotification: (notificationId: string) => void;
   onOpenNotification: (notificationId: string, matchId: string) => void;
   preferences: NotificationPreferences;
-  readNotificationIds: Set<string>;
 };
 
-type CachedNotification = {
+type NotificationItem = {
+  count?: number;
+  groupKey: string;
   id: string;
   matchId?: string;
+  target: 'chat' | 'map';
+  text: string;
   timeValue: string | null;
   title: string;
-  text: string;
   tone: 'match' | 'message' | 'story_like';
-  target: 'chat' | 'map';
 };
-
-function notificationsCacheKey(uid: string) {
-  return `raddo-notifications-cache:${uid}`;
-}
-
-function readNotificationsCache(uid: string) {
-  try {
-    const saved = window.localStorage.getItem(notificationsCacheKey(uid));
-    if (!saved) return [];
-    const parsed = JSON.parse(saved) as CachedNotification[];
-    return Array.isArray(parsed) ? parsed.map((notification) => ({ ...notification, target: notification.target ?? 'chat' })) : [];
-  } catch {
-    return [];
-  }
-}
 
 function relativeTime(dateValue: string | null) {
   if (!dateValue) return '';
+  const parsed = Date.parse(dateValue);
+  if (!Number.isFinite(parsed)) return '';
 
-  const diffMs = Date.now() - Date.parse(dateValue);
-  if (!Number.isFinite(diffMs) || diffMs < 0) return 'agora';
+  const diffMs = Date.now() - parsed;
+  if (diffMs < 0) return 'agora';
 
   const minutes = Math.floor(diffMs / 60000);
   if (minutes < 1) return 'agora';
@@ -57,106 +46,136 @@ function relativeTime(dateValue: string | null) {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days} d`;
 
-  return new Date(dateValue).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+  return new Date(parsed).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
 function notificationIdForMatch(match: Match) {
-  return `${match.id}:${match.lastMessageAt ?? match.createdAt}`;
+  return `${match.id || 'match'}:${match.lastMessageAt ?? match.createdAt ?? 'created'}`;
 }
 
 export default function NotificationsPanel({
-  currentUid,
+  currentUid: _currentUid,
   mapNotifications = [],
+  matchProfilesByUid = {},
   matches,
+  notificationsClearedAt,
   onOpenMapNotification,
   onOpenNotification,
   preferences,
-  readNotificationIds,
 }: Props) {
   const { t } = useI18n();
-  const sortedMatches = useSortedMatches(matches);
-  const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
-  const [cachedNotifications, setCachedNotifications] = useState<CachedNotification[]>(() => readNotificationsCache(currentUid));
+  const safeMatches = Array.isArray(matches) ? matches : [];
+  const safeMapNotifications = Array.isArray(mapNotifications) ? mapNotifications : [];
+  const safePreferences = preferences ?? {
+    connectionMessages: true,
+    connections: true,
+    enabled: true,
+    mapChats: true,
+  };
 
-  useEffect(() => {
-    setCachedNotifications(readNotificationsCache(currentUid));
-  }, [currentUid]);
+  const notifications = useMemo<NotificationItem[]>(() => {
+    try {
+      if (!safePreferences.enabled) return [];
 
-  const liveNotifications = useMemo(
-    () =>
-      sortedMatches.filter((match) => {
-        const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
-        if (!preferences.enabled) return false;
-        return hasMessage ? preferences.connectionMessages : preferences.connections;
-      }).map((match) => {
-        const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
-        const profile = profilesByUid[otherUid];
-        const name = profile?.displayName ?? 'Alguem';
-        const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+      const chatNotifications = safeMatches
+        .filter((match) => {
+          const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+          if (hasMessage && match.lastMessageSenderUid === _currentUid) return false;
+          return hasMessage ? safePreferences.connectionMessages : safePreferences.connections;
+        })
+        .map<NotificationItem>((match) => {
+          const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+          const otherUid = match.users.find((uid) => uid !== _currentUid) ?? '';
+          const otherName = matchProfilesByUid[otherUid]?.displayName || 'Alguem';
+          return {
+            count: hasMessage ? 1 : undefined,
+            groupKey: `match:${match.id}`,
+            id: notificationIdForMatch(match),
+            matchId: match.id,
+            target: 'chat',
+            text: hasMessage ? `${otherName} enviou uma mensagem: ${String(match.lastMessage || '')}` : t('notificationNewMatchText', { name: otherName }),
+            timeValue: match.lastMessageAt ?? match.createdAt ?? null,
+            title: hasMessage ? otherName : t('notificationNewMatch'),
+            tone: hasMessage ? 'message' : 'match',
+          };
+        });
 
-        return {
-          id: notificationIdForMatch(match),
-          matchId: match.id,
-          timeValue: match.lastMessageAt ?? match.createdAt,
-          title: hasMessage ? t('notificationNewMessage') : t('notificationNewMatch'),
-          text: hasMessage ? `${name}: ${match.lastMessage}` : t('notificationNewMatchText', { name }),
-          tone: hasMessage ? 'message' as const : 'match' as const,
-          target: 'chat' as const,
-        };
-      }),
-    [currentUid, preferences, profilesByUid, sortedMatches, t],
-  );
+      const mapItems = safeMapNotifications
+        .filter((notification) => (notification.tone === 'message' ? safePreferences.connectionMessages : true))
+        .map<NotificationItem>((notification) => ({
+          count: notification.count,
+          groupKey: notification.groupKey || String(notification.id || ''),
+          id: String(notification.id || ''),
+          target: 'map',
+          text: String(notification.text || ''),
+          timeValue: notification.timeValue ?? null,
+          title: String(notification.title || 'Raddo'),
+          tone: notification.tone === 'story_like' ? 'story_like' : 'message',
+        }));
 
-  const liveMapNotifications = useMemo(
-    () =>
-      preferences.enabled
-        ? mapNotifications
-            .filter((notification) => (notification.tone === 'message' ? preferences.connectionMessages : true))
-            .map((notification) => ({
-              ...notification,
-              target: 'map' as const,
-            }))
-        : [],
-    [mapNotifications, preferences],
-  );
+      const grouped = new Map<string, NotificationItem>();
+      [...chatNotifications, ...mapItems]
+        .filter((notification) => notification.id && notification.title)
+        .forEach((notification) => {
+          const current = grouped.get(notification.groupKey);
+          if (!current) {
+            grouped.set(notification.groupKey, notification);
+            return;
+          }
 
-  const liveCombinedNotifications = useMemo(
-    () =>
-      [...liveNotifications, ...liveMapNotifications].sort(
-        (a, b) => Date.parse(b.timeValue ?? '') - Date.parse(a.timeValue ?? ''),
-      ),
-    [liveMapNotifications, liveNotifications],
-  );
-  const notifications = liveCombinedNotifications.length > 0 ? liveCombinedNotifications : cachedNotifications;
+          const currentTime = Date.parse(current.timeValue ?? '') || 0;
+          const nextTime = Date.parse(notification.timeValue ?? '') || 0;
+          const latest = nextTime >= currentTime ? notification : current;
+          grouped.set(notification.groupKey, {
+            ...latest,
+            count: (current.count ?? 1) + (notification.count ?? 1),
+          });
+        });
 
-  useEffect(() => {
-    if (liveCombinedNotifications.length === 0) return;
-    const nextCache = liveCombinedNotifications.slice(0, 80);
-    setCachedNotifications(nextCache);
-    window.localStorage.setItem(notificationsCacheKey(currentUid), JSON.stringify(nextCache));
-  }, [currentUid, liveCombinedNotifications]);
+      return [...grouped.values()]
+        .map((notification) => {
+          if (notification.tone === 'message' && notification.target === 'chat' && (notification.count ?? 0) > 1) {
+            return { ...notification, text: `${notification.title} enviou ${notification.count} mensagens` };
+          }
+          return notification;
+        })
+        .sort((a, b) => (Date.parse(b.timeValue ?? '') || 0) - (Date.parse(a.timeValue ?? '') || 0))
+        .slice(0, 80);
+    } catch {
+      return [];
+    }
+  }, [_currentUid, matchProfilesByUid, safeMapNotifications, safeMatches, safePreferences, t]);
 
   return (
-    <section className="mx-auto grid max-w-lg gap-4">
+    <section className="mx-auto grid w-full max-w-lg gap-4 px-1 py-2 text-white">
       <header className="flex items-center justify-between">
-        <button
-          className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
-          type="button"
-        >
+        <span className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200">
           <Bell className="h-5 w-5" />
-        </button>
+        </span>
         <h1 className="text-xl font-semibold">{t('notificationsPage')}</h1>
         <div className="h-10 w-10" />
       </header>
 
-      <section className="raddo-glass overflow-hidden rounded-lg">
-        {notifications.length === 0 && <p className="p-4 text-sm text-slate-300">{t('noNotifications')}</p>}
+      <section className="raddo-surface overflow-hidden">
+        {notifications.length === 0 && (
+          <div className="raddo-empty-state">
+            <div className="grid justify-items-center gap-3">
+              <span className="raddo-empty-icon">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold">{t('noNotifications')}</p>
+                <p className="mt-1 text-xs text-slate-400">Quando algo novo acontecer, aparece aqui.</p>
+              </div>
+            </div>
+          </div>
+        )}
         {notifications.map((notification) => {
           const Icon = notification.tone === 'message' ? MessageCircle : Heart;
-          const read = readNotificationIds.has(notification.id);
+          const read = (Date.parse(notification.timeValue ?? '') || 0) <= notificationsClearedAt;
           return (
             <button
-              className={`flex w-full items-center gap-3 border-b border-white/10 p-4 text-left transition last:border-b-0 hover:bg-white/8 ${
+              className={`flex w-full items-center gap-3 border-b border-white/10 p-4 text-left transition last:border-b-0 hover:bg-white/8 active:scale-[0.995] ${
                 read ? 'opacity-70' : ''
               }`}
               key={notification.id}

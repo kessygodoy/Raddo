@@ -11,6 +11,7 @@ export async function prepareChatImageFile(file: File) {
 }
 
 export async function uploadChatMedia(input: {
+  allowAdultInRestrictedChat?: boolean;
   allowRejected?: boolean;
   contextId?: string;
   context: ChatImageContext;
@@ -31,6 +32,7 @@ export async function uploadChatMedia(input: {
   const signedUrl = await uploadProfilePhoto(path, uploadFile);
 
   await moderateUploadedImage({
+    allowAdultInRestrictedChat: input.allowAdultInRestrictedChat ?? input.allowRejected ?? false,
     allowRejected: input.allowRejected ?? false,
     context: input.context,
     contextId: input.contextId,

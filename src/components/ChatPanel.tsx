@@ -1,5 +1,5 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Camera, Flag, ImagePlus, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX } from 'lucide-react';
+import { ArrowLeft, Camera, Flag, ImagePlus, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX, X } from 'lucide-react';
 import type { Match, Message, UserProfile } from '../types';
 import {
   blockProfile,
@@ -55,10 +55,12 @@ type Props = {
   currentUid: string;
   matches: Match[];
   currentProfile: UserProfile;
+  onOpenMatch?: (matchId: string) => void;
+  onShowList?: () => void;
   openMatchId?: string;
 };
 
-export default function ChatPanel({ currentProfile, currentUid, matches, openMatchId }: Props) {
+export default function ChatPanel({ currentProfile, currentUid, matches, onOpenMatch, onShowList, openMatchId }: Props) {
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
   const [cachedConversations, setCachedConversations] = useState<Record<string, CachedConversation>>(() => readConversationCache(currentUid));
@@ -70,6 +72,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
   const [matchMenuOpen, setMatchMenuOpen] = useState(false);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
+  const [viewOnceViewerIds, setViewOnceViewerIds] = useState<string[] | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
@@ -173,6 +176,12 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
         return;
       }
 
+      if (viewOnceViewerIds) {
+        event.preventDefault();
+        setViewOnceViewerIds(null);
+        return;
+      }
+
       if (openMessageMenuId) {
         event.preventDefault();
         setOpenMessageMenuId('');
@@ -189,6 +198,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
         event.preventDefault();
         setChatView('list');
         setMatchMenuOpen(false);
+        setActiveMatchId('');
+        onShowList?.();
       }
     };
 
@@ -197,7 +208,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [chatView, matchMenuOpen, openMessageMenuId, previewProfile]);
+  }, [chatView, matchMenuOpen, openMessageMenuId, previewProfile, viewOnceViewerIds]);
 
   useEffect(() => {
     if (!messageAreaRef.current || chatView !== 'conversation') return;
@@ -250,6 +261,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
     setActiveMatchId(matchId);
     setChatView('conversation');
     setMatchMenuOpen(false);
+    onOpenMatch?.(matchId);
   }
 
   async function handleUnmatch() {
@@ -262,6 +274,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
       await unmatchProfile(currentUid, activeOtherUid, activeMatch.id);
       setActionMessage('Match desfeito.');
       setActiveMatchId('');
+      setChatView('list');
+      onShowList?.();
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'Não consegui desfazer o match.');
     }
@@ -277,6 +291,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
       await blockProfile(currentUid, activeOtherUid, activeMatch.id);
       setActionMessage('Pessoa bloqueada.');
       setActiveMatchId('');
+      setChatView('list');
+      onShowList?.();
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : 'Não consegui bloquear essa pessoa.');
     }
@@ -347,6 +363,43 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           profile={previewProfile}
         />
       )}
+      {viewOnceViewerIds && (
+        <div className="fixed inset-0 z-[1600] grid place-items-end bg-black/65 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] pt-[calc(env(safe-area-inset-top)+16px)] backdrop-blur-sm sm:place-items-center">
+          <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-base font-semibold">Quem viu a imagem</h2>
+              <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setViewOnceViewerIds(null)} type="button">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid max-h-[55dvh] gap-2 overflow-auto scrollbar-hidden">
+              {viewOnceViewerIds.length === 0 ? (
+                <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Ninguém viu ainda.</p>
+              ) : (
+                viewOnceViewerIds.map((uid) => {
+                  const profile = uid === currentUid ? currentProfile : profilesByUid[uid];
+                  return (
+                    <button
+                      className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 px-3 py-2 text-left text-sm text-slate-100 disabled:opacity-70"
+                      disabled={!profile}
+                      key={uid}
+                      onClick={() => {
+                        if (!profile) return;
+                        setViewOnceViewerIds(null);
+                        setPreviewProfile(profile);
+                      }}
+                      type="button"
+                    >
+                      <span className="min-w-0 truncate font-semibold">{profile?.displayName ?? 'Pessoa do Raddo'}</span>
+                      {profile && <span className="text-xs text-slate-400">Ver bio</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {chatView === 'list' && (
       <aside className="flex min-h-0 flex-1 flex-col bg-[#0f1f2d]">
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
@@ -365,8 +418,20 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
           </label>
         </div>
 
-        <div className="scrollbar-hidden min-h-0 flex-1 overflow-auto">
-          {sortedMatches.length === 0 && <p className="p-4 text-sm text-slate-300">Nenhum match ainda.</p>}
+        <div className="scrollbar-hidden min-h-0 flex-1 overflow-auto p-3">
+          {sortedMatches.length === 0 && (
+            <div className="raddo-empty-state">
+              <div className="grid justify-items-center gap-3">
+                <span className="raddo-empty-icon">
+                  <MessageCircle className="h-5 w-5" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold">Nenhum match ainda.</p>
+                  <p className="mt-1 text-xs text-slate-400">Quando uma conversa começar, ela fica salva aqui.</p>
+                </div>
+              </div>
+            </div>
+          )}
           {sortedMatches.map((match) => {
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
@@ -379,7 +444,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
 
             return (
               <article
-                className={`flex w-full items-center gap-3 px-4 py-3 text-left transition ${
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition ${
                   isActive ? 'bg-teal-300 text-slate-950' : 'text-slate-100 hover:bg-white/8'
                 }`}
                 key={match.id}
@@ -407,7 +472,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                   type="button"
                 >
                   {photoURL ? (
-                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 shrink-0 rounded-full" src={photoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 shrink-0 rounded-full" src={photoURL} thumbnailOnly />
                   ) : (
                     <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-slate-900 text-sm text-teal-200">
                       {displayName.slice(0, 2).toUpperCase()}
@@ -451,6 +516,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                 onClick={() => {
                   setChatView('list');
                   setMatchMenuOpen(false);
+                  setActiveMatchId('');
+                  onShowList?.();
                 }}
                 type="button"
               >
@@ -467,7 +534,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                   type="button"
                 >
                   {activePhotoURL ? (
-                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 shrink-0 rounded-full" src={activePhotoURL} />
+                    <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 shrink-0 rounded-full" src={activePhotoURL} thumbnailOnly />
                   ) : (
                     <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-slate-900 text-xs text-teal-200">
                       {activeDisplayName.slice(0, 2).toUpperCase()}
@@ -533,7 +600,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
             const mine = message.senderUid === currentUid;
             const canEditMessage = mine && message.messageType === 'text';
             const canDeleteMessage = mine;
-            const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL);
+            const isImageMessage = message.messageType === 'image' && Boolean(message.imageURL || message.imagePath);
+            const imageDisplayURL = message.imageURL || message.imagePath;
             const mediaType = isVideoMedia(message.imageURL, message.text) ? 'video' : 'image';
             const canDownloadMessage = isImageMessage && !message.viewOnce;
             const copyValue = isImageMessage ? message.imageURL : message.text;
@@ -565,14 +633,19 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                     onFeedback={setActionMessage}
                     onReportProfile={!mine && activeOtherUid ? handleReport : undefined}
                     onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
+                    onViewOnceViewers={
+                      mine && isImageMessage && message.viewOnce
+                        ? () => setViewOnceViewerIds([...new Set(message.viewedBy.filter((uid) => uid !== message.senderUid))])
+                        : undefined
+                    }
                     onViewProfile={senderProfile ? () => setPreviewProfile(senderProfile) : undefined}
                     open={openMessageMenuId === message.id}
                   />
                   <div className="pr-6">
-                    {message.messageType === 'image' && message.imageURL ? (
+                    {message.messageType === 'image' && imageDisplayURL ? (
                       <ChatImageMessage
-                        cacheKey={message.imagePath || message.imageURL}
-                        imageURL={message.imageURL}
+                        cacheKey={message.imagePath || imageDisplayURL}
+                        imageURL={imageDisplayURL}
                         mediaType={mediaType}
                         mine={mine}
                         onLoaded={() => {
@@ -583,6 +656,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, openMat
                         viewedStorageKey={`raddo:view-once:match:${currentUid}:${message.imageURL || message.id}`}
                         viewOnce={message.viewOnce}
                       />
+                    ) : message.messageType === 'image' ? (
+                      <p className="text-xs text-slate-300">Imagem indisponível.</p>
                     ) : (
                       message.text
                     )}

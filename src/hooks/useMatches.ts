@@ -80,14 +80,16 @@ function rowToMatch(row: MatchRow): Match {
 }
 
 function rowToMessage(row: MessageRow): Message {
+  const imagePath = row.image_path ?? '';
+  const imageURL = row.image_url ?? imagePath;
   return {
     id: row.id,
     senderUid: row.sender_uid,
     text: row.text,
     matchId: row.match_id,
     messageType: row.message_type ?? 'text',
-    imageURL: row.image_url ?? '',
-    imagePath: row.image_path ?? '',
+    imageURL,
+    imagePath,
     viewOnce: Boolean(row.view_once),
     viewedBy: row.viewed_by ?? [],
     createdAt: row.created_at,
@@ -95,8 +97,14 @@ function rowToMessage(row: MessageRow): Message {
 }
 
 async function withSignedMessageImage(message: Message) {
-  if (message.messageType !== 'image' || !message.imageURL) return message;
-  return { ...message, imageURL: await signedProfilePhotoUrl(message.imageURL, { encryptedCache: false }) };
+  if (message.messageType !== 'image') return message;
+  const imageSource = message.imagePath || message.imageURL;
+  if (!imageSource) return message;
+  return {
+    ...message,
+    imagePath: message.imagePath || imageSource,
+    imageURL: await signedProfilePhotoUrl(imageSource, { encryptedCache: false }),
+  };
 }
 
 function chatMessageCacheKey(message: Message) {
@@ -184,7 +192,26 @@ async function fetchMatches(uid: string) {
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return ((data ?? []) as MatchRow[]).filter((row) => row.users.includes(uid)).map(rowToMatch);
+  const matches = ((data ?? []) as MatchRow[]).filter((row) => row.users.includes(uid)).map(rowToMatch);
+  const matchIds = matches.filter((match) => match.lastMessage && match.lastMessageAt).map((match) => match.id);
+  if (matchIds.length === 0) return matches;
+
+  const { data: messageRows } = await supabase
+    .from('messages')
+    .select('match_id,sender_uid,created_at')
+    .in('match_id', matchIds)
+    .order('created_at', { ascending: false })
+    .limit(Math.max(100, matchIds.length * 3));
+
+  const senderByMatch = new Map<string, string>();
+  ((messageRows ?? []) as Array<{ created_at: string; match_id: string; sender_uid: string }>).forEach((message) => {
+    if (!senderByMatch.has(message.match_id)) senderByMatch.set(message.match_id, message.sender_uid);
+  });
+
+  return matches.map((match) => ({
+    ...match,
+    lastMessageSenderUid: senderByMatch.get(match.id),
+  }));
 }
 
 function matchesCacheKey(uid: string) {
@@ -203,7 +230,24 @@ function readCachedMatches(uid: string) {
 }
 
 function writeCachedMatches(uid: string, matches: Match[]) {
-  window.localStorage.setItem(matchesCacheKey(uid), JSON.stringify(matches.slice(0, 100)));
+  const compactMatches = matches.slice(0, 50).map((match) => ({
+    id: match.id,
+    users: match.users,
+    createdAt: match.createdAt,
+    lastMessage: match.lastMessage,
+    lastMessageAt: match.lastMessageAt,
+    lastMessageSenderUid: match.lastMessageSenderUid,
+  }));
+  try {
+    window.localStorage.setItem(matchesCacheKey(uid), JSON.stringify(compactMatches));
+  } catch {
+    try {
+      window.localStorage.removeItem(matchesCacheKey(uid));
+      window.localStorage.setItem(matchesCacheKey(uid), JSON.stringify(compactMatches.slice(0, 20)));
+    } catch {
+      // Cache is best-effort only.
+    }
+  }
 }
 
 export function useMatches(uid?: string) {
@@ -1219,7 +1263,7 @@ export async function deleteMessage(message: Message, viewerUid: string) {
 }
 
 export async function markMessageImageViewed(message: Message, viewerUid: string) {
-  if (isDemoMode || message.viewedBy.includes(viewerUid)) return;
+  if (isDemoMode || message.senderUid === viewerUid || message.viewedBy.includes(viewerUid)) return;
 
   const rpcResult = await supabase.rpc('mark_match_image_viewed', {
     target_message_id: message.id,
