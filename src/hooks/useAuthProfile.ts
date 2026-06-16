@@ -213,9 +213,9 @@ export function useAuthProfile() {
 
     let active = true;
 
-    supabase.auth.getUser().then(async ({ data }) => {
+    supabase.auth.getSession().then(async ({ data: sessionData }) => {
       if (!active) return;
-      setUser(data.user);
+      setUser(sessionData.session?.user ?? null);
       setLoading(false);
     });
 

@@ -23,6 +23,7 @@ import { onPushNotificationTap, registerDeviceForPush } from './pushNotification
 import { installAndroidApkUpdate } from './androidUpdater';
 import { processAuthUrl } from './authCallback';
 import { preloadImages, profileCoverUrl } from './imagePreload';
+import { clearRaddoAuthBlockingLocalCaches, clearRaddoDisposableLocalCaches } from './localStorageMaintenance';
 import {
   defaultNotificationPreferences,
   loadNotificationPreferences,
@@ -40,25 +41,7 @@ const navItems = [
 const LAST_VIEW_KEY = 'raddo:last-view';
 
 function clearDisposableLocalCaches() {
-  try {
-    const prefixes = [
-      'raddo-media-thumb-v2:',
-      'raddo-match-messages-cache:',
-      'raddo-map-event-messages-cache:',
-      'raddo-map-events-cache:',
-      'raddo-nearby-profiles-cache:',
-      'raddo-connections-matches:',
-      'raddo-match-profiles-cache:',
-    ];
-    const keys: string[] = [];
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-      if (key && prefixes.some((prefix) => key.startsWith(prefix))) keys.push(key);
-    }
-    keys.forEach((key) => window.localStorage.removeItem(key));
-  } catch {
-    // Best-effort cleanup only.
-  }
+  clearRaddoDisposableLocalCaches();
 }
 
 function safeSetLocalStorage(key: string, value: string) {
@@ -145,6 +128,14 @@ export default function App() {
 
   useEffect(() => {
     if (!('serviceWorker' in navigator) || !window.location.protocol.startsWith('http')) return;
+    const isLocalDev = import.meta.env.DEV || ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    if (isLocalDev) {
+      navigator.serviceWorker.getRegistrations?.().then((registrations) => {
+        registrations.forEach((registration) => void registration.unregister());
+      });
+      return;
+    }
+
     navigator.serviceWorker.register('/raddo-sw.js').catch((error) => {
       console.warn('Nao consegui registrar cache offline do Raddo.', error);
     });
@@ -300,8 +291,31 @@ export default function App() {
 
     const urlParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-    if (urlParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery') {
+    const hasAuthCallback = Boolean(
+      urlParams.get('code') ||
+        urlParams.get('access_token') ||
+        hashParams.get('access_token') ||
+        urlParams.get('refresh_token') ||
+        hashParams.get('refresh_token') ||
+        urlParams.get('token_hash') ||
+        hashParams.get('token_hash'),
+    );
+    const isRecoveryCallback = urlParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery';
+    if (hasAuthCallback && !isRecoveryCallback) {
+      clearRaddoDisposableLocalCaches();
+      clearRaddoAuthBlockingLocalCaches();
+      void processAuthUrl(window.location.href)
+        .then(() => {
+          window.history.replaceState(null, document.title, window.location.pathname);
+        })
+        .catch((error) => {
+          console.error('Supabase auth callback failed', error);
+        });
+    }
+    if (isRecoveryCallback) {
       const recoveryUrl = window.location.href;
+      clearRaddoDisposableLocalCaches();
+      clearRaddoAuthBlockingLocalCaches();
       safeSetLocalStorage('raddo:password-recovery-url', recoveryUrl);
       void processAuthUrl(recoveryUrl).catch((error) => {
         setPasswordRecoveryError(error instanceof Error ? error.message : 'Link de recuperação inválido.');
@@ -660,11 +674,11 @@ export default function App() {
     ) : (
       <main className={`app-shell theme-${resolvedTheme} h-dvh overflow-hidden text-white`}>
         {showNotificationPrompt && (
-          <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-            <section className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl">
-              <h1 className="text-xl font-semibold">{t('notificationTitle')}</h1>
+          <div className="raddo-modal-backdrop z-[1500] sm:p-6">
+            <section className="raddo-modal-card">
+              <h1 className="text-lg font-semibold">{t('notificationTitle')}</h1>
               <p className="mt-2 text-sm text-slate-300">{t('notificationText')}</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="raddo-modal-actions">
                 <button
                   className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={dismissNotifications}
@@ -684,14 +698,14 @@ export default function App() {
           </div>
         )}
         {availableUpdate && (
-          <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-            <section className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl">
-              <h1 className="text-xl font-semibold">Nova versão disponível</h1>
+          <div className="raddo-modal-backdrop z-[1500] sm:p-6">
+            <section className="raddo-modal-card">
+              <h1 className="text-lg font-semibold">Nova versão disponível</h1>
               <p className="mt-2 text-sm text-slate-300">
                 {availableUpdate.message || 'Existe uma atualização do Raddo. Deseja atualizar agora?'}
               </p>
               {updateInstallMessage && <p className="mt-3 rounded-lg bg-white/8 p-3 text-xs text-slate-200">{updateInstallMessage}</p>}
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="raddo-modal-actions">
                 <button
                   className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                   onClick={() => {
@@ -765,7 +779,7 @@ export default function App() {
                   <MoreVertical className="h-5 w-5" />
                 </button>
                 {headerMenuOpen && (
-                  <div className="absolute right-0 top-12 z-[900] w-56 overflow-hidden rounded-lg border border-white/10 bg-[#07111f]/95 p-1 text-sm text-white shadow-2xl backdrop-blur">
+                  <div className="raddo-menu-panel absolute right-0 top-12 z-[900] w-56 overflow-hidden p-1 text-sm text-white backdrop-blur">
                     <button
                       className="w-full rounded-md px-3 py-2 text-left font-semibold text-slate-100 hover:bg-white/8"
                       onClick={() => openRadarPanel('my-chats')}
@@ -889,12 +903,12 @@ export default function App() {
     <I18nProvider value={{ language, setLanguage, t }}>
       {content}
       {passwordRecoveryOpen && (
-        <div className="fixed inset-0 z-[2000] grid place-items-center bg-black/70 p-4 backdrop-blur-sm sm:p-6">
+        <div className="raddo-modal-backdrop z-[2000] sm:p-6">
           <form
-            className="raddo-surface w-full max-w-sm p-5 text-white shadow-2xl"
+            className="raddo-modal-card"
             onSubmit={handlePasswordRecoverySubmit}
           >
-            <h1 className="text-xl font-semibold">Criar nova senha</h1>
+            <h1 className="text-lg font-semibold">Criar nova senha</h1>
             <p className="mt-2 text-sm text-slate-300">Digite uma nova senha para usar login por e-mail no Raddo.</p>
             <label className="mt-4 grid gap-1 text-xs font-semibold text-slate-300">
               Nova senha
@@ -921,7 +935,7 @@ export default function App() {
             </label>
             {passwordRecoveryMessage && <p className="mt-3 rounded-lg bg-teal-300/15 p-3 text-sm text-teal-100">{passwordRecoveryMessage}</p>}
             {passwordRecoveryError && <p className="mt-3 rounded-lg bg-rose-400/15 p-3 text-sm text-rose-100">{passwordRecoveryError}</p>}
-            <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="raddo-modal-actions">
               <button
                 className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
                 disabled={passwordRecoveryBusy}

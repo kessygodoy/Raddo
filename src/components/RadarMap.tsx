@@ -676,14 +676,14 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
   }
 
   return (
-    <div className="fixed inset-0 z-[1800] grid place-items-center bg-black/60 p-4 backdrop-blur-sm">
-      <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
-        <div className="mb-4 flex items-start justify-between gap-3">
+    <div className="raddo-modal-backdrop">
+      <section className="raddo-modal-card">
+        <div className="raddo-modal-header">
           <div>
             <h2 className="text-lg font-semibold">{dialog.title}</h2>
             {dialog.message && <p className="mt-1 text-sm text-slate-300">{dialog.message}</p>}
           </div>
-          <button aria-label="Fechar" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8" onClick={onClose} type="button">
+          <button aria-label="Fechar" className="raddo-icon-button" onClick={onClose} type="button">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -704,7 +704,7 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
             value={value}
           />
         )}
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="raddo-modal-actions">
           <button className="h-11 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100" disabled={busy} onClick={onClose} type="button">
             Cancelar
           </button>

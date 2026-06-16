@@ -152,7 +152,10 @@ export default function NotificationsPanel({
         <span className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200">
           <Bell className="h-5 w-5" />
         </span>
-        <h1 className="text-xl font-semibold">{t('notificationsPage')}</h1>
+        <div className="text-center">
+          <h1 className="text-lg font-semibold">{t('notificationsPage')}</h1>
+          <p className="mt-0.5 text-xs text-slate-400">Atualizações importantes do Raddo</p>
+        </div>
         <div className="h-10 w-10" />
       </header>
 
@@ -175,7 +178,7 @@ export default function NotificationsPanel({
           const read = (Date.parse(notification.timeValue ?? '') || 0) <= notificationsClearedAt;
           return (
             <button
-              className={`flex w-full items-center gap-3 border-b border-white/10 p-4 text-left transition last:border-b-0 hover:bg-white/8 active:scale-[0.995] ${
+              className={`raddo-notification-row flex w-full items-center gap-3 border-b border-white/10 p-4 text-left transition last:border-b-0 active:scale-[0.995] ${
                 read ? 'opacity-70' : ''
               }`}
               key={notification.id}

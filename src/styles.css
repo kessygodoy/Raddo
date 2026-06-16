@@ -517,6 +517,67 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.raddo-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1800;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  padding: 1rem;
+  backdrop-filter: blur(10px);
+}
+
+.raddo-modal-card {
+  width: 100%;
+  max-width: 24rem;
+  border: 1px solid var(--theme-border);
+  border-radius: 0.75rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 42%),
+    var(--theme-panel-strong);
+  color: var(--theme-text);
+  padding: 1.25rem;
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.raddo-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.raddo-icon-button {
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--theme-border);
+  border-radius: 0.625rem;
+  background: rgba(255, 255, 255, 0.065);
+  color: var(--theme-text);
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.raddo-icon-button:active {
+  transform: scale(0.97);
+}
+
+.raddo-modal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 .raddo-empty-state {
   display: grid;
   min-height: 10rem;
@@ -707,6 +768,27 @@ input[type="range"] {
   cursor: grabbing;
 }
 
+.raddo-menu-panel {
+  border: 1px solid var(--theme-border) !important;
+  border-radius: 0.75rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent 44%),
+    var(--theme-panel-strong) !important;
+  box-shadow:
+    0 20px 58px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.raddo-menu-panel button {
+  transition:
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.raddo-menu-panel button:active {
+  transform: scale(0.985);
+}
+
 .raddo-story-plus-icon {
   color: #fff !important;
   stroke: #fff !important;
@@ -736,15 +818,30 @@ input[type="range"] {
     inset 0 1px 0 rgba(255, 255, 255, 0.88);
 }
 
+.theme-pride .raddo-top-pill,
+.theme-pride .raddo-header-icon,
+.theme-pride .raddo-bottom-nav {
+  border-color: rgba(147, 51, 234, 0.16) !important;
+  background:
+    linear-gradient(135deg, rgba(255, 247, 251, 0.95), rgba(255, 241, 248, 0.9)),
+    linear-gradient(90deg, rgba(236, 72, 153, 0.12), rgba(45, 212, 191, 0.11)) !important;
+  box-shadow:
+    0 18px 42px rgba(147, 51, 234, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
 .theme-light .raddo-top-pill svg,
 .theme-light .raddo-header-icon svg,
 .theme-green .raddo-top-pill svg,
-.theme-green .raddo-header-icon svg {
+.theme-green .raddo-header-icon svg,
+.theme-pride .raddo-top-pill svg,
+.theme-pride .raddo-header-icon svg {
   color: #152033 !important;
 }
 
 .theme-light .raddo-bottom-nav,
-.theme-green .raddo-bottom-nav {
+.theme-green .raddo-bottom-nav,
+.theme-pride .raddo-bottom-nav {
   color: #526173 !important;
 }
 
@@ -774,14 +871,31 @@ input[type="range"] {
   left: 0.75rem;
   right: 0.75rem;
   bottom: calc(var(--raddo-bottom-safe) + 0.625rem);
-  border-radius: 0.5rem;
+  border-radius: 0.625rem;
   border-width: 1px;
-  padding: 0.5rem;
+  padding: 0.375rem;
 }
 
 .raddo-bottom-nav button {
-  min-height: 3.35rem;
+  position: relative;
+  min-height: 3.2rem;
   border: 1px solid transparent;
+  overflow: hidden;
+}
+
+.raddo-bottom-nav button:not([class*="raddo-primary-action"]) {
+  background: color-mix(in srgb, var(--theme-panel), transparent 12%);
+}
+
+.raddo-bottom-nav button[class*="raddo-primary-action"]::after {
+  content: "";
+  position: absolute;
+  left: 22%;
+  right: 22%;
+  bottom: 0.35rem;
+  height: 0.16rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .raddo-bottom-nav button[class*="bg-teal-300"] {
@@ -789,6 +903,20 @@ input[type="range"] {
   box-shadow:
     0 10px 24px rgba(255, 63, 104, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.raddo-notification-row {
+  background: transparent;
+}
+
+.raddo-notification-row:hover {
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.theme-light .raddo-notification-row:hover,
+.theme-green .raddo-notification-row:hover,
+.theme-pride .raddo-notification-row:hover {
+  background: rgba(15, 23, 42, 0.045);
 }
 
 @media (min-width: 768px) {

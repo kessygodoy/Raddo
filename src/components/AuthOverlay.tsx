@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Chrome, Mail, MapPin, Radar, ShieldCheck, Sparkles } from 'lucide-react';
 import { getAuthRedirectUrl } from '../authCallback';
 import { useI18n } from '../i18n';
+import { clearRaddoAuthBlockingLocalCaches, clearRaddoDisposableLocalCaches } from '../localStorageMaintenance';
 import { supabase } from '../supabase';
 import type { ResolvedAppTheme } from '../types';
 import RaddoMark from './RaddoMark';
@@ -21,6 +22,8 @@ export default function AuthOverlay({ theme }: Props) {
   async function handleGoogleLogin() {
     setBusy(true);
     setError('');
+    clearRaddoDisposableLocalCaches();
+    clearRaddoAuthBlockingLocalCaches();
 
     const { error: googleError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -43,6 +46,8 @@ export default function AuthOverlay({ theme }: Props) {
     setBusy(true);
     setError('');
     setEmailMessage('');
+    clearRaddoDisposableLocalCaches();
+    clearRaddoAuthBlockingLocalCaches();
 
     const { error: emailError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
@@ -57,6 +62,8 @@ export default function AuthOverlay({ theme }: Props) {
     setBusy(true);
     setError('');
     setEmailMessage('');
+    clearRaddoDisposableLocalCaches();
+    clearRaddoAuthBlockingLocalCaches();
 
     const { data, error: signupError } = await supabase.auth.signUp({
       email: email.trim(),
@@ -87,6 +94,8 @@ export default function AuthOverlay({ theme }: Props) {
     setBusy(true);
     setError('');
     setEmailMessage('');
+    clearRaddoDisposableLocalCaches();
+    clearRaddoAuthBlockingLocalCaches();
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: getAuthRedirectUrl(),
     });
