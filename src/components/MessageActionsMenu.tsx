@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Download, Edit3, Eye, Flag, MoreVertical, Trash2, UserRound } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 type Props = {
   canCopy?: boolean;
@@ -38,7 +39,7 @@ export default function MessageActionsMenu({
   canDelete,
   canDownload,
   canEdit,
-  copyLabel = 'Copiar',
+  copyLabel,
   copyValue,
   downloadFilename = 'raddo-imagem.jpg',
   downloadUrl,
@@ -53,6 +54,8 @@ export default function MessageActionsMenu({
   onViewProfile,
   open,
 }: Props) {
+  const { t } = useI18n();
+  const resolvedCopyLabel = copyLabel ?? t('copy');
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
@@ -90,9 +93,9 @@ export default function MessageActionsMenu({
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(copyValue);
-      onFeedback(copyLabel === 'Copiar link' ? 'Link copiado.' : 'Mensagem copiada.');
+      onFeedback(resolvedCopyLabel === t('copyLink') ? t('linkCopied') : t('messageCopied'));
     } catch {
-      onFeedback('Não consegui copiar.');
+      onFeedback(t('copyError'));
     } finally {
       onClose();
     }
@@ -101,14 +104,14 @@ export default function MessageActionsMenu({
   function handleDownload() {
     if (!downloadUrl) return;
     downloadFile(downloadUrl, downloadFilename);
-    onFeedback('Download iniciado.');
+    onFeedback(t('downloadStarted'));
     onClose();
   }
 
   return (
     <div className="absolute right-1 top-1 z-20">
       <button
-        aria-label="Opções da mensagem"
+        aria-label={t('messageOptions')}
         className={`grid h-6 w-6 place-items-center bg-transparent ${buttonColor}`}
         onClick={(event) => {
           event.stopPropagation();
@@ -136,7 +139,7 @@ export default function MessageActionsMenu({
               type="button"
             >
               <UserRound className="h-4 w-4" />
-              Ver bio
+              {t('viewBio')}
             </button>
           )}
           {onReportProfile && (
@@ -149,19 +152,19 @@ export default function MessageActionsMenu({
               type="button"
             >
               <Flag className="h-4 w-4" />
-              Denunciar
+              {t('report')}
             </button>
           )}
           {canCopy && (
             <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/8" onClick={handleCopy} type="button">
               <Copy className="h-4 w-4" />
-              {copyLabel}
+              {resolvedCopyLabel}
             </button>
           )}
           {canDownload && (
             <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/8" onClick={handleDownload} type="button">
               <Download className="h-4 w-4" />
-              Baixar
+              {t('download')}
             </button>
           )}
           {onViewOnceViewers && (
@@ -174,19 +177,19 @@ export default function MessageActionsMenu({
               type="button"
             >
               <Eye className="h-4 w-4" />
-              Quem viu
+              {t('whoViewed')}
             </button>
           )}
           {canEdit && (
             <button className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/8" onClick={onEdit} type="button">
               <Edit3 className="h-4 w-4" />
-              Editar
+              {t('edit')}
             </button>
           )}
           {canDelete && (
             <button className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-100 hover:bg-rose-400/15" onClick={onDelete} type="button">
               <Trash2 className="h-4 w-4" />
-              Excluir
+              {t('delete')}
             </button>
           )}
         </div>,

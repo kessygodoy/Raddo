@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
 import { demoProfile, demoUser, isDemoMode } from '../demoData';
 import type { GenderIdentity, LatLng, PrivacyMode, Sexuality, UserProfile } from '../types';
 import { withSignedProfilePhotos } from '../storageImages';
+import { distanceKm } from '../utils/geo';
 
 type ProfileRow = {
   id: string;
@@ -200,6 +201,7 @@ export function useAuthProfile() {
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const lastSavedLocationRef = useRef<{ location: LatLng; savedAt: number } | null>(null);
 
   useEffect(() => {
     if (isDemoMode) {
@@ -305,22 +307,57 @@ export function useAuthProfile() {
     if (isDemoMode) return undefined;
     if (!user || !navigator.geolocation) return undefined;
 
-    const watchId = navigator.geolocation.watchPosition(
-      async (position) => {
-        await supabase
-          .from('profiles')
-          .update({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            last_seen: new Date().toISOString(),
-          })
-          .eq('id', user.id);
-      },
+    let active = true;
+    const userId = user.id;
+
+    async function handlePosition(position: GeolocationPosition, forceSave = false) {
+      if (!active) return;
+
+      const nextLocation = {
+        lat: position.coords.latitude,
+        lng: position.coords.longitude,
+      };
+      const now = Date.now();
+
+      setProfile((currentProfile) => {
+        if (!currentProfile || currentProfile.uid !== userId) return currentProfile;
+        const nextProfile = { ...currentProfile, lastSeen: new Date().toISOString(), location: nextLocation };
+        writeCachedAuthProfile(nextProfile);
+        return nextProfile;
+      });
+
+      const previous = lastSavedLocationRef.current;
+      const movedEnough = !previous || distanceKm(previous.location, nextLocation) >= 0.025;
+      const oldEnough = !previous || now - previous.savedAt >= 30000;
+      if (!forceSave && !movedEnough && !oldEnough) return;
+
+      lastSavedLocationRef.current = { location: nextLocation, savedAt: now };
+      await supabase
+        .from('profiles')
+        .update({
+          lat: nextLocation.lat,
+          lng: nextLocation.lng,
+          last_seen: new Date().toISOString(),
+        })
+        .eq('id', userId);
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => void handlePosition(position, true),
       () => undefined,
-      { enableHighAccuracy: true, maximumAge: 60000, timeout: 15000 },
+      { enableHighAccuracy: false, maximumAge: 10000, timeout: 5000 },
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => void handlePosition(position),
+      () => undefined,
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 10000 },
+    );
+
+    return () => {
+      active = false;
+      navigator.geolocation.clearWatch(watchId);
+    };
   }, [user]);
 
   return useMemo(

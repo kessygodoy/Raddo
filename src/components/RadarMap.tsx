@@ -41,16 +41,21 @@ import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
 import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
 import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } from '../storageImages';
+import { useI18n } from '../i18n';
 
 type Props = {
   matches: Match[];
   me: UserProfile;
+  onOpenEventHandled?: (eventId: string) => void;
+  openEventId?: string;
   profiles: UserProfile[];
   theme: AppTheme;
 };
 
+const GALLERY_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+
 class MapEventChatBoundary extends Component<
-  { children: ReactNode; onClose: () => void },
+  { children: ReactNode; onClose: () => void; t: (key: string) => string },
   { errorMessage: string }
 > {
   state = { errorMessage: '' };
@@ -69,10 +74,10 @@ class MapEventChatBoundary extends Component<
     return (
       <div className="fixed inset-0 z-[1200] grid place-items-center bg-black/70 p-4 text-white backdrop-blur-sm">
         <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-5 shadow-2xl">
-          <h2 className="text-lg font-semibold">Não consegui abrir este chat</h2>
+          <h2 className="text-lg font-semibold">{this.props.t('chatOpenError')}</h2>
           <p className="mt-2 text-sm text-slate-300">{this.state.errorMessage}</p>
           <button className="mt-4 h-11 w-full rounded-lg bg-[#ff3f68] text-sm font-semibold text-white" onClick={this.props.onClose} type="button">
-            Voltar ao mapa
+            {this.props.t('backToMap')}
           </button>
         </section>
       </div>
@@ -651,7 +656,7 @@ function MyLocationArrow({ me }: { me: UserProfile }) {
       style={{ left: `${arrow.x}px`, top: `${arrow.y}px` }}
       type="button"
     >
-      <span className="map-my-location-arrow-label">Minha localização</span>
+      <span className="map-my-location-arrow-label">Eu</span>
       <span className="map-my-location-arrow-chevron" style={{ transform: `rotate(${arrow.angle - 45}deg)` }} />
     </button>,
     map.getContainer(),
@@ -659,6 +664,7 @@ function MyLocationArrow({ me }: { me: UserProfile }) {
 }
 
 function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () => void }) {
+  const { t } = useI18n();
   const [value, setValue] = useState(dialog.type === 'prompt' ? dialog.initialValue : '');
   const [busy, setBusy] = useState(false);
 
@@ -683,7 +689,7 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
             <h2 className="text-lg font-semibold">{dialog.title}</h2>
             {dialog.message && <p className="mt-1 text-sm text-slate-300">{dialog.message}</p>}
           </div>
-          <button aria-label="Fechar" className="raddo-icon-button" onClick={onClose} type="button">
+          <button aria-label={t('close')} className="raddo-icon-button" onClick={onClose} type="button">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -801,6 +807,7 @@ function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me
 }
 
 function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: UserProfile[] }) {
+  const { t } = useI18n();
   const map = useMap();
   const [, setMapVersion] = useState(0);
   useLeafletMapEvents({
@@ -840,7 +847,7 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
-              {me.location ? `${formatPersonDistanceKm(distanceKm(me.location, position))} de você` : 'Distância indisponível'}
+              {me.location ? t('distanceAway', { distance: formatPersonDistanceKm(distanceKm(me.location, position)) }) : t('distanceUnavailable')}
             </Popup>
           </Marker>
         );
@@ -866,6 +873,7 @@ function ClusteredEventMarkers({
   onOpenCluster: (events: MapEvent[]) => void;
   onPreviewEvent: (event: MapEvent) => void;
 }) {
+  const { t } = useI18n();
   const map = useMap();
   const [, setMapVersion] = useState(0);
   useLeafletMapEvents({
@@ -922,7 +930,7 @@ function ClusteredEventMarkers({
                       <br />
                     </>
                   )}
-                  {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km de você` : 'Distância indisponível'}
+                  {me.location ? t('distanceAway', { distance: `${distanceKm(me.location, event.location).toFixed(1)} km` }) : t('distanceUnavailable')}
                 </Popup>
               </Marker>
             );
@@ -953,7 +961,7 @@ function ClusteredEventMarkers({
             <br />
             {eventParticipantCounts[event.id] ?? 1} pessoas
             <br />
-            {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km de você` : 'Distância indisponível'}
+            {me.location ? t('distanceAway', { distance: `${distanceKm(me.location, event.location).toFixed(1)} km` }) : t('distanceUnavailable')}
           </Popup>
         </Marker>
       ))}
@@ -989,7 +997,7 @@ function ClusteredEventMarkers({
               <br />
               {formatEventTimeLeft(event)}
               <br />
-              {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km de você` : 'Distância indisponível'}
+              {me.location ? t('distanceAway', { distance: `${distanceKm(me.location, event.location).toFixed(1)} km` }) : t('distanceUnavailable')}
             </Popup>
           </Marker>
         );
@@ -1000,7 +1008,8 @@ function ClusteredEventMarkers({
   );
 }
 
-export default function RadarMap({ matches, me, profiles, theme }: Props) {
+export default function RadarMap({ matches, me, onOpenEventHandled, openEventId = '', profiles, theme }: Props) {
+  const { t } = useI18n();
   const center = me.location ?? { lat: -23.5505, lng: -46.6333 };
   const appModeratorRole = useAppModeratorRole(me.uid);
   const canManageApp = Boolean(appModeratorRole);
@@ -1041,6 +1050,8 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
   const [localEvents, setLocalEvents] = useState<MapEvent[]>(() => readLocalMapEvents(me.uid));
   const [focusTarget, setFocusTarget] = useState<{ event: MapEvent; nonce: number } | null>(null);
   const [eventError, setEventError] = useState('');
+  const [mapNotice, setMapNotice] = useState('');
+  const [pendingOpenEventId, setPendingOpenEventId] = useState('');
   const [dialog, setDialog] = useState<AppDialog | null>(null);
   const [profileActionMessage, setProfileActionMessage] = useState('');
   const [storyViewerOpen, setStoryViewerOpen] = useState(false);
@@ -1144,6 +1155,10 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     },
     [joinedActiveEvents, sortedVisibleEvents],
   );
+  const eventContextListRef = useRef(eventContextList);
+  useEffect(() => {
+    eventContextListRef.current = eventContextList;
+  }, [eventContextList]);
   const sortedProfiles = [...profiles].sort((a, b) => {
     const goalDiff = sharedRelationshipGoalCount(me, b) - sharedRelationshipGoalCount(me, a);
     if (goalDiff !== 0) return goalDiff;
@@ -1274,6 +1289,40 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       window.removeEventListener('raddo:open-people', openPeople);
     };
   }, []);
+
+  useEffect(() => {
+    if (openEventId) setPendingOpenEventId(openEventId);
+  }, [openEventId]);
+
+  useEffect(() => {
+    if (!pendingOpenEventId) return undefined;
+
+    const openPendingEvent = () => {
+      const targetEvent = eventContextListRef.current.find((item) => item.id === pendingOpenEventId);
+      if (!targetEvent) return false;
+
+      setShowChatsList(false);
+      setShowMyChatsList(false);
+      setShowNearbyChatsList(false);
+      setActiveEvent(targetEvent);
+      setFocusTarget({ event: targetEvent, nonce: Date.now() });
+      setMapNotice('');
+      onOpenEventHandled?.(pendingOpenEventId);
+      setPendingOpenEventId('');
+      return true;
+    };
+
+    if (openPendingEvent()) return undefined;
+
+    const timer = window.setTimeout(() => {
+      if (openPendingEvent()) return;
+      setMapNotice('Esse grupo não existe mais.');
+      onOpenEventHandled?.(pendingOpenEventId);
+      setPendingOpenEventId('');
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, [onOpenEventHandled, pendingOpenEventId]);
 
   useEffect(() => {
     const handleBack = (event: Event) => {
@@ -1420,7 +1469,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
     } catch (error) {
       setStoryImageURL('');
       setStoryUploadFile(null);
-      setEventError(error instanceof Error ? error.message : 'Não consegui enviar o story.');
+      setEventError(error instanceof Error ? error.message : t('storySendError'));
     } finally {
       setUploadingStory(false);
     }
@@ -1505,7 +1554,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       };
 
       recorder.onerror = () => {
-        setEventError('Não consegui gravar o vídeo.');
+        setEventError(t('recordVideoError'));
         cancelStoryRecording();
       };
 
@@ -1530,7 +1579,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       recorder.start(500);
       setStoryRecording(true);
     } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui acessar a câmera.');
+      setEventError(error instanceof Error ? error.message : t('cameraAccessError'));
       cancelStoryRecording();
     }
   }
@@ -1592,7 +1641,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           setLocalPublishingStories((current) => current.filter((story) => story.id !== localStoryId));
         }, 8000);
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Não consegui publicar o story.';
+        const message = error instanceof Error ? error.message : t('storyPublishError');
         const retryable =
           message.toLowerCase().includes('fetch') ||
           message.toLowerCase().includes('network') ||
@@ -1620,7 +1669,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       await reportMapEventStory(story, event, me.uid);
       setEventError('Story denunciado para revisão.');
     } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui denunciar o story.');
+      setEventError(error instanceof Error ? error.message : t('storyReportError'));
     }
   }
 
@@ -1638,7 +1687,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             setSelectedStoryId('');
           }
         } catch (error) {
-          setEventError(error instanceof Error ? error.message : 'Não consegui apagar o story.');
+          setEventError(error instanceof Error ? error.message : t('storyDeleteError'));
         }
       },
       title: 'Apagar story?',
@@ -1665,7 +1714,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         delete next[story.id];
         return next;
       });
-      setEventError(error instanceof Error ? error.message : 'Não consegui curtir o story.');
+      setEventError(error instanceof Error ? error.message : t('storyLikeError'));
     }
   }
 
@@ -1682,9 +1731,9 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         if (!text) return;
         try {
           await sendMessage(match.id, me.uid, `Story: ${text}`, me.displayName);
-          setEventError('Mensagem enviada.');
+          setEventError(t('messageSent'));
         } catch (error) {
-          setEventError(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
+          setEventError(error instanceof Error ? error.message : t('messageSendError'));
         }
       },
       title: 'Comentar story',
@@ -1802,7 +1851,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setEventCoverURL(path);
     } catch (uploadError) {
       setEventCoverURL(previousCoverURL);
-      setEventError(uploadError instanceof Error ? uploadError.message : 'Não consegui enviar a capa.');
+      setEventError(uploadError instanceof Error ? uploadError.message : t('reportSendError'));
     }
 
     setUploadingCover(false);
@@ -1834,7 +1883,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setEditingCoverURL(path);
     } catch (uploadError) {
       setEditingCoverURL(previousCoverURL);
-      setEventError(uploadError instanceof Error ? uploadError.message : 'Não consegui enviar a capa.');
+      setEventError(uploadError instanceof Error ? uploadError.message : t('reportSendError'));
     } finally {
       setUploadingEditingCover(false);
     }
@@ -1896,7 +1945,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setLocalEvents((current) => (current.some((event) => event.id === created.id) ? current : [created, ...current]));
       setActiveEvent(created);
     } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui criar o chat.');
+      setEventError(error instanceof Error ? error.message : t('createChatError'));
     } finally {
       setCreatingEvent(false);
     }
@@ -1955,7 +2004,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setEditingEvent(null);
       setEditingPassword('');
     } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui editar o chat.');
+      setEventError(error instanceof Error ? error.message : t('editChatError'));
     } finally {
       setSavingEventEdit(false);
     }
@@ -2002,7 +2051,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         }
 
         setDialog({
-          confirmLabel: 'Entrar',
+          confirmLabel: t('enterChat'),
           initialValue: '',
           message: 'Digite a senha deste chat.',
           onConfirm: async (password) => {
@@ -2016,7 +2065,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             setPreviewEvent(null);
             setActiveEvent(event);
           },
-          title: 'Chat com senha',
+          title: t('chatPassword'),
           type: 'prompt',
         });
         return;
@@ -2026,14 +2075,14 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setPreviewEvent(null);
       setActiveEvent(event);
     } catch (error) {
-      setEventError(error instanceof Error ? error.message : 'Não consegui entrar no chat.');
+      setEventError(error instanceof Error ? error.message : t('enterChatError'));
     }
   }
 
   async function handleLeaveEventFromList(event: MapEvent) {
     setEventError('');
     setDialog({
-      confirmLabel: 'Sair',
+      confirmLabel: t('signOut'),
       destructive: true,
       message: `Você deixará de participar de "${event.title}".`,
       onConfirm: async () => {
@@ -2042,17 +2091,17 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           if (activeEvent?.id === event.id) setActiveEvent(null);
           if (previewEvent?.id === event.id) setPreviewEvent(null);
         } catch (error) {
-          setEventError(error instanceof Error ? error.message : 'Não consegui sair do chat.');
+          setEventError(error instanceof Error ? error.message : t('leaveChatError'));
         }
       },
-      title: 'Sair do chat?',
+      title: t('leaveChatQuestion'),
       type: 'confirm',
     });
   }
 
   async function handleDeleteEvent(event: MapEvent) {
     setDialog({
-      confirmLabel: 'Excluir',
+      confirmLabel: t('delete'),
       destructive: true,
       message: 'Todas as mensagens dele serão removidas.',
       onConfirm: async () => {
@@ -2062,27 +2111,27 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           setPreviewEvent(null);
           if (activeEvent?.id === event.id) setActiveEvent(null);
         } catch (error) {
-          setEventError(error instanceof Error ? error.message : 'Não consegui excluir o chat.');
+          setEventError(error instanceof Error ? error.message : t('deleteChatError'));
         }
       },
-      title: 'Excluir este chat?',
+      title: t('deleteChatQuestion'),
       type: 'confirm',
     });
   }
 
   async function handleReportEvent(event: MapEvent) {
     setDialog({
-      confirmLabel: 'Denunciar',
-      message: 'Enviar este chat para análise da moderação?',
+      confirmLabel: t('report'),
+      message: t('reportChatQuestion'),
       onConfirm: async () => {
         try {
           await reportMapEvent(event, me.uid);
           setEventError('Denúncia enviada. Obrigado por ajudar a manter o Raddo seguro.');
         } catch (error) {
-          setEventError(error instanceof Error ? error.message : 'Não consegui enviar a denúncia.');
+          setEventError(error instanceof Error ? error.message : t('reportSendError'));
         }
       },
-      title: 'Denunciar chat',
+      title: t('reportChat'),
       type: 'confirm',
     });
   }
@@ -2102,13 +2151,20 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
       setProfileActionMessage(`Você recusou ${profile.displayName}.`);
       setPreviewProfile(null);
     } catch (error) {
-      setProfileActionMessage(error instanceof Error ? error.message : 'Não consegui registrar o dislike.');
+      setProfileActionMessage(error instanceof Error ? error.message : t('dislikeError'));
     }
   }
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
       {dialog && <AppDialogModal dialog={dialog} onClose={() => setDialog(null)} />}
+      {mapNotice && (
+        <div className="pointer-events-none absolute inset-x-4 top-[calc(env(safe-area-inset-top)+5.25rem)] z-[760] flex justify-center">
+          <p className="pointer-events-auto rounded-lg border border-white/10 bg-[#07111f]/95 px-4 py-3 text-sm font-semibold text-white shadow-2xl backdrop-blur">
+            {mapNotice}
+          </p>
+        </div>
+      )}
       <div className="pointer-events-none absolute left-0 right-0 top-[calc(env(safe-area-inset-top)+5.75rem)] z-[640] px-3 sm:top-[calc(env(safe-area-inset-top)+6.25rem)]">
         <div
           className="raddo-story-strip pointer-events-auto mx-auto flex max-w-4xl gap-[3px] overflow-x-auto scrollbar-hidden p-2"
@@ -2313,7 +2369,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               )}
               {selectedStory.creatorUid !== me.uid && (
                 <button
-                  aria-label="Curtir story"
+                  aria-label={t('likeStory')}
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => likeStory(selectedStory)}
                   type="button"
@@ -2328,7 +2384,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {selectedStory.creatorUid === me.uid && selectedStory.likedBy.length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => setStoryPeopleModal({ title: 'Curtidas', userIds: [...new Set(selectedStory.likedBy)] })}
+                  onClick={() => setStoryPeopleModal({ title: t('storyLikes'), userIds: [...new Set(selectedStory.likedBy)] })}
                   type="button"
                 >
                   <Heart className="h-4 w-4 fill-[#ff3f68] text-[#ff3f68]" />
@@ -2338,7 +2394,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {selectedStory.creatorUid === me.uid && selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid).length > 0 && (
                 <button
                   className="pointer-events-auto inline-flex h-10 items-center justify-center gap-1 rounded-full bg-black/45 px-3 text-xs font-semibold text-white backdrop-blur"
-                  onClick={() => setStoryPeopleModal({ title: 'Visualizaram', userIds: [...new Set(selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid))] })}
+                  onClick={() => setStoryPeopleModal({ title: t('storyViews'), userIds: [...new Set(selectedStory.viewedBy.filter((uid) => uid !== selectedStory.creatorUid))] })}
                   type="button"
                 >
                   <Eye className="h-4 w-4 text-white" />
@@ -2347,7 +2403,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               )}
               {selectedStory.creatorUid !== me.uid && matches.some((item) => item.users.includes(me.uid) && item.users.includes(selectedStory.creatorUid)) && (
                 <button
-                  aria-label="Enviar mensagem"
+                  aria-label={t('send')}
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => replyToStory(selectedStory)}
                   type="button"
@@ -2369,10 +2425,10 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 type="button"
                 disabled={!selectedStoryEvent}
               >
-                {selectedStoryEvent ? 'Entrar no chat' : 'Sem chat'}
+                {selectedStoryEvent ? t('enterChat') : t('noChat')}
               </button>
               <button
-                aria-label="Denunciar story"
+                aria-label={t('reportStory')}
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-300/20 bg-rose-300/10 text-sm font-semibold text-rose-100"
                 onClick={() => reportStory(selectedStory)}
                 type="button"
@@ -2421,8 +2477,8 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           <section className="flex h-full max-h-full w-full flex-col overflow-hidden rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:max-w-lg sm:p-6">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Novo story</h2>
-                <p className="text-xs text-slate-400">{storyComposerEvent?.title ?? 'Story do mapa'}</p>
+                <h2 className="text-lg font-semibold">{t('newStory')}</h2>
+                <p className="text-xs text-slate-400">{storyComposerEvent?.title ?? t('mapStory')}</p>
               </div>
               <button
                 className="grid h-9 w-9 place-items-center rounded-lg bg-white/8"
@@ -2443,7 +2499,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <CachedMediaImage className="h-full w-full object-contain" fallbackClassName="min-h-0 w-full flex-1 rounded-lg bg-black" src={storyImageURL} />
               ) : (
                 <div className="grid min-h-[38dvh] place-items-center rounded-lg border border-dashed border-white/15 bg-slate-950/60 text-sm text-slate-400">
-                  Foto opcional
+                  {t('optionalPhoto')}
                 </div>
               )}
               <textarea
@@ -2458,13 +2514,13 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             <div className="mt-3 grid grid-cols-2 gap-2">
               <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold">
                 <Camera className="h-4 w-4" />
-                Foto
+                {t('camera')}
                 <input accept="image/*" capture="environment" className="hidden" disabled={uploadingStory} onChange={uploadStoryMedia} type="file" />
               </label>
               <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold">
                 <ImagePlus className="h-4 w-4" />
-                Galeria
-                <input accept="image/*" className="hidden" disabled={uploadingStory} onChange={uploadStoryMedia} type="file" />
+                {t('gallery')}
+                <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" disabled={uploadingStory} onChange={uploadStoryMedia} type="file" />
               </label>
             </div>
             {eventError && <p className="mb-3 rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
@@ -2475,7 +2531,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               type="button"
             >
               <Send className="h-4 w-4" />
-              {uploadingStory ? 'Enviando...' : 'Publicar story'}
+              {uploadingStory ? t('uploading') : t('publishStory')}
             </button>
           </section>
         </div>
@@ -2525,10 +2581,10 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <p className="raddo-event-creator-label mt-1 text-xs font-semibold text-teal-200">
                   Criado por {creatorLabel(previewEvent)}
                 </p>
-                <p className="mt-1 text-sm text-slate-300">{previewEvent.description || 'Chat local do mapa'}</p>
+                <p className="mt-1 text-sm text-slate-300">{previewEvent.description || t('chatLocalMap')}</p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => setPreviewEvent(null)}
                 type="button"
@@ -2545,7 +2601,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               <span className="text-xs text-slate-300">
                 {me.location
                   ? `${distanceKm(me.location, previewEvent.location).toFixed(1)} km de você`
-                  : 'Distância indisponível'} - {formatRadius(previewEvent.radiusKm)}
+                  : t('distanceUnavailable')} - {formatRadius(previewEvent.radiusKm)}
                 {formatEventTimeLeft(previewEvent) ? ` - ${formatEventTimeLeft(previewEvent)}` : ''}
               </span>
             </div>
@@ -2558,7 +2614,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               type="button"
             >
               <MapPin className="h-4 w-4 text-teal-300" />
-              Abrir localização no GPS
+              {t('openLocationGps')}
             </button>
 
             {previewEvent.creatorUid !== me.uid && (
@@ -2568,7 +2624,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 type="button"
               >
                 <Megaphone className="h-4 w-4" />
-                Denunciar chat
+                {t('reportChat')}
               </button>
             )}
 
@@ -2585,7 +2641,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 onClick={() => handleEnterEvent(previewEvent)}
                 type="button"
               >
-                {previewEventIsParticipant ? 'Conversar' : 'Entrar no chat'}
+                {previewEventIsParticipant ? t('talk') : t('enterChat')}
               </button>
             </div>
             {(previewEvent.creatorUid === me.uid || canManageApp) && (
@@ -2594,7 +2650,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 onClick={() => handleDeleteEvent(previewEvent)}
                 type="button"
               >
-                Excluir chat
+                {t('deleteChat')}
               </button>
             )}
           </section>
@@ -2610,7 +2666,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <p className="text-sm text-slate-300">{clusteredEvents.length} chats muito próximos no mapa</p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => setClusteredEvents([])}
                 type="button"
@@ -2641,7 +2697,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                         <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
                         <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
                           <span>{eventParticipantCounts[event.id] ?? 1} pessoas</span>
-                          <span>{me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km` : 'Distância indisponível'}</span>
+                          <span>{me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km` : t('distanceUnavailable')}</span>
                           {formatEventTimeLeft(event) && <span>{formatEventTimeLeft(event)}</span>}
                         </span>
                       </span>
@@ -2653,7 +2709,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
         </div>
       )}
       {activeEvent && (
-        <MapEventChatBoundary key={activeEvent.id} onClose={() => setActiveEvent(null)}>
+        <MapEventChatBoundary key={activeEvent.id} onClose={() => setActiveEvent(null)} t={t}>
           <MapEventChat
             event={activeEvent}
             matches={matches}
@@ -2693,7 +2749,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 </p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => {
                   setShowChatsList(false);
@@ -2752,7 +2808,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                       </button>
                       <div className="flex shrink-0 gap-2">
                         <button
-                          aria-label={isJoined ? 'Conversar' : 'Entrar no chat'}
+                          aria-label={isJoined ? t('talk') : t('enterChat')}
                           className="grid h-10 w-10 place-items-center rounded-lg bg-[#ff3f68] text-white shadow-lg shadow-[#ff3f68]/20 transition hover:brightness-110"
                           onClick={() => {
                             setShowChatsList(false);
@@ -2780,7 +2836,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                         </button>
                         {isJoined && (
                           <button
-                            aria-label="Sair do chat"
+                            aria-label={t('leaveChat')}
                             className="grid h-10 w-10 place-items-center rounded-lg border border-rose-300/30 bg-rose-400/15 text-rose-100 transition hover:bg-rose-400/25"
                             onClick={() => handleLeaveEventFromList(event)}
                             type="button"
@@ -2802,11 +2858,11 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Pessoas próximas</h2>
+                <h2 className="text-lg font-semibold">{t('nearbyPeople')}</h2>
                 <p className="text-sm text-slate-300">{sortedProfiles.length} pessoas no seu alcance</p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => setShowPeopleList(false)}
                 type="button"
@@ -2816,7 +2872,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             </div>
             {profileActionMessage && <p className="mb-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
             <div className="grid gap-3">
-              {sortedProfiles.length === 0 && <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhum perfil no raio atual.</p>}
+              {sortedProfiles.length === 0 && <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">{t('noProfilesCurrentRadius')}</p>}
               {sortedProfiles.map((profile) => (
                 <article className="rounded-lg bg-slate-950/60 p-3" key={profile.uid}>
                   <div className="flex items-center gap-3">
@@ -2842,7 +2898,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                       <p className="text-xs text-slate-300">
                         {me.location && profile.location
                           ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
-                          : 'Distância indisponível'}
+                          : t('distanceUnavailable')}
                       </p>
                     </button>
                     <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">
@@ -2861,7 +2917,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                       Ver perfil
                     </button>
                     <button
-                      aria-label={`Recusar ${profile.displayName}`}
+                      aria-label={t('rejectPerson', { name: profile.displayName })}
                       className="grid h-10 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
                       onClick={() => dislikeNearbyProfile(profile)}
                       type="button"
@@ -2889,10 +2945,10 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-sm font-semibold">
                 <Plus className="h-4 w-4 text-teal-300" />
-                Criar chat no mapa
+                {t('createMapChat')}
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
                 onClick={() => setCreateChatOpen(false)}
                 type="button"
@@ -2904,34 +2960,34 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               <input
                 className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                 onChange={(event) => setEventTitle(event.target.value)}
-                placeholder="Nome do evento"
+                placeholder={t('eventName')}
                 value={eventTitle}
               />
               <textarea
                 className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm outline-none"
                 onChange={(event) => setEventDescription(event.target.value)}
-                placeholder="Descrição, ponto de encontro ou local exato"
+                placeholder={t('eventDescription')}
                 value={eventDescription}
               />
               <label className="grid gap-2 text-sm">
-                Capa do chat
+                {t('chatCover')}
                 {me.isPremium ? (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
                       <Camera className="h-4 w-4 text-teal-300" />
-                      {uploadingCover ? 'Enviando capa...' : 'Abrir câmera'}
+                      {uploadingCover ? t('uploadingCover') : t('openCamera')}
                       <input accept="image/*" capture="environment" className="hidden" disabled={creatingEvent} onChange={uploadEventCover} type="file" />
                     </span>
                     <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
                       <ImagePlus className="h-4 w-4 text-teal-300" />
-                      {uploadingCover ? 'Enviando capa...' : eventCoverURL ? 'Trocar capa' : 'Enviar capa'}
-                      <input accept="image/*" className="hidden" disabled={creatingEvent} onChange={uploadEventCover} type="file" />
+                      {uploadingCover ? t('uploadingCover') : eventCoverURL ? t('changeCover') : t('sendCover')}
+                      <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" disabled={creatingEvent} onChange={uploadEventCover} type="file" />
                     </span>
                   </div>
                 ) : (
                   <span className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-center text-sm text-slate-300">
                     <ImagePlus className="h-4 w-4 text-slate-400" />
-                    Capa disponível apenas no Premium
+                    {t('coverPremiumOnly')}
                   </span>
                 )}
               </label>
@@ -2941,7 +2997,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 </div>
               )}
               <label className="grid gap-2 text-sm">
-                Emoji do mapa
+                {t('mapEmoji')}
                 <div className="grid grid-cols-6 gap-2">
                   {eventEmojiQuickOptions.map((emoji) => (
                     <button
@@ -2965,27 +3021,27 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 </div>
               </label>
               <label className="grid gap-2 text-sm">
-                Quem pode entrar
+                {t('whoCanEnter')}
                 <select
                   className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                   onChange={(event) => setEventAccessMode(event.target.value as MapEvent['accessMode'])}
                   value={eventAccessMode}
                 >
-                  <option value="open">Aberto para qualquer pessoa</option>
-                  <option value="approval">Precisa de autorização</option>
-                  <option value="password">Precisa de senha</option>
+                  <option value="open">{t('openToAnyone')}</option>
+                  <option value="approval">{t('approvalRequired')}</option>
+                  <option value="password">{t('passwordRequired')}</option>
                 </select>
               </label>
               {eventAccessMode === 'approval' && (
                 <p className="rounded-lg bg-white/8 p-3 text-xs text-slate-300">
-                  Dono e moderadores poderão aprovar quem pedir para entrar.
+                  {t('approvalHelp')}
                 </p>
               )}
               {eventAccessMode === 'password' && (
                 <input
                   className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                   onChange={(event) => setEventPassword(event.target.value)}
-                  placeholder="Senha do chat"
+                  placeholder={t('chatPasswordPlaceholder')}
                   type="password"
                   value={eventPassword}
                 />
@@ -2993,8 +3049,8 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {me.isPremium && (
                 <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
                   <span>
-                    <span className="block font-semibold">Chat permanente</span>
-                    <span className="text-xs text-slate-300">Disponível para Premium. Apenas 1 chat permanente por pessoa.</span>
+                    <span className="block font-semibold">{t('permanentChat')}</span>
+                    <span className="text-xs text-slate-300">{t('permanentChatHelp')}</span>
                   </span>
                   <input
                     checked={eventIsPermanent}
@@ -3031,7 +3087,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 disabled={creatingEvent || uploadingCover}
                 type="submit"
               >
-                {creatingEvent ? 'Criando...' : 'Criar e entrar'}
+                {creatingEvent ? t('creating') : t('createAndJoin')}
               </button>
             </form>
           </section>
@@ -3042,11 +3098,11 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           <section className="scrollbar-hidden max-h-[92dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Editar chat</h2>
-                <p className="text-sm text-slate-300">Ajuste as informações do chat local.</p>
+                <h2 className="text-lg font-semibold">{t('editChat')}</h2>
+                <p className="text-sm text-slate-300">{t('editChatHelp')}</p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
                 onClick={() => setEditingEvent(null)}
                 type="button"
@@ -3058,17 +3114,17 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               <input
                 className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                 onChange={(event) => setEditingTitle(event.target.value)}
-                placeholder="Nome do evento"
+                placeholder={t('eventName')}
                 value={editingTitle}
               />
               <textarea
                 className="min-h-24 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm outline-none"
                 onChange={(event) => setEditingDescription(event.target.value)}
-                placeholder="Descrição, ponto de encontro ou local exato"
+                placeholder={t('eventDescription')}
                 value={editingDescription}
               />
               <label className="grid gap-2 text-sm">
-                Capa do chat
+                {t('chatCover')}
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     className="relative h-11 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
@@ -3076,9 +3132,9 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                     type="button"
                   >
                     <Camera className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
-                    Abrir câmera
+                    {t('openCamera')}
                     <input
-                      accept="image/*"
+                      accept={GALLERY_IMAGE_ACCEPT}
                       capture="environment"
                       className="absolute inset-0 cursor-pointer opacity-0"
                       disabled={uploadingEditingCover}
@@ -3092,7 +3148,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                     type="button"
                   >
                     <ImagePlus className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
-                    Enviar capa
+                    {t('sendCover')}
                     <input
                       accept="image/*"
                       className="absolute inset-0 cursor-pointer opacity-0"
@@ -3135,7 +3191,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 </div>
               </label>
               <label className="grid gap-2 text-sm">
-                Quem pode entrar
+                {t('whoCanEnter')}
                 <select
                   className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                   onChange={(event) => setEditingAccessMode(event.target.value as MapEvent['accessMode'])}
@@ -3158,7 +3214,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
               {me.isPremium && (
                 <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
                   <span>
-                    <span className="block font-semibold">Chat permanente</span>
+                    <span className="block font-semibold">{t('permanentChat')}</span>
                     <span className="text-xs text-slate-300">Disponível para Premium.</span>
                   </span>
                   <input
@@ -3186,7 +3242,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 disabled={savingEventEdit || uploadingEditingCover}
                 type="submit"
               >
-                {savingEventEdit ? 'Salvando...' : 'Salvar alterações'}
+                {savingEventEdit ? t('saving') : t('saveChanges')}
               </button>
             </form>
           </section>
@@ -3201,7 +3257,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <p className="text-sm text-slate-300">Esse emoji aparece no mapa do chat.</p>
               </div>
               <button
-                aria-label="Fechar"
+                aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => setEmojiPickerOpen(false)}
                 type="button"
@@ -3297,7 +3353,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <Popup>
                   <strong>{profile.displayName}</strong>
                   <br />
-                  {me.location ? `${formatPersonDistanceKm(distanceKm(me.location, position))} de você` : 'Distância indisponível'}
+                  {me.location ? t('distanceAway', { distance: formatPersonDistanceKm(distanceKm(me.location, position)) }) : t('distanceUnavailable')}
                   <br />
                   {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                 </Popup>
@@ -3319,7 +3375,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                 <br />
                 {formatEventTimeLeft(event)}
                 <br />
-                {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km de você` : 'Distância indisponível'}
+                {me.location ? t('distanceAway', { distance: `${distanceKm(me.location, event.location).toFixed(1)} km` }) : t('distanceUnavailable')}
               </Popup>
             </Marker>
           ))}
@@ -3328,13 +3384,13 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
 
       {(me.isPremium ? selectedPoint || me.location : me.location) && (
         <button
-          aria-label="Criar chat"
+          aria-label={t('createChat')}
           className="raddo-create-chat-cta absolute left-1/2 z-[560] grid h-14 w-14 -translate-x-1/2 place-items-center rounded-full text-white"
           onClick={() => setCreateChatOpen(true)}
           type="button"
         >
           <Plus className="h-7 w-7" />
-          <span className="absolute -bottom-6 whitespace-nowrap text-xs font-semibold text-white drop-shadow">Criar chat</span>
+          <span className="absolute -bottom-6 whitespace-nowrap text-xs font-semibold text-white drop-shadow">{t('createChat')}</span>
         </button>
       )}
 
@@ -3363,7 +3419,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
             </span>
           </div>
           <div className="hidden">
-            {visibleEvents.length === 0 && <p className="text-sm text-slate-300">Nenhum chat próximo.</p>}
+            {visibleEvents.length === 0 && <p className="text-sm text-slate-300">{t('noNearbyChats')}</p>}
             {sortedVisibleEvents.map((event) => (
               <button
                 className="w-full rounded-lg bg-slate-950/60 p-3 text-left"
@@ -3382,7 +3438,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                   {eventParticipantCounts[event.id] ?? 1} online agora
                 </span>
                 <span className="mt-1 block text-xs text-slate-300">
-                  {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km` : 'Distância indisponível'} - {formatRadius(event.radiusKm)}
+                  {me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km` : t('distanceUnavailable')} - {formatRadius(event.radiusKm)}
                 </span>
                 {formatEventTimeLeft(event) && <span className="mt-1 block text-xs text-teal-200">{formatEventTimeLeft(event)}</span>}
               </button>
@@ -3415,7 +3471,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
           </div>
           {profileActionMessage && <p className="mt-3 rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
           <div className="hidden">
-            {profiles.length === 0 && <p className="text-sm text-slate-300">Nenhum perfil no raio atual.</p>}
+            {profiles.length === 0 && <p className="text-sm text-slate-300">{t('noProfilesCurrentRadius')}</p>}
             {profileActionMessage && <p className="rounded-lg bg-white/8 p-2 text-xs text-slate-100">{profileActionMessage}</p>}
             {sortedProfiles.slice(0, 6).map((profile) => (
               <article className="flex items-center gap-3" key={profile.uid}>
@@ -3427,7 +3483,7 @@ export default function RadarMap({ matches, me, profiles, theme }: Props) {
                   <p className="text-xs text-slate-300">
                     {me.location && profile.location
                       ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
-                      : 'Distância indisponível'}
+                      : t('distanceUnavailable')}
                   </p>
                 </button>
                 <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">

@@ -174,18 +174,11 @@ export function useModerationCases(enabled: boolean) {
 
     async function loadCases() {
       setLoading(true);
-      const [{ data: reports }, { data: imageReports }] = await Promise.all([
-        supabase
-          .from('reports')
-          .select('id,reporter_uid,reported_uid,reason,recent_messages,context_type,context_id,context_title,created_at')
-          .order('created_at', { ascending: false })
-          .limit(50),
-        supabase
-          .from('image_moderation_reports')
-          .select('id,owner_uid,owner_display_name,public_url,storage_path,context,reasons,recent_messages,status,created_at')
-          .order('created_at', { ascending: false })
-          .limit(50),
-      ]);
+      const { data: reports } = await supabase
+        .from('reports')
+        .select('id,reporter_uid,reported_uid,reason,recent_messages,context_type,context_id,context_title,created_at')
+        .order('created_at', { ascending: false })
+        .limit(50);
 
       const reportRows = (reports ?? []) as Array<{
         context_id: string | null;
@@ -198,22 +191,9 @@ export function useModerationCases(enabled: boolean) {
         reported_uid: string;
         reporter_uid: string;
       }>;
-      const imageRows = (imageReports ?? []) as Array<{
-        context: string;
-        created_at: string;
-        id: string;
-        owner_display_name: string;
-        owner_uid: string;
-        public_url: string;
-        reasons: string[] | null;
-        recent_messages: ModerationRecentMessage[] | null;
-        status: string;
-        storage_path: string;
-      }>;
       const userIds = [
         ...new Set([
           ...reportRows.map((item) => item.reported_uid),
-          ...imageRows.map((item) => item.owner_uid),
         ]),
       ].filter(Boolean);
       const { data: profiles } = userIds.length
@@ -224,28 +204,6 @@ export function useModerationCases(enabled: boolean) {
           row.id,
           { displayName: row.display_name || 'UsuÃ¡rio', photoURL: row.photo_url || '' },
         ]),
-      );
-
-      const imageCases = await Promise.all(
-        imageRows.map(async (item) => {
-          const user = profileById.get(item.owner_uid);
-          const imageUrl = item.storage_path
-            ? await signedProfilePhotoUrl(item.storage_path, { encryptedCache: false })
-            : item.public_url;
-          return {
-            id: `image:${item.id}`,
-            createdAt: item.created_at,
-            imageUrl,
-            recentMessages: item.recent_messages ?? [],
-            reason: item.reasons?.join(', ') || item.context,
-            reportedUid: item.owner_uid,
-            source: 'image' as const,
-            status: item.status,
-            storagePath: item.storage_path,
-            userDisplayName: user?.displayName || item.owner_display_name || 'Usuário denunciado',
-            userPhotoURL: user?.photoURL || '',
-          };
-        }),
       );
 
       async function signedEvidenceMessages(messages: ModerationRecentMessage[]) {
@@ -279,7 +237,6 @@ export function useModerationCases(enabled: boolean) {
 
       const nextCases: ModerationCase[] = [
         ...reportCases,
-        ...imageCases,
       ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
       if (active) {
@@ -293,7 +250,6 @@ export function useModerationCases(enabled: boolean) {
     const channel = supabase
       .channel('moderation-cases')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' }, loadCases)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'image_moderation_reports' }, loadCases)
       .subscribe();
 
     return () => {

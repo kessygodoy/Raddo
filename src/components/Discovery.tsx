@@ -19,6 +19,7 @@ import ProfilePreview from './ProfilePreview';
 import { matchesGenderPreferences, profileQualityScore } from '../hooks/useNearbyProfiles';
 import { preloadImages, profileCoverUrl } from '../imagePreload';
 import CachedMediaImage from './CachedMediaImage';
+import { useI18n } from '../i18n';
 
 type Props = {
   me: UserProfile;
@@ -26,6 +27,7 @@ type Props = {
 };
 
 export default function Discovery({ me, profiles }: Props) {
+  const { language, t } = useI18n();
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState('');
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
@@ -226,7 +228,7 @@ export default function Discovery({ me, profiles }: Props) {
       setPreviewProfile(null);
       setSkipped((prev) => new Set(prev).add(profile.uid));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Não consegui registrar o dislike.');
+      setMessage(error instanceof Error ? error.message : t('dislikeError'));
     }
   }
 
@@ -265,7 +267,7 @@ export default function Discovery({ me, profiles }: Props) {
       setSkipped(new Set());
       setMessage('Interações desfeitas. Os perfis liberados podem aparecer novamente.');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Não consegui liberar os perfis agora.');
+      setMessage(error instanceof Error ? error.message : t('unmatchError'));
     }
   }
 
@@ -278,7 +280,7 @@ export default function Discovery({ me, profiles }: Props) {
   function videoAdButtonLabel() {
     if (videoAdContext === 'likedBy') return 'Liberar lista';
     if (videoAdContext === 'resetCards') return 'Liberar perfis';
-    return 'Fechar anúncio';
+    return t('close');
   }
 
   return (
@@ -311,8 +313,8 @@ export default function Discovery({ me, profiles }: Props) {
                 </div>
               </div>
               <div className="p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Anúncio</p>
-                <h2 className="mt-1 text-lg font-semibold">Video patrocinado</h2>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">{t('ad')}</p>
+                <h2 className="mt-1 text-lg font-semibold">{t('sponsoredVideo')}</h2>
                 <p className="mt-2 text-sm text-slate-300">{videoAdText()}</p>
                 <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10">
                   <motion.div
@@ -348,8 +350,8 @@ export default function Discovery({ me, profiles }: Props) {
               <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg bg-teal-300 text-slate-950">
                 <Sparkles className="h-8 w-8" />
               </div>
-              <h1 className="mt-4 text-3xl font-semibold">Deu match!</h1>
-              <p className="mt-2 text-sm text-slate-300">Você e {matchProfile.displayName} se curtiram.</p>
+              <h1 className="mt-4 text-3xl font-semibold">{t('notificationNewMatch')}</h1>
+              <p className="mt-2 text-sm text-slate-300">{t('notificationNewMatchText', { name: matchProfile.displayName })}</p>
               <div className="mt-5 flex justify-center -space-x-4">
                 <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={me.photoURL} />
                 <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={matchProfile.photoURL} />
@@ -359,7 +361,7 @@ export default function Discovery({ me, profiles }: Props) {
                 onClick={() => setMatchProfile(null)}
                 type="button"
               >
-                Continuar
+                {t('continue')}
               </button>
             </motion.section>
           </motion.div>
@@ -378,13 +380,13 @@ export default function Discovery({ me, profiles }: Props) {
             >
               <header className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
                 <div>
-                  <h2 className="text-lg font-semibold">Quem te curtiu</h2>
+                  <h2 className="text-lg font-semibold">{t('likedByTitle')}</h2>
                   <p className="text-sm text-slate-300">
-                    {visibleLikedBy.length} {visibleLikedBy.length === 1 ? 'pessoa' : 'pessoas'}
+                    {t(visibleLikedBy.length === 1 ? 'personCount' : 'peopleCount', { count: visibleLikedBy.length })}
                   </p>
                 </div>
                 <button
-                  aria-label="Fechar lista"
+                  aria-label={t('closeList')}
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white"
                   onClick={() => setLikedByModalOpen(false)}
                   type="button"
@@ -396,7 +398,7 @@ export default function Discovery({ me, profiles }: Props) {
               <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden">
                 {visibleLikedBy.length === 0 ? (
                   <p className="rounded-lg border border-white/10 bg-white/8 p-4 text-sm text-slate-300">
-                    Ninguém te curtiu ainda.
+                    {t('noLikesYet')}
                   </p>
                 ) : (
                   <div className="grid gap-2">
@@ -411,7 +413,7 @@ export default function Discovery({ me, profiles }: Props) {
                           <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                         </button>
                         <button
-                          aria-label={`Recusar ${profile.displayName}`}
+                          aria-label={t('rejectPerson', { name: profile.displayName })}
                           className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 text-rose-100"
                           onClick={() => dislikeLikedByProfile(profile)}
                           type="button"
@@ -441,7 +443,7 @@ export default function Discovery({ me, profiles }: Props) {
                     type="button"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    Anterior
+                    {t('previous')}
                   </button>
                   <span className="text-sm text-slate-300">
                     {safeLikedByPage + 1} / {likedByTotalPages}
@@ -452,7 +454,7 @@ export default function Discovery({ me, profiles }: Props) {
                     onClick={() => setLikedByPage((page) => Math.min(likedByTotalPages - 1, page + 1))}
                     type="button"
                   >
-                    Próxima
+                    {t('next')}
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </footer>
@@ -474,13 +476,13 @@ export default function Discovery({ me, profiles }: Props) {
             >
               <header className="flex items-center justify-between gap-3 border-b border-white/10 p-4">
                 <div>
-                  <h2 className="text-lg font-semibold">Pessoas que cruzei</h2>
+                  <h2 className="text-lg font-semibold">{t('peopleCrossed')}</h2>
                   <p className="text-sm text-slate-300">
-                    {crossedProfiles.length} {crossedProfiles.length === 1 ? 'pessoa' : 'pessoas'}
+                    {t(crossedProfiles.length === 1 ? 'personCount' : 'peopleCount', { count: crossedProfiles.length })}
                   </p>
                 </div>
                 <button
-                  aria-label="Fechar pessoas que cruzei"
+                  aria-label={t('closeCrossedPeople')}
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white"
                   onClick={() => setCrossedModalOpen(false)}
                   type="button"
@@ -492,7 +494,7 @@ export default function Discovery({ me, profiles }: Props) {
               <div className="min-h-0 flex-1 overflow-y-auto p-4 scrollbar-hidden">
                 {crossedProfiles.length === 0 ? (
                   <p className="rounded-lg border border-white/10 bg-white/8 p-4 text-sm text-slate-300">
-                    Quando alguém compatível passar a até 250 metros de você, aparece aqui.
+                    {t('crossedHelp')}
                   </p>
                 ) : (
                   <div className="grid gap-2">
@@ -518,7 +520,7 @@ export default function Discovery({ me, profiles }: Props) {
                           </span>
                         </button>
                         <button
-                          aria-label={`Recusar ${profile.displayName}`}
+                          aria-label={t('rejectPerson', { name: profile.displayName })}
                           className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 text-rose-100"
                           onClick={() => dislikeCrossedProfile(profile)}
                           type="button"
@@ -548,7 +550,7 @@ export default function Discovery({ me, profiles }: Props) {
                     type="button"
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    Anterior
+                    {t('previous')}
                   </button>
                   <span className="text-sm text-slate-300">
                     {safeCrossedPage + 1} / {crossedTotalPages}
@@ -559,7 +561,7 @@ export default function Discovery({ me, profiles }: Props) {
                     onClick={() => setCrossedPage((page) => Math.min(crossedTotalPages - 1, page + 1))}
                     type="button"
                   >
-                    Próxima
+                    {t('next')}
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </footer>
@@ -586,12 +588,12 @@ export default function Discovery({ me, profiles }: Props) {
                       <h1 className="truncate text-3xl font-semibold">{current.displayName}</h1>
                       <p className="mt-1 text-sm text-slate-200">
                         {me.location && current.location
-                          ? `${formatPersonDistanceKm(distanceKm(me.location, current.location))} de distância`
-                          : 'Distância indisponível'}
+                          ? t('distanceAway', { distance: formatPersonDistanceKm(distanceKm(me.location, current.location)) })
+                          : t('distanceUnavailable')}
                       </p>
                     </div>
                     <span className="shrink-0 rounded-md bg-white/15 px-2 py-1 text-xs text-slate-100">
-                      {current.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
+                      {current.privacyMode === 'exact' ? t('visibleOnMap') : t('outsideMap')}
                     </span>
                   </div>
                   {current.bio && <p className="mt-3 line-clamp-3 text-sm text-slate-200">{current.bio}</p>}
@@ -601,7 +603,7 @@ export default function Discovery({ me, profiles }: Props) {
                     type="button"
                   >
                     <Eye className="h-4 w-4" />
-                    Ver bio e fotos
+                    {t('viewBioPhotos')}
                   </button>
                 </div>
               </div>
@@ -610,9 +612,9 @@ export default function Discovery({ me, profiles }: Props) {
             <div className="grid h-full place-items-center p-6 text-center text-slate-200">
               <div className="raddo-empty-state max-w-xs">
                 <div>
-                  <p className="text-base font-semibold text-white">Sem cards disponíveis</p>
+                  <p className="text-base font-semibold text-white">{t('noCards')}</p>
                   <p className="mt-2 text-sm text-slate-300">
-                  Você pode ter curtido ou recusado todos os perfis disponíveis nos filtros atuais.
+                  {t('noCardsHelp')}
                   </p>
                   {seenIds.size > 0 && (
                     <button
@@ -620,7 +622,7 @@ export default function Discovery({ me, profiles }: Props) {
                       onClick={() => resetCardInteractions()}
                       type="button"
                     >
-                      {me.isPremium ? 'Liberar perfis novamente' : 'Ver anúncio para liberar perfis novamente'}
+                      {me.isPremium ? t('unlockProfilesAgain') : t('watchAdUnlockProfiles')}
                     </button>
                   )}
                 </div>
@@ -652,10 +654,10 @@ export default function Discovery({ me, profiles }: Props) {
       <section className="raddo-surface p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
           <SlidersHorizontal className="h-4 w-4 text-teal-300" />
-          Filtros dos cards
+          {t('cardFilters')}
         </div>
         <label className="grid gap-2 text-sm text-slate-200">
-          Distância máxima: {maxDistanceKm.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} km
+          {t('maximumDistance', { distance: maxDistanceKm.toLocaleString(language, { maximumFractionDigits: 0 }) })}
           <input
             max={500}
             min={1}
@@ -665,16 +667,16 @@ export default function Discovery({ me, profiles }: Props) {
           />
         </label>
         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-          <ToggleButton active={onlineOnly} label="Online" onClick={() => setOnlineOnly((current) => !current)} />
-          <ToggleButton active={withPhotoOnly} label="Com foto" onClick={() => setWithPhotoOnly((current) => !current)} />
-          <ToggleButton active={newOnly} label="Novos" onClick={() => setNewOnly((current) => !current)} />
+          <ToggleButton active={onlineOnly} label={t('online')} onClick={() => setOnlineOnly((current) => !current)} />
+          <ToggleButton active={withPhotoOnly} label={t('withPhoto')} onClick={() => setWithPhotoOnly((current) => !current)} />
+          <ToggleButton active={newOnly} label={t('newProfiles')} onClick={() => setNewOnly((current) => !current)} />
         </div>
       </section>
 
       <section className="rounded-lg border border-white/10 bg-white/8 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold">Quem te curtiu</h2>
+            <h2 className="text-sm font-semibold">{t('likedByTitle')}</h2>
             <p className="text-2xl font-semibold">{likedBy.length}</p>
             <p className="text-xs text-slate-300">{likedBy.length === 1 ? 'pessoa curtiu você' : 'pessoas curtiram você'}</p>
           </div>
@@ -692,12 +694,12 @@ export default function Discovery({ me, profiles }: Props) {
             onClick={openLikedByList}
             type="button"
           >
-            {likedByUnlocked ? 'Ver lista' : 'Ver anúncio'}
+            {likedByUnlocked ? t('viewList') : t('watchAd')}
           </button>
         </div>
         {false && (
           <div className="mt-3 grid gap-2">
-            {likedBy.length === 0 && <p className="text-sm text-slate-300">Ninguém te curtiu ainda.</p>}
+            {likedBy.length === 0 && <p className="text-sm text-slate-300">{t('noLikesYet')}</p>}
             {visibleLikedBy.map((profile) => (
               <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={profile.uid}>
                 <button
@@ -709,7 +711,7 @@ export default function Discovery({ me, profiles }: Props) {
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{profile.displayName}</span>
                 </button>
                 <button
-                  aria-label={`Recusar ${profile.displayName}`}
+                  aria-label={t('rejectPerson', { name: profile.displayName })}
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/10 text-rose-100"
                   onClick={() => dislikeLikedByProfile(profile)}
                   type="button"
@@ -735,10 +737,10 @@ export default function Discovery({ me, profiles }: Props) {
           <div>
             <div className="flex items-center gap-2">
               <MapPin className="h-4 w-4 text-rose-300" />
-              <h2 className="text-sm font-semibold">Pessoas que cruzei</h2>
+              <h2 className="text-sm font-semibold">{t('peopleCrossed')}</h2>
             </div>
             <p className="text-2xl font-semibold">{crossedProfiles.length}</p>
-            <p className="text-xs text-slate-300">Disponível para todos, respeitando suas preferências</p>
+            <p className="text-xs text-slate-300">{t('crossedAvailableAll')}</p>
           </div>
           <button
             className="h-10 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
@@ -748,12 +750,12 @@ export default function Discovery({ me, profiles }: Props) {
             }}
             type="button"
           >
-            Ver lista
+            {t('viewList')}
           </button>
         </div>
         {crossedProfiles.length === 0 && (
           <p className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-3 text-sm text-slate-300">
-            Quando alguém compatível passar a até 250 metros de você, aparece aqui.
+            {t('crossedHelp')}
           </p>
         )}
       </section>

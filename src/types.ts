@@ -2,7 +2,7 @@ export type PrivacyMode = 'exact' | 'nearby';
 export type AppView = 'radar' | 'discover' | 'chat' | 'profile' | 'notifications';
 export type AppTheme = 'dark' | 'light' | 'green' | 'pride' | 'system';
 export type ResolvedAppTheme = 'dark' | 'light' | 'green' | 'pride';
-export type AppLanguage = 'pt-BR' | 'en-US' | 'es';
+export type AppLanguage = 'pt-BR' | 'en-US' | 'es' | 'zh-CN' | 'hi-IN';
 export type MapEventAccessMode = 'open' | 'approval' | 'password';
 
 export type GenderIdentity = 'man' | 'woman' | 'couple' | 'nonbinary' | 'trans' | 'other' | 'prefer_not_to_say';

@@ -90,6 +90,7 @@ export default function App() {
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [openMatchId, setOpenMatchId] = useState('');
+  const [openMapEventId, setOpenMapEventId] = useState('');
   const [availableUpdate, setAvailableUpdate] = useState<{
     version?: string;
     message?: string;
@@ -350,7 +351,7 @@ export default function App() {
     }
 
     if (newPassword !== confirmNewPassword) {
-      setPasswordRecoveryError('As senhas não conferem.');
+      setPasswordRecoveryError(t('passwordMismatch'));
       return;
     }
 
@@ -366,7 +367,7 @@ export default function App() {
       }
 
       if (!sessionData.session) {
-        setPasswordRecoveryError('O link de recuperação expirou ou não abriu corretamente. Peça um novo link em "Esqueci minha senha".');
+        setPasswordRecoveryError(t('recoveryLinkExpired'));
         return;
       }
 
@@ -374,19 +375,19 @@ export default function App() {
       if (error) {
         setPasswordRecoveryError(
           error.message.toLowerCase().includes('auth session missing')
-            ? 'O link de recuperação expirou ou não abriu corretamente. Peça um novo link em "Esqueci minha senha".'
+            ? t('recoveryLinkExpired')
             : error.message,
         );
         return;
       }
     } catch (error) {
-      setPasswordRecoveryError(error instanceof Error ? error.message : 'Não consegui validar o link de recuperação.');
+      setPasswordRecoveryError(error instanceof Error ? error.message : t('passwordValidationError'));
       return;
     } finally {
       setPasswordRecoveryBusy(false);
     }
 
-    setPasswordRecoveryMessage('Senha atualizada. Você já pode entrar com e-mail e senha.');
+    setPasswordRecoveryMessage(t('passwordUpdated'));
     window.localStorage.removeItem('raddo:password-recovery-url');
     setPasswordRecoveryUrl('');
     setNewPassword('');
@@ -615,7 +616,7 @@ export default function App() {
         window.location.reload();
       }
     } catch (error) {
-      setUpdateInstallMessage(error instanceof Error ? error.message : 'Não consegui iniciar a atualização.');
+      setUpdateInstallMessage(error instanceof Error ? error.message : t('updateStartError'));
     }
   }
 
@@ -771,7 +772,7 @@ export default function App() {
               </button>
               <div className="relative">
                 <button
-                  aria-label="Abrir opções dos chats"
+                  aria-label={t('chatOptions')}
                   className="raddo-header-icon grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
                   onClick={() => setHeaderMenuOpen((current) => !current)}
                   type="button"
@@ -833,6 +834,10 @@ export default function App() {
               <RadarMap
                 matches={matches}
                 me={profile}
+                onOpenEventHandled={(eventId) => {
+                  setOpenMapEventId((current) => (current === eventId ? '' : current));
+                }}
+                openEventId={openMapEventId}
                 profiles={nearbyProfiles}
                 theme={resolvedTheme}
               />
@@ -855,6 +860,7 @@ export default function App() {
                 matchProfilesByUid={matchProfilesByUid}
                 matches={matches}
                 onOpenMapNotification={(notificationId) => {
+                  setOpenMapEventId(notificationId);
                   navigateTo('radar');
                 }}
                 onOpenNotification={openNotification}
@@ -908,27 +914,27 @@ export default function App() {
             className="raddo-modal-card"
             onSubmit={handlePasswordRecoverySubmit}
           >
-            <h1 className="text-lg font-semibold">Criar nova senha</h1>
-            <p className="mt-2 text-sm text-slate-300">Digite uma nova senha para usar login por e-mail no Raddo.</p>
+            <h1 className="text-lg font-semibold">{t('createNewPassword')}</h1>
+            <p className="mt-2 text-sm text-slate-300">{t('recoveryPasswordIntro')}</p>
             <label className="mt-4 grid gap-1 text-xs font-semibold text-slate-300">
-              Nova senha
+              {t('newPassword')}
               <input
                 autoFocus
                 className="h-11 rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-white outline-none"
                 minLength={6}
                 onChange={(event) => setNewPassword(event.target.value)}
-                placeholder="Mínimo de 6 caracteres"
+                placeholder={t('passwordPlaceholder')}
                 type="password"
                 value={newPassword}
               />
             </label>
             <label className="mt-3 grid gap-1 text-xs font-semibold text-slate-300">
-              Confirmar senha
+              {t('confirmPassword')}
               <input
                 className="h-11 rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-white outline-none"
                 minLength={6}
                 onChange={(event) => setConfirmNewPassword(event.target.value)}
-                placeholder="Digite novamente"
+                placeholder={t('confirmPasswordPlaceholder')}
                 type="password"
                 value={confirmNewPassword}
               />
@@ -942,14 +948,14 @@ export default function App() {
                 onClick={() => setPasswordRecoveryOpen(false)}
                 type="button"
               >
-                Agora não
+                {t('notNow')}
               </button>
               <button
                 className="raddo-primary-action h-11 rounded-lg text-sm font-semibold disabled:cursor-wait disabled:opacity-70"
                 disabled={passwordRecoveryBusy}
                 type="submit"
               >
-                {passwordRecoveryBusy ? 'Salvando...' : 'Salvar senha'}
+                {passwordRecoveryBusy ? t('saving') : t('savePassword')}
               </button>
             </div>
           </form>

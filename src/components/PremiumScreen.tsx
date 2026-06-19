@@ -35,7 +35,7 @@ export default function PremiumScreen({ onPremiumActivated, profile }: Props) {
       setMessage('Premium ativado com sucesso.');
       onPremiumActivated?.();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Não consegui iniciar a assinatura.');
+      setMessage(error instanceof Error ? error.message : t('premiumSubscribeError'));
     } finally {
       setBusy(false);
     }
@@ -49,7 +49,7 @@ export default function PremiumScreen({ onPremiumActivated, profile }: Props) {
       setMessage('Premium restaurado com sucesso.');
       onPremiumActivated?.();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Não consegui restaurar sua assinatura.');
+      setMessage(error instanceof Error ? error.message : t('premiumRestoreError'));
     } finally {
       setBusy(false);
     }

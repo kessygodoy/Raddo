@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useCachedChatMediaUrl } from '../chatMediaCache';
 import { setScreenshotBlocked } from '../screenSecurity';
 import CachedMediaImage from './CachedMediaImage';
+import { useI18n } from '../i18n';
 
 type Props = {
   cacheKey?: string;
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'image', mine, onLoaded, onViewed, viewed, viewedStorageKey, viewOnce }: Props) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [expiredHere, setExpiredHere] = useState(false);
   const [viewedLocally, setViewedLocally] = useState(() =>
@@ -78,7 +80,7 @@ export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'imag
   }
 
   if (expired) {
-    return <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2 text-xs text-slate-300">Imagem expirada.</div>;
+    return <div className="rounded-lg border border-white/10 bg-white/8 px-3 py-2 text-xs text-slate-300">{t('imageExpired')}</div>;
   }
 
   return (
@@ -103,7 +105,7 @@ export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'imag
         )}
         {viewOnce && (
           <span className={`mt-1 block text-left text-[11px] ${mine ? 'text-slate-700' : 'text-slate-300'}`}>
-            Ver uma vez
+            {t('viewOnce')}
           </span>
         )}
       </button>
@@ -115,7 +117,7 @@ export default function ChatImageMessage({ cacheKey, imageURL, mediaType = 'imag
             </div>
           )}
           <button
-            aria-label="Fechar imagem"
+            aria-label={t('closeImage')}
             className="absolute right-4 top-[calc(env(safe-area-inset-top)+16px)] grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white"
             onClick={closeImage}
             type="button"

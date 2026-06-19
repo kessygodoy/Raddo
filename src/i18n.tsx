@@ -1,5 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { AppLanguage, GenderIdentity, Sexuality } from './types';
+import { hiINDictionary, zhCNDictionary } from './i18nAsian';
+import { uiDictionaries } from './i18nUi';
 
 type Dictionary = Record<string, string>;
 
@@ -7,10 +9,13 @@ export const languageOptions: Array<{ value: AppLanguage; label: string }> = [
   { value: 'pt-BR', label: 'Português (Brasil)' },
   { value: 'en-US', label: 'English (US)' },
   { value: 'es', label: 'Español' },
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'hi-IN', label: 'हिन्दी' },
 ];
 
 const dictionaries: Record<AppLanguage, Dictionary> = {
   'pt-BR': {
+    ...uiDictionaries['pt-BR'],
     appName: 'Raddo',
     navRadar: 'Mapa',
     navCards: 'Descobrir',
@@ -205,6 +210,7 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     other: 'Outro',
   },
   'en-US': {
+    ...uiDictionaries['en-US'],
     appName: 'Raddo',
     navRadar: 'Map',
     navCards: 'Discover',
@@ -398,6 +404,7 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     other: 'Other',
   },
   es: {
+    ...uiDictionaries.es,
     appName: 'Raddo',
     navRadar: 'Mapa',
     navCards: 'Descubrir',
@@ -590,6 +597,8 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     demisexual: 'Demisexual',
     other: 'Otro',
   },
+  'zh-CN': { ...zhCNDictionary, ...uiDictionaries['zh-CN'] },
+  'hi-IN': { ...hiINDictionary, ...uiDictionaries['hi-IN'] },
 };
 
 type I18nContextValue = {
@@ -610,6 +619,8 @@ export function normalizeLanguage(value: string | null | undefined): AppLanguage
   if (value === 'pt-BR' || value?.toLowerCase().startsWith('pt')) return 'pt-BR';
   if (value === 'en-US' || value?.toLowerCase().startsWith('en')) return 'en-US';
   if (value === 'es' || value?.toLowerCase().startsWith('es')) return 'es';
+  if (value === 'zh-CN' || value?.toLowerCase().startsWith('zh')) return 'zh-CN';
+  if (value === 'hi-IN' || value?.toLowerCase().startsWith('hi')) return 'hi-IN';
   return 'en-US';
 }
 

@@ -610,6 +610,21 @@ input[type="range"] {
     inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
+.theme-green .raddo-primary-action {
+  background: linear-gradient(135deg, #3ee77a, #25d366 56%, #075e54) !important;
+  color: #ffffff !important;
+  box-shadow:
+    0 12px 26px rgba(37, 211, 102, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.theme-green .raddo-primary-action svg,
+.theme-green .raddo-primary-action span,
+.theme-green .raddo-primary-action [class*="text-slate-"],
+.theme-green .raddo-primary-action [class*="text-white"] {
+  color: #ffffff !important;
+}
+
 .raddo-secondary-action {
   border: 1px solid var(--theme-border) !important;
   background: rgba(255, 255, 255, 0.065) !important;
@@ -885,17 +900,6 @@ input[type="range"] {
 
 .raddo-bottom-nav button:not([class*="raddo-primary-action"]) {
   background: color-mix(in srgb, var(--theme-panel), transparent 12%);
-}
-
-.raddo-bottom-nav button[class*="raddo-primary-action"]::after {
-  content: "";
-  position: absolute;
-  left: 22%;
-  right: 22%;
-  bottom: 0.35rem;
-  height: 0.16rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
 }
 
 .raddo-bottom-nav button[class*="bg-teal-300"] {

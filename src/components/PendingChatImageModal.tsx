@@ -1,5 +1,6 @@
 import { Eye, Loader2, Send, X } from 'lucide-react';
 import CachedMediaImage from './CachedMediaImage';
+import { useI18n } from '../i18n';
 
 type Props = {
   imageURL?: string;
@@ -24,8 +25,9 @@ export default function PendingChatImageModal({
   uploading,
   viewOnce,
 }: Props) {
+  const { t } = useI18n();
   const busy = uploading || sending;
-  const resolvedTitle = title ?? (mediaType === 'video' ? 'Enviar vídeo' : 'Enviar imagem');
+  const resolvedTitle = title ?? (mediaType === 'video' ? t('sendVideo') : t('sendImage'));
 
   return (
     <div className="fixed inset-0 z-[1600] grid place-items-center bg-black/70 p-4 backdrop-blur-sm">
@@ -34,11 +36,11 @@ export default function PendingChatImageModal({
           <div>
             <h2 className="text-lg font-semibold">{resolvedTitle}</h2>
             <p className="mt-1 text-xs text-slate-300">
-              {uploading ? 'Enviando mídia...' : 'Confira antes de enviar.'}
+              {uploading ? t('uploadingMedia') : t('reviewBeforeSend')}
             </p>
           </div>
           <button
-            aria-label="Cancelar"
+            aria-label={t('cancel')}
             className="grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100 disabled:opacity-50"
             disabled={busy}
             onClick={onCancel}
@@ -52,7 +54,7 @@ export default function PendingChatImageModal({
           {uploading && (
             <div className="grid place-items-center gap-3 text-slate-200">
               <Loader2 className="h-9 w-9 animate-spin text-teal-300" />
-              <span className="text-sm">Fazendo upload e verificação...</span>
+              <span className="text-sm">{t('uploadVerification')}</span>
             </div>
           )}
           {!uploading && imageURL && mediaType === 'video' && (
@@ -76,9 +78,9 @@ export default function PendingChatImageModal({
           >
             <span className="flex items-center gap-2">
               <Eye className="h-4 w-4" />
-              Visualização única
+              {t('oneTimeView')}
             </span>
-            <span>{viewOnce ? 'Ativada' : 'Desativada'}</span>
+            <span>{viewOnce ? t('enabledState') : t('disabledState')}</span>
           </button>
 
           <div className="grid grid-cols-2 gap-2">
@@ -88,7 +90,7 @@ export default function PendingChatImageModal({
               onClick={onCancel}
               type="button"
             >
-              Cancelar
+              {t('cancel')}
             </button>
             <button
               className="flex h-11 items-center justify-center gap-2 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:opacity-50"
@@ -97,7 +99,7 @@ export default function PendingChatImageModal({
               type="button"
             >
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Enviar
+              {t('send')}
             </button>
           </div>
         </div>

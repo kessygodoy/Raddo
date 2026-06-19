@@ -1,0 +1,5 @@
+Melhorias no login e estabilidade da sessao.
+Notificacoes de grupos agora abrem o chat correto.
+Foto principal aparece primeiro ao ver perfis.
+Painel de moderacao sem erro de consulta antiga.
+Pequenos ajustes visuais no mapa e navegacao.

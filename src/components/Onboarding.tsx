@@ -59,7 +59,7 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
       setPhotoURL(signedUrl);
     } catch (photoError) {
       setPhotoURL(previousPhotoURL);
-      setError(photoError instanceof Error ? photoError.message : 'Não consegui enviar a foto.');
+      setError(photoError instanceof Error ? photoError.message : t('photoUploadError'));
     } finally {
       setUploadingPhoto(false);
       event.target.value = '';

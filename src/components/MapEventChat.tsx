@@ -37,6 +37,7 @@ import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
 import CachedMediaImage from './CachedMediaImage';
 import { signedProfilePhotoUrl } from '../storageImages';
+import { useI18n } from '../i18n';
 
 function isVideoMedia(url: string, text?: string) {
   return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
@@ -84,6 +85,7 @@ function ProfileAvatar({ profile }: { profile: UserProfile }) {
 }
 
 function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () => void }) {
+  const { t } = useI18n();
   const [value, setValue] = useState(dialog.type === 'prompt' ? dialog.initialValue : '');
   const [busy, setBusy] = useState(false);
 
@@ -108,7 +110,7 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
             <h2 className="text-lg font-semibold">{dialog.title}</h2>
             {dialog.message && <p className="mt-1 text-sm text-slate-300">{dialog.message}</p>}
           </div>
-          <button aria-label="Fechar" className="raddo-icon-button" onClick={onClose} type="button">
+          <button aria-label={t('close')} className="raddo-icon-button" onClick={onClose} type="button">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -150,6 +152,7 @@ function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () =>
 }
 
 export default function MapEventChat({ event, matches = [], me, onClose, onCreateStory, onDeleted, onEditEvent, stories = [] }: Props) {
+  const { t } = useI18n();
   const messages = useMapEventMessages(event.id, me.uid);
   const participants = useMapEventParticipants(event.id, me);
   const moderators = useMapEventModerators(event.id);
@@ -517,7 +520,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       await reportMapEventStory(story, event, me.uid);
       setError('Story denunciado para revisão.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui denunciar o story.');
+      setError(err instanceof Error ? err.message : t('storyReportError'));
     }
   }
 
@@ -534,7 +537,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             setSelectedStoryId('');
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui apagar o story.');
+          setError(err instanceof Error ? err.message : t('storyDeleteError'));
         }
       },
       title: 'Apagar story?',
@@ -561,7 +564,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         delete next[story.id];
         return next;
       });
-      setError(err instanceof Error ? err.message : 'Não consegui curtir o story.');
+      setError(err instanceof Error ? err.message : t('storyLikeError'));
     }
   }
 
@@ -578,9 +581,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         if (!message) return;
         try {
           await sendMessage(match.id, me.uid, `Story: ${message}`, me.displayName);
-          setError('Mensagem enviada.');
+          setError(t('messageSent'));
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+          setError(err instanceof Error ? err.message : t('messageSendError'));
         }
       },
       title: 'Comentar story',
@@ -628,7 +631,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     } catch (err) {
       setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
       setText(cleanText);
-      setError(err instanceof Error ? err.message : 'Não consegui enviar a mensagem.');
+      setError(err instanceof Error ? err.message : t('messageSendError'));
     } finally {
       setSendingText(false);
     }
@@ -647,7 +650,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setPendingImageURL(URL.createObjectURL(preparedFile));
       setPendingImageFile(preparedFile);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui preparar a imagem.');
+      setError(err instanceof Error ? err.message : t('imagePrepareError'));
       return;
     } finally {
       setUploadingImage(false);
@@ -727,7 +730,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           );
         }
         if (imageURL.startsWith('blob:') || imagePath.startsWith('blob:')) {
-          throw new Error('Não consegui concluir o envio da imagem. Tente escolher a foto novamente.');
+          throw new Error(t('imageSendCompleteError'));
         }
         if (!imagePath && imageURL) imagePath = imageURL;
         await sendMapEventMessage({
@@ -741,7 +744,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
         }, 5000);
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Não consegui enviar a imagem.';
+        const message = err instanceof Error ? err.message : t('imageSendError');
         const retryable =
           message.toLowerCase().includes('fetch') ||
           message.toLowerCase().includes('network') ||
@@ -773,24 +776,24 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       await leaveMapEvent(event.id, me.uid);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui sair do chat.');
+      setError(err instanceof Error ? err.message : t('leaveChatError'));
     }
   }
 
   async function handleReport() {
     setDialog({
-      confirmLabel: 'Denunciar',
-      message: 'Enviar este chat para análise da moderação?',
+      confirmLabel: t('report'),
+      message: t('reportChatQuestion'),
       onConfirm: async () => {
         try {
           await reportMapEvent(event, me.uid, reportReason);
           setReportOpen(false);
           setError('Denúncia enviada para revisão.');
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui denunciar o chat.');
+          setError(err instanceof Error ? err.message : t('reportSendError'));
         }
       },
-      title: 'Denunciar chat',
+      title: t('reportChat'),
       type: 'confirm',
     });
   }
@@ -810,7 +813,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setError(`${reportProfile.displayName} foi denunciado para revisão.`);
       setReportProfile(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui denunciar essa pessoa.');
+      setError(err instanceof Error ? err.message : t('reportSendError'));
     } finally {
       setReportingProfile(false);
     }
@@ -828,14 +831,14 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setError(`Você recusou ${profile.displayName}.`);
       setPreviewProfile(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui registrar o dislike.');
+      setError(err instanceof Error ? err.message : t('dislikeError'));
     }
   }
 
 
   async function handleDelete() {
     setDialog({
-      confirmLabel: 'Excluir',
+      confirmLabel: t('delete'),
       destructive: true,
       message: 'Todas as mensagens dele serão removidas.',
       onConfirm: async () => {
@@ -844,10 +847,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           onDeleted?.(event.id);
           onClose();
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui excluir o chat.');
+          setError(err instanceof Error ? err.message : t('deleteChatError'));
         }
       },
-      title: 'Excluir este chat?',
+      title: t('deleteChatQuestion'),
       type: 'confirm',
     });
   }
@@ -859,7 +862,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setHandledJoinRequestIds((current) => new Set(current).add(profile.uid));
       setError(`${profile.displayName} foi aprovado para entrar no chat.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui aprovar a entrada.');
+      setError(err instanceof Error ? err.message : t('approveError'));
     } finally {
       setRequestActionUid('');
     }
@@ -872,7 +875,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setHandledJoinRequestIds((current) => new Set(current).add(profile.uid));
       setError(`Pedido de ${profile.displayName} recusado.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Não consegui recusar a entrada.');
+      setError(err instanceof Error ? err.message : t('rejectError'));
     } finally {
       setRequestActionUid('');
     }
@@ -889,7 +892,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           await setMapEventModerator(event.id, profile.uid, enabled);
           setError(enabled ? `${profile.displayName} agora é moderador.` : `${profile.displayName} não é mais moderador.`);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui atualizar moderador.');
+          setError(err instanceof Error ? err.message : t('moderatorUpdateError'));
         }
       },
       title: enabled ? 'Tornar moderador?' : 'Remover moderação?',
@@ -899,7 +902,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
 
   async function handleBan(profile: UserProfile) {
     setDialog({
-      confirmLabel: 'Banir',
+      confirmLabel: t('ban'),
       destructive: true,
       message: `${profile.displayName} será removido e não poderá entrar novamente neste chat.`,
       onConfirm: async () => {
@@ -908,34 +911,34 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           setActionProfile(null);
           setError(`${profile.displayName} foi banido.`);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui banir a pessoa.');
+          setError(err instanceof Error ? err.message : t('banError'));
         }
       },
-      title: 'Banir pessoa?',
+      title: t('banQuestion'),
       type: 'confirm',
     });
   }
 
   async function handleUnban(profile: UserProfile) {
     setDialog({
-      confirmLabel: 'Desbanir',
+      confirmLabel: t('unban'),
       message: `${profile.displayName} poderá pedir entrada ou entrar novamente, conforme as regras do chat.`,
       onConfirm: async () => {
         try {
           await unbanMapEventUser(event.id, profile.uid);
           setError(`${profile.displayName} foi desbanido.`);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui desbanir a pessoa.');
+          setError(err instanceof Error ? err.message : t('unbanError'));
         }
       },
-      title: 'Desbanir pessoa?',
+      title: t('unbanQuestion'),
       type: 'confirm',
     });
   }
 
   async function handleKick(profile: UserProfile) {
     setDialog({
-      confirmLabel: 'Expulsar',
+      confirmLabel: t('kick'),
       destructive: true,
       message: `${profile.displayName} será removido do chat, mas poderá entrar novamente depois.`,
       onConfirm: async () => {
@@ -944,17 +947,17 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           setActionProfile(null);
           setError(`${profile.displayName} foi expulso do chat.`);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui expulsar a pessoa.');
+          setError(err instanceof Error ? err.message : t('kickError'));
         }
       },
-      title: 'Expulsar do chat?',
+      title: t('kickQuestion'),
       type: 'confirm',
     });
   }
 
   function handleChangePassword() {
     setDialog({
-      confirmLabel: 'Salvar senha',
+      confirmLabel: t('savePassword'),
       inputKind: 'password',
       initialValue: '',
       message: 'Defina a nova senha deste chat.',
@@ -964,7 +967,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           await updateMapEventPassword(event.id, passwordHash);
           setError('Senha do chat atualizada.');
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui trocar a senha.');
+          setError(err instanceof Error ? err.message : t('changePasswordError'));
         }
       },
       title: 'Trocar senha',
@@ -981,7 +984,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   async function handleEditMessage(message: (typeof allMessages)[number]) {
     setOpenMessageMenuId('');
     setDialog({
-      confirmLabel: 'Salvar',
+      confirmLabel: t('save'),
       inputKind: 'text',
       initialValue: message.text,
       onConfirm: async (nextText) => {
@@ -989,10 +992,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         try {
           await editMapEventMessage(message, me.uid, nextText);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui editar a mensagem.');
+          setError(err instanceof Error ? err.message : t('editMessageError'));
         }
       },
-      title: 'Editar mensagem',
+      title: t('editMessage'),
       type: 'prompt',
     });
   }
@@ -1000,17 +1003,17 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   async function handleDeleteMessage(message: (typeof allMessages)[number]) {
     setOpenMessageMenuId('');
     setDialog({
-      confirmLabel: 'Excluir',
+      confirmLabel: t('delete'),
       destructive: true,
       message: 'Esta mensagem será removida do chat.',
       onConfirm: async () => {
         try {
           await deleteMapEventMessage(message, me.uid, canManage);
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Não consegui excluir a mensagem.');
+          setError(err instanceof Error ? err.message : t('deleteMessageError'));
         }
       },
-      title: 'Excluir mensagem?',
+      title: t('deleteMessageConfirm'),
       type: 'confirm',
     });
   }
@@ -1024,10 +1027,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             <div className="mb-4 flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="truncate text-lg font-semibold">{event.title}</h2>
-                <p className="mt-1 text-xs text-slate-400">Informações do chat</p>
+                <p className="mt-1 text-xs text-slate-400">{t('information')}</p>
               </div>
               <button
-                aria-label="Fechar informações"
+                aria-label={t('closeInfo')}
                 className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8"
                 onClick={() => setInfoOpen(false)}
                 type="button"
@@ -1037,18 +1040,18 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             </div>
             <div className="grid gap-3 text-sm">
               <div className="rounded-lg bg-white/8 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Criado por</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">{t('createdBy')}</p>
                 <p className="mt-1 text-slate-100">{creatorName}</p>
               </div>
               <div className="rounded-lg bg-white/8 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Descrição</p>
-                <p className="mt-1 whitespace-pre-wrap text-slate-100">{event.description || 'Chat local do mapa'}</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">{t('description')}</p>
+                <p className="mt-1 whitespace-pre-wrap text-slate-100">{event.description || t('chatLocalMap')}</p>
               </div>
               <div className="rounded-lg bg-white/8 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">Expiração</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-300">{t('expiration')}</p>
                 <p className="mt-1 text-slate-100">
                   {event.isPermanent
-                    ? 'Chat permanente'
+                    ? t('permanentChat')
                     : expiresAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                 </p>
               </div>
@@ -1077,7 +1080,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">{event.title}</p>
-                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · expira em 24h</p>
+                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · {t('expiresIn24h')}</p>
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryViewerOpen(false)} type="button">
                 <X className="h-4 w-4" />
@@ -1159,7 +1162,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               )}
               {selectedStory.creatorUid !== me.uid && matches.some((item) => item.users.includes(me.uid) && item.users.includes(selectedStory.creatorUid)) && (
                 <button
-                  aria-label="Enviar mensagem"
+                  aria-label={t('send')}
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => handleReplyStory(selectedStory)}
                   type="button"
@@ -1170,10 +1173,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             </div>
             <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-3 pb-[calc(var(--raddo-bottom-safe)+12px)]">
               <button className="h-10 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100" onClick={() => setStoryViewerOpen(false)} type="button">
-                Fechar
+                {t('close')}
               </button>
               <button
-                aria-label="Denunciar story"
+                aria-label={t('reportStory')}
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-300/20 bg-rose-300/10 text-sm font-semibold text-rose-100"
                 onClick={() => handleReportStory(selectedStory)}
                 type="button"
@@ -1232,7 +1235,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       {coverPreviewOpen && event.coverURL && (
         <div className="fixed inset-0 z-[1700] grid place-items-center bg-black/90 p-4 backdrop-blur-sm">
           <button
-            aria-label="Fechar capa"
+            aria-label={t('closeImage')}
             className="absolute right-4 top-[calc(env(safe-area-inset-top)+16px)] grid h-11 w-11 place-items-center rounded-full bg-white/10 text-white"
             onClick={() => setCoverPreviewOpen(false)}
             type="button"
@@ -1247,7 +1250,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           <div className="flex min-w-0 items-center gap-3">
             {event.coverURL && (
               <button
-                aria-label="Abrir capa do chat"
+                aria-label={t('openChatCover')}
                 className="grid h-10 w-10 shrink-0 overflow-hidden rounded-full border border-white/10 bg-white/8"
                 onClick={() => setCoverPreviewOpen(true)}
                 type="button"
@@ -1259,7 +1262,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           </div>
           <div className="relative flex shrink-0 gap-2" ref={headerMenuRef}>
             <button
-              aria-label="Pessoas no chat"
+              aria-label={t('peopleInChat')}
               className="relative grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
               onClick={() => setManagementView('people')}
               type="button"
@@ -1270,7 +1273,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               </span>
             </button>
             <button
-              aria-label="Opções do chat"
+              aria-label={t('chatOptions')}
               className="relative grid h-10 w-10 place-items-center rounded-lg bg-white/8 text-slate-100"
               onClick={() => setHeaderMenuOpen((current) => !current)}
               type="button"
@@ -1291,7 +1294,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   type="button"
                 >
                   <Info className="h-4 w-4 text-teal-300" />
-                  Informações
+                  {t('information')}
                 </button>
                 <button
                   className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
@@ -1302,7 +1305,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   type="button"
                 >
                   <MapPin className="h-4 w-4 text-teal-300" />
-                  Abrir localização
+                  {t('openLocation')}
                 </button>
                 {!isOwner && (
                   <button
@@ -1314,7 +1317,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     type="button"
                   >
                     <Megaphone className="h-4 w-4 text-amber-300" />
-                    Denunciar chat
+                    {t('reportChat')}
                   </button>
                 )}
                 {canManage && (
@@ -1328,7 +1331,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                       type="button"
                     >
                       <Shield className="h-4 w-4 text-teal-300" />
-                      Moderadores ({moderatorProfiles.length})
+                      {t('moderators')} ({moderatorProfiles.length})
                     </button>
                     <button
                       className="flex h-11 w-full items-center gap-2 rounded-lg px-3 text-left font-semibold hover:bg-white/8"
@@ -1350,7 +1353,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                       type="button"
                     >
                       <Users className="h-4 w-4 text-[#ff3f68]" />
-                      Pedidos ({visibleJoinRequests.length})
+                      {t('requests')} ({visibleJoinRequests.length})
                       {visibleJoinRequests.length > 0 && (
                         <span className="ml-auto h-2.5 w-2.5 rounded-full bg-[#ff3f68]" />
                       )}
@@ -1367,7 +1370,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     type="button"
                   >
                     <Edit3 className="h-4 w-4 text-teal-300" />
-                    Editar chat
+                    {t('editChat')}
                   </button>
                 )}
                 {canManage && (
@@ -1380,7 +1383,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     type="button"
                   >
                     <Shield className="h-4 w-4 text-teal-300" />
-                    Trocar senha
+                    {t('changePassword')}
                   </button>
                 )}
                 {(isOwner || canManageApp) && (
@@ -1393,7 +1396,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     type="button"
                   >
                     <Trash2 className="h-4 w-4" />
-                    Excluir chat
+                    {t('deleteChat')}
                   </button>
                 )}
                 <button
@@ -1405,12 +1408,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   type="button"
                 >
                   <LogOut className="h-4 w-4" />
-                  Sair do chat
+                  {t('leaveChat')}
                 </button>
               </div>
             )}
             <button
-              aria-label="Fechar"
+              aria-label={t('close')}
               className="grid h-10 w-10 place-items-center rounded-lg bg-white/8"
               onClick={onClose}
               type="button"
@@ -1423,9 +1426,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         {reportOpen && (
           <section className="border-b border-white/10 bg-slate-950/50 p-3">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <p className="text-sm font-semibold">Motivo da denúncia</p>
+              <p className="text-sm font-semibold">{t('reportReason')}</p>
               <button className="text-xs text-slate-300" onClick={() => setReportOpen(false)} type="button">
-                Fechar
+                {t('close')}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -1440,12 +1443,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   onClick={() => setReportReason(reason.value)}
                   type="button"
                 >
-                  {reason.label}
+                  {t(reason.value)}
                 </button>
               ))}
             </div>
             <button className="mt-3 h-10 w-full rounded-lg bg-teal-300 text-sm font-semibold text-slate-950" onClick={handleReport} type="button">
-              Enviar denúncia
+              {t('sendReport')}
             </button>
           </section>
         )}
@@ -1454,13 +1457,13 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             <section className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold">Denunciar usuário</h2>
+                  <h2 className="text-lg font-semibold">{t('reportUser')}</h2>
                   <p className="mt-1 text-sm text-slate-300">
                     Escolha o motivo para denunciar {reportProfile.displayName}. As últimas 10 mensagens dessa pessoa neste chat serão enviadas para análise.
                   </p>
                 </div>
                 <button
-                  aria-label="Fechar"
+                  aria-label={t('close')}
                   className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8"
                   onClick={() => setReportProfile(null)}
                   type="button"
@@ -1480,7 +1483,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     onClick={() => setReportReason(reason.value)}
                     type="button"
                   >
-                    {reason.label}
+                    {t(reason.value)}
                   </button>
                 ))}
               </div>
@@ -1527,7 +1530,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               </button>
             )}
             {storyGroups.length === 0 && (
-              <span className="rounded-lg bg-white/8 px-3 py-2 text-xs text-slate-300">Nenhum story neste chat.</span>
+              <span className="rounded-lg bg-white/8 px-3 py-2 text-xs text-slate-300">{t('noStoriesChat')}</span>
             )}
             {storyGroups.map((group) => {
               const allViewed = group.stories.every((story) => viewedStoryIds.has(story.id));
@@ -1552,7 +1555,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 )}
                 {story.id.startsWith('local-story-') && (
                   <span className="absolute inset-x-1 bottom-1 rounded bg-[#ff3f68] px-1 py-0.5 text-[8px] font-bold text-white">
-                    Publicando...
+                    {t('publishing')}
                   </span>
                 )}
               </button>
@@ -1592,7 +1595,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     canDelete={canDeleteMessage}
                     canDownload={canDownloadMessage}
                     canEdit={canEditMessage}
-                    copyLabel={isImageMessage ? 'Copiar link' : 'Copiar'}
+                    copyLabel={isImageMessage ? t('copyLink') : t('copy')}
                     copyValue={copyValue}
                     downloadFilename={downloadFilename}
                     downloadUrl={message.imageURL}
@@ -1605,7 +1608,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     onToggle={() => setOpenMessageMenuId((current) => (current === message.id ? '' : message.id))}
                     onViewOnceViewers={
                       mine && isImageMessage && message.viewOnce
-                        ? () => setStoryPeopleModal({ title: 'Quem viu a imagem', userIds: [...new Set(message.viewedBy.filter((uid) => uid !== message.senderUid))] })
+                        ? () => setStoryPeopleModal({ title: t('whoViewedImage'), userIds: [...new Set(message.viewedBy.filter((uid) => uid !== message.senderUid))] })
                         : undefined
                     }
                     onViewProfile={senderProfile ? () => setPreviewProfile(senderProfile) : undefined}
@@ -1628,11 +1631,11 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         viewOnce={message.viewOnce}
                       />
                     ) : message.messageType === 'image' ? (
-                      <p className="text-xs text-slate-300">Imagem indisponível.</p>
+                      <p className="text-xs text-slate-300">{t('imageUnavailable')}</p>
                     ) : (
                       <p>{message.text}</p>
                     )}
-                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">Enviando...</p>}
+                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">{t('sendingNow')}</p>}
                   </div>
                 </div>
               </div>
@@ -1648,10 +1651,10 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">
-                    {managementView === 'people' && 'Pessoas no chat'}
-                    {managementView === 'moderators' && 'Moderadores'}
-                    {managementView === 'banned' && 'Pessoas banidas'}
-                    {managementView === 'requests' && 'Pedidos para entrar'}
+                    {managementView === 'people' && t('peopleInChat')}
+                    {managementView === 'moderators' && t('moderators')}
+                    {managementView === 'banned' && t('bannedPeople')}
+                    {managementView === 'requests' && t('requests')}
                   </h2>
                   <p className="text-sm text-slate-300">
                     {managementView === 'people' && `${participants.length} pessoas participando`}
@@ -1661,7 +1664,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   </p>
                 </div>
                 <button
-                  aria-label="Fechar"
+                  aria-label={t('close')}
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                   onClick={() => setManagementView(null)}
                   type="button"
@@ -1680,7 +1683,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         <div className="flex items-center gap-3">
                           <ProfileAvatar profile={profile} />
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold">{isMe ? 'Você' : profile.displayName}</p>
+                            <p className="truncate text-sm font-semibold">{isMe ? t('you') : profile.displayName}</p>
                             <p className="truncate text-xs text-slate-300">{profileRole(profile)}</p>
                           </div>
                           {profileIsModerator && <Shield className="h-4 w-4 shrink-0 text-teal-300" />}
@@ -1694,7 +1697,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                           </button>
                           {!isMe && (
                             <button
-                              aria-label={`Denunciar ${profile.displayName}`}
+                              aria-label={t('reportPerson', { name: profile.displayName })}
                               className="raddo-report-person-button grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-amber-300/15 text-amber-100"
                               onClick={() => handleReportProfile(profile)}
                               type="button"
@@ -1718,7 +1721,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   })}
 
                 {managementView === 'moderators' && moderatorProfiles.length === 0 && (
-                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhum moderador escolhido ainda.</p>
+                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">{t('noModerators')}</p>
                 )}
                 {managementView === 'moderators' &&
                   moderatorProfiles.map((profile) => (
@@ -1743,7 +1746,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   ))}
 
                 {managementView === 'banned' && bannedUsers.length === 0 && (
-                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma pessoa banida.</p>
+                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">{t('noBannedPeople')}</p>
                 )}
                 {managementView === 'banned' &&
                   bannedUsers.map((profile) => (
@@ -1760,13 +1763,13 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         onClick={() => handleUnban(profile)}
                         type="button"
                       >
-                        Desbanir
+                        {t('unban')}
                       </button>
                     </article>
                   ))}
 
                 {managementView === 'requests' && visibleJoinRequests.length === 0 && (
-                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhum pedido pendente.</p>
+                  <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">{t('noPendingRequests')}</p>
                 )}
                 {managementView === 'requests' &&
                   visibleJoinRequests.map((profile) => (
@@ -1785,7 +1788,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                           onClick={() => handleApprove(profile)}
                           type="button"
                         >
-                          {requestActionUid === profile.uid ? 'Processando...' : 'Aprovar'}
+                          {requestActionUid === profile.uid ? t('processAction') : t('approve')}
                         </button>
                         <button
                           className="h-10 rounded-lg bg-rose-400 text-xs font-semibold text-white disabled:cursor-wait disabled:opacity-60"
@@ -1793,7 +1796,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                           onClick={() => handleReject(profile)}
                           type="button"
                         >
-                          {requestActionUid === profile.uid ? 'Processando...' : 'Recusar'}
+                          {requestActionUid === profile.uid ? t('processAction') : t('reject')}
                         </button>
                       </div>
                     </article>
@@ -1811,7 +1814,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   <p className="text-sm text-slate-300">Escolha uma ação para esta pessoa.</p>
                 </div>
                 <button
-                  aria-label="Fechar"
+                  aria-label={t('close')}
                   className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
                   onClick={() => setActionProfile(null)}
                   type="button"
@@ -1837,7 +1840,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   onClick={() => handleReportProfile(actionProfile)}
                   type="button"
                 >
-                  Denunciar usuário
+                  {t('reportUser')}
                 </button>
                 {canManage && event.creatorUid !== actionProfile.uid && (
                   <button
@@ -1847,7 +1850,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                   >
                     <span className="inline-flex items-center justify-center gap-2">
                       <UserMinus className="h-4 w-4" />
-                      Expulsar do chat
+                      {t('kickFromChat')}
                     </span>
                   </button>
                 )}
@@ -1857,7 +1860,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     onClick={() => handleBan(actionProfile)}
                     type="button"
                   >
-                    Banir pessoa
+                    {t('banPerson')}
                   </button>
                 )}
               </div>
@@ -1876,7 +1879,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           />
         )}
         <form className="flex gap-2 border-t border-white/10 p-3" onSubmit={handleSubmit}>
-          <label className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100 ${sendingText ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title="Abrir câmera">
+          <label className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/8 text-slate-100 ${sendingText ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`} title={t('openCamera')}>
             <Camera className="h-5 w-5" />
             <input accept="image/*" capture="environment" className="hidden" disabled={uploadingImage || sendingText} onChange={handleImageUpload} type="file" />
           </label>
@@ -1888,7 +1891,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             className="min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950/60 px-3 outline-none disabled:cursor-wait disabled:opacity-70"
             disabled={sendingText}
             onChange={(inputEvent) => setText(inputEvent.target.value)}
-            placeholder={sendingText ? 'Enviando...' : 'Mensagem no evento'}
+            placeholder={sendingText ? t('sendingNow') : t('message')}
             value={text}
           />
           <button

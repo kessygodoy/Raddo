@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "i18n:audit": "node scripts/audit-i18n.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "android:sync": "npm run build && npx cap sync android",
     "android:debug-apk": "npm run build && npx cap sync android && powershell -ExecutionPolicy Bypass -File scripts/build-debug-apk-with-version.ps1",

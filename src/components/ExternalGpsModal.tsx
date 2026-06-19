@@ -1,5 +1,6 @@
 import { MapPin, Navigation, X } from 'lucide-react';
 import type { LatLng } from '../types';
+import { useI18n } from '../i18n';
 
 type Props = {
   location: LatLng;
@@ -12,6 +13,7 @@ function openExternalUrl(url: string) {
 }
 
 export default function ExternalGpsModal({ location, onClose, title }: Props) {
+  const { t } = useI18n();
   const encodedTitle = encodeURIComponent(title);
   const query = `${location.lat},${location.lng}`;
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${query}&query_place_id=${encodedTitle}`;
@@ -26,13 +28,11 @@ export default function ExternalGpsModal({ location, onClose, title }: Props) {
             <div className="mb-3 grid h-11 w-11 place-items-center rounded-xl bg-teal-300 text-slate-950">
               <MapPin className="h-5 w-5" />
             </div>
-            <h2 className="text-lg font-semibold">Abrir localização</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              Abrir o local de {title} em um app externo de GPS?
-            </p>
+            <h2 className="text-lg font-semibold">{t('openLocation')}</h2>
+            <p className="mt-1 text-sm text-slate-300">{t('openLocationQuestion', { title })}</p>
           </div>
           <button
-            aria-label="Fechar"
+            aria-label={t('close')}
             className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
             onClick={onClose}
             type="button"
@@ -48,7 +48,7 @@ export default function ExternalGpsModal({ location, onClose, title }: Props) {
             type="button"
           >
             <Navigation className="h-4 w-4" />
-            Abrir no Google Maps
+            {t('openGoogleMaps')}
           </button>
           <button
             className="flex h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
@@ -56,18 +56,17 @@ export default function ExternalGpsModal({ location, onClose, title }: Props) {
             type="button"
           >
             <Navigation className="h-4 w-4" />
-            Abrir no Waze
+            {t('openWaze')}
           </button>
           <button
             className="h-10 rounded-lg border border-white/10 bg-white/8 text-xs font-semibold text-slate-300"
             onClick={() => openExternalUrl(geoUrl)}
             type="button"
           >
-            Escolher outro app de GPS
+            {t('chooseOtherGps')}
           </button>
         </div>
       </section>
     </div>
   );
 }
-

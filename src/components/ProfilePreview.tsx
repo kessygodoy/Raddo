@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Flag, Heart, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
@@ -19,12 +19,19 @@ type Props = {
 
 export default function ProfilePreview({ me, profile, onClose, onDislike, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
   const { t } = useI18n();
-  const photos = profile.photos.length ? profile.photos : [profile.photoURL];
+  const photos = useMemo(() => {
+    const orderedPhotos = [profile.photoURL, ...profile.photos].filter(Boolean);
+    return [...new Set(orderedPhotos)];
+  }, [profile.photoURL, profile.photos]);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [reportMessage, setReportMessage] = useState('');
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const photo = photos[photoIndex] ?? profile.photoURL;
+
+  useEffect(() => {
+    setPhotoIndex(0);
+  }, [profile.uid]);
 
   function previousPhoto() {
     setPhotoIndex((current) => (current === 0 ? photos.length - 1 : current - 1));
@@ -136,12 +143,12 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
                         onClick={() => setReportReason(reason.value)}
                         type="button"
                       >
-                        {reason.label}
+                        {t(reason.value)}
                       </button>
                     ))}
                   </div>
                   <button className="h-10 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950" onClick={handleReport} type="button">
-                    Enviar denúncia
+                    {t('sendReport')}
                   </button>
                 </div>
               )}

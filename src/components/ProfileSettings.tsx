@@ -28,10 +28,7 @@ import {
   X,
 } from 'lucide-react';
 import {
-  formatGender,
-  formatInterest,
   formatRadius,
-  formatRelationshipGoal,
   formatSexuality,
   genderOptions,
   interestOptions,
@@ -43,6 +40,7 @@ import { deleteMyAccount } from '../accountDeletion';
 import { languageOptions, useI18n } from '../i18n';
 import { supabase } from '../supabase';
 import type { AppLanguage, AppTheme, GenderIdentity, ProfileInterest, RelationshipGoal, Sexuality, UserProfile } from '../types';
+import { legalSections } from '../legalContent';
 import { unblockProfile, undoProfileInteraction, useBlockedProfiles, useProfileInteractions } from '../hooks/useMatches';
 import { writeCachedAuthProfile } from '../hooks/useAuthProfile';
 import PremiumScreen from './PremiumScreen';
@@ -282,7 +280,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       }
     } catch (error) {
       setDraft(previousDraft);
-      setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar a imagem.');
+      setSaveStatus(error instanceof Error ? error.message : t('imageCheckError'));
     }
     setUploadingProfilePhoto(false);
     event.target.value = '';
@@ -304,7 +302,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         const uploadedUrl = await uploadFile(file, 'profile-carousel');
         if (uploadedUrl) uploadedUrls.push(uploadedUrl);
       } catch (error) {
-        setSaveStatus(error instanceof Error ? error.message : 'Não consegui verificar uma imagem.');
+        setSaveStatus(error instanceof Error ? error.message : t('imageCheckError'));
       }
     }
 
@@ -533,7 +531,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     try {
       await saveNotificationPreferences(profile.uid, nextPreferences);
     } catch (error) {
-      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui salvar as notificações.');
+      setSafetyMessage(error instanceof Error ? error.message : t('notificationsSaveError'));
     }
   }
 
@@ -551,7 +549,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       await undoProfileInteraction(profile.uid, uid);
       setInteractionsMessage('Interação desfeita. Essa pessoa pode aparecer novamente.');
     } catch (error) {
-      setInteractionsMessage(error instanceof Error ? error.message : 'Não consegui desfazer essa interação.');
+      setInteractionsMessage(error instanceof Error ? error.message : t('interactionUndoError'));
     }
   }
 
@@ -608,7 +606,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       return;
     }
 
-    const confirmed = window.confirm(`Banir este usuário do app?\n\n${targetUid}`);
+    const confirmed = window.confirm(`${t('banAppConfirm')}\n\n${targetUid}`);
     if (!confirmed) return;
 
     try {
@@ -621,19 +619,19 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
       setBanReason('');
       setSafetyMessage('Usuário banido do app.');
     } catch (error) {
-      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui banir o usuário.');
+      setSafetyMessage(error instanceof Error ? error.message : t('banError'));
     }
   }
 
   async function handleUnbanAppUser(uid: string) {
-    const confirmed = window.confirm('Desbanir este usuário do app?');
+    const confirmed = window.confirm(t('unbanAppConfirm'));
     if (!confirmed) return;
 
     try {
       await unbanAppUser(uid);
       setSafetyMessage('Usuário desbanido do app.');
     } catch (error) {
-      setSafetyMessage(error instanceof Error ? error.message : 'Não consegui desbanir o usuário.');
+      setSafetyMessage(error instanceof Error ? error.message : t('unbanError'));
     }
   }
 
@@ -656,9 +654,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               </div>
             </div>
             <div className="p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Anúncio</p>
-              <h2 className="mt-1 text-lg font-semibold">Vídeo patrocinado</h2>
-              <p className="mt-2 text-sm text-slate-300">Assista ao vídeo para ver suas interações por 5 minutos.</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">{t('ad')}</p>
+              <h2 className="mt-1 text-lg font-semibold">{t('sponsoredVideo')}</h2>
+              <p className="mt-2 text-sm text-slate-300">{t('interactionsAdHelp')}</p>
               <div className="mt-4 h-1 overflow-hidden rounded-full bg-white/10">
                 <div className="h-full w-full rounded-full bg-teal-300" />
               </div>
@@ -668,10 +666,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   onClick={() => setInteractionsAdOpen(false)}
                   type="button"
                 >
-                  Agora não
+                  {t('notNow')}
                 </button>
                 <button className="h-11 rounded-lg bg-teal-300 font-semibold text-slate-950" onClick={finishInteractionsAd} type="button">
-                  Ver interações
+                  {t('viewInteractions')}
                 </button>
               </div>
             </div>
@@ -683,8 +681,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold">Foto de perfil</h2>
-                <p className="text-xs text-slate-400">Escolha como quer atualizar sua foto.</p>
+                <h2 className="text-base font-semibold">{t('photoProfileTitle')}</h2>
+                <p className="text-xs text-slate-400">{t('chooseUpdateMethod')}</p>
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setProfilePhotoPickerOpen(false)} type="button">
                 <X className="h-4 w-4" />
@@ -694,7 +692,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <label className="grid h-24 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-center text-sm font-semibold">
                 <span className="grid gap-2 justify-items-center">
                   <Camera className="h-5 w-5 text-[#ff3f68]" />
-                  Câmera
+                  {t('camera')}
                 </span>
                 <input
                   accept="image/*"
@@ -710,7 +708,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <label className="grid h-24 cursor-pointer place-items-center rounded-lg border border-white/10 bg-white/8 text-center text-sm font-semibold">
                 <span className="grid gap-2 justify-items-center">
                   <Upload className="h-5 w-5 text-[#ff3f68]" />
-                  Galeria
+                  {t('gallery')}
                 </span>
                 <input
                   accept={GALLERY_IMAGE_ACCEPT}
@@ -738,14 +736,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           title={t('saveSettings')}
           type="button"
         >
-          <span className="truncate">{manualSaving ? t('saving') : 'Salvar'}</span>
+          <span className="truncate">{manualSaving ? t('saving') : t('save')}</span>
         </button>
       )}
       {photoViewerOpen && draft.photoURL && (
         <div className="fixed inset-0 z-[1800] flex flex-col bg-black text-white">
           <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-end p-4 pt-[calc(env(safe-area-inset-top)+12px)]">
             <button
-              aria-label="Fechar foto"
+              aria-label={t('closeImage')}
               className="pointer-events-auto grid h-11 w-11 place-items-center rounded-full bg-slate-950/80 text-white shadow-2xl backdrop-blur"
               onClick={() => setPhotoViewerOpen(false)}
               type="button"
@@ -754,7 +752,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
             </button>
           </div>
           <button
-            aria-label="Fechar visualização da foto"
+            aria-label={t('closeImage')}
             className="min-h-0 flex-1 px-0 pb-[calc(env(safe-area-inset-bottom)+12px)] pt-[calc(env(safe-area-inset-top)+12px)]"
             onClick={() => setPhotoViewerOpen(false)}
             type="button"
@@ -767,7 +765,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         <div className="relative h-72 overflow-hidden bg-slate-950/60 md:h-80">
           {draft.photoURL ? (
             <button
-              aria-label="Abrir foto de perfil"
+              aria-label={t('openProfile')}
               className="block h-full w-full cursor-zoom-in text-left"
               onClick={() => setPhotoViewerOpen(true)}
               type="button"
@@ -829,7 +827,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
             <section className="min-w-0 rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <Camera className="h-4 w-4 text-teal-300" />
-                Perfil, fotos e bio
+                {t('profilePhotosBio')}
               </div>
               <div className="grid gap-3">
                 <label className="grid gap-1 text-sm">
@@ -851,16 +849,16 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   />
                 </label>
                 <div className="grid gap-2 text-sm">
-                  <span>Fotos</span>
+                  <span>{t('photos')}</span>
                   <div className="grid gap-2 sm:grid-cols-2">
                     <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Camera className="h-4 w-4 text-teal-300" />
-                      {uploadingCarouselPhotos ? 'Enviando...' : 'Abrir câmera'}
+                      {uploadingCarouselPhotos ? t('uploading') : t('openCamera')}
                       <input accept="image/*" capture="environment" className="hidden" onChange={uploadCarouselPhotos} type="file" />
                     </label>
                     <label className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3">
                       <Upload className="h-4 w-4 text-teal-300" />
-                      {uploadingCarouselPhotos ? 'Enviando...' : 'Escolher fotos'}
+                      {uploadingCarouselPhotos ? t('uploading') : t('choosePhoto')}
                       <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" multiple onChange={uploadCarouselPhotos} type="file" />
                     </label>
                   </div>
@@ -906,7 +904,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 flex items-center gap-2 text-sm font-semibold">
                   <MapPin className="h-4 w-4 text-teal-300" />
-                  Preferências
+                  {t('preferences')}
                 </div>
                 <div className="grid shrink-0 grid-cols-2 rounded-full border border-white/10 bg-slate-950/40 p-1 text-xs font-semibold">
                   <button
@@ -914,14 +912,14 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     onClick={() => setPreferenceStep('find')}
                     type="button"
                   >
-                    Quem encontrar
+                    {t('whoToFind')}
                   </button>
                   <button
                     className={`rounded-full px-3 py-2 ${preferenceStep === 'identity' ? 'bg-teal-300 text-slate-950' : 'text-slate-300'}`}
                     onClick={() => setPreferenceStep('identity')}
                     type="button"
                   >
-                    Eu sou
+                    {t('iAm')}
                   </button>
                 </div>
               </div>
@@ -931,7 +929,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 <input
                   className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-slate-500"
                   onChange={(event) => setPreferenceSearch(event.target.value)}
-                  placeholder="Pesquisar opções"
+                  placeholder={t('searchOptions')}
                   value={preferenceSearch}
                 />
               </label>
@@ -939,27 +937,27 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 {preferenceStep === 'find' ? (
                   <>
                     <ModernChipGrid
-                      helper="Você verá pessoas que combinam com estes grupos."
+                      helper={t('findGroupsHelp')}
                       iconKind="people"
                       query={preferenceSearch}
                       selected={draft.lookingFor}
-                      title="Quem você quer encontrar?"
+                      title={t('whoWantFind')}
                       values={genderOptions}
                       onChange={(value, checked) => updateDraft('lookingFor', toggleArrayValue(draft.lookingFor, value, checked))}
                     />
                     <ModernChipGrid
-                      helper="Escolha entre 3 e 8 para melhorar o matching."
+                      helper={t('interestsHelp')}
                       iconKind="interest"
                       maxSelected={8}
                       minRecommended={3}
                       query={preferenceSearch}
                       selected={draft.interests}
-                      title="Interesses para conversar"
+                      title={t('conversationInterests')}
                       values={interestOptions}
                       onChange={(value, checked) => updateDraft('interests', limitedInterests(draft.interests, value, checked))}
                     />
                     <ModernChipGrid
-                      helper="Ajuda a encontrar pessoas com a mesma intenção."
+                      helper={t('goalHelp')}
                       iconKind="goal"
                       query={preferenceSearch}
                       selected={draft.relationshipGoals}
@@ -1130,7 +1128,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 Interações
               </div>
               <p className="mb-4 text-sm text-slate-300">
-                Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem no Descobrir. Desfaça para liberar o perfil outra vez.
+                {t('interactionInfo')}
               </p>
               {!interactionsUnlocked ? (
                 <div className="rounded-lg border border-white/10 bg-slate-950/60 p-4">
@@ -1148,7 +1146,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   {!profile.isPremium && interactionUnlockMinutes > 0 && (
                     <p className="mb-3 rounded-lg bg-teal-300/10 p-2 text-xs text-teal-100">Interações liberadas por {interactionUnlockMinutes} min.</p>
                   )}
-                  {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">Nenhuma interação registrada ainda.</p>}
+                  {interactions.length === 0 && <p className="rounded-lg bg-slate-950/60 p-3 text-sm text-slate-300">{t('noInteractions')}</p>}
                   <div className="grid gap-2">
                     {interactions.map((interaction) => (
                       <article className="flex items-center gap-3 rounded-lg bg-slate-950/60 p-3" key={`${interaction.type}-${interaction.profile.uid}`}>
@@ -1239,7 +1237,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <div className="grid gap-2">
                 <PrivacyToggle
                   checked={draft.appearInCards}
-                  description="Quando desligado, seu perfil não aparece no Descobrir nem em Pessoas próximas."
+                  description={t('discoverVisibilityOff')}
                   label="Aparecer no Descobrir"
                   onChange={(checked) => updateDraft('appearInCards', checked)}
                 />
@@ -1313,9 +1311,9 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <UserX className="h-4 w-4 text-teal-300" />
-                Pessoas bloqueadas
+                {t('blockedPeople')}
               </div>
-              {blockedProfiles.length === 0 && <p className="text-sm text-slate-300">Nenhuma pessoa bloqueada.</p>}
+              {blockedProfiles.length === 0 && <p className="text-sm text-slate-300">{t('noBlockedPeople')}</p>}
               <div className="grid gap-2">
                 {blockedProfiles.map((blockedProfile) => (
                   <article className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={blockedProfile.uid}>
@@ -1359,7 +1357,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     Moderação do app
                   </div>
                   <button
-                    aria-label="Fechar moderação"
+                    aria-label={t('closeModeration')}
                     className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/8 text-slate-100"
                     onClick={() => setModerationOpen(false)}
                     type="button"
@@ -1432,7 +1430,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   </div>
                   <div className="grid max-h-72 overflow-auto">
                     {!moderationCases.loading && reportedModerationCases.length === 0 && (
-                      <p className="p-3 text-sm text-slate-300">Nenhuma denúncia com mensagens recentes.</p>
+                      <p className="p-3 text-sm text-slate-300">{t('noReportsWithMessages')}</p>
                     )}
                     {reportedModerationCases.map((item) => (
                       <button
@@ -1464,8 +1462,8 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                             {item.source === 'image'
                               ? 'Imagem em moderação'
                               : item.contextType === 'map_chat'
-                                ? 'Chat denunciado'
-                                : 'Perfil denunciado'} · {item.reason}
+                                ? t('reportedChat')
+                                : t('reportedProfile')} · {item.reason}
                           </p>
                         </div>
                       </button>
@@ -1479,7 +1477,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-white">{selectedModerationCase.userDisplayName}</p>
                         {selectedModerationCase.contextType === 'map_chat' && (
-                          <p className="text-xs text-amber-100">Chat denunciado · {selectedModerationCase.recentMessages.length} mensagens salvas</p>
+                          <p className="text-xs text-amber-100">{t('reportedChat')} · {t('reportedMessagesSaved', { count: selectedModerationCase.recentMessages.length })}</p>
                         )}
                         <p className="text-xs text-slate-300">
                           UID: <span className="font-mono">{selectedModerationCase.reportedUid}</span>
@@ -1487,7 +1485,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                         <p className="text-xs text-amber-100">{selectedModerationCase.reason}</p>
                       </div>
                       <button
-                        aria-label="Fechar caso"
+                        aria-label={t('closeCase')}
                         className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/8 text-slate-100"
                         onClick={() => setSelectedModerationCase(null)}
                         type="button"
@@ -1502,7 +1500,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     )}
                     <div className="grid max-h-80 gap-2 overflow-auto p-3">
                       {selectedModerationCase.recentMessages.length === 0 && (
-                        <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhuma mensagem recente salva neste caso.</p>
+                        <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">{t('noRecentCaseMessages')}</p>
                       )}
                       {selectedModerationCase.recentMessages.map((message, index) => (
                         <article className="max-w-[86%] rounded-lg bg-slate-900 px-3 py-2 text-sm text-slate-100" key={message.id || index}>
@@ -1515,7 +1513,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                           {message.imageUrl ? (
                             <CachedMediaImage className="max-h-48 object-cover" fallbackClassName="max-h-48 rounded-lg" src={message.imageUrl} />
                           ) : (
-                            <p>{message.text || 'Mensagem sem texto'}</p>
+                            <p>{message.text || t('messageWithoutText')}</p>
                           )}
                         </article>
                       ))}
@@ -1547,7 +1545,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                     onClick={handleBanAppUser}
                     type="button"
                   >
-                    Banir usuário do app
+                    {t('banUserApp')}
                   </button>
                 </div>
                 </>
@@ -1564,7 +1562,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                       </span>
                     </div>
                     {!appBannedUsers.loading && appBannedUsers.bannedUsers.length === 0 && (
-                      <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Nenhum usuário banido no app.</p>
+                      <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">{t('noBannedAppUsers')}</p>
                     )}
                     {appBannedUsers.bannedUsers.map((bannedUser) => (
                       <article className="flex items-center gap-3 rounded-lg border border-white/10 bg-[#07111f] p-3" key={bannedUser.uid}>
@@ -1587,7 +1585,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                           onClick={() => handleUnbanAppUser(bannedUser.uid)}
                           type="button"
                         >
-                          Desbanir
+                          {t('unban')}
                         </button>
                       </article>
                     ))}
@@ -1671,25 +1669,25 @@ type OptionGridProps<T extends string> = {
 
 function PreferenceSummary({ draft }: { draft: UserProfile }) {
   const { t } = useI18n();
-  const visibleTo = draft.lookingFor.length > 0 ? draft.lookingFor.map((item) => t(item)).join(', ') : 'ninguém';
+  const visibleTo = draft.lookingFor.length > 0 ? draft.lookingFor.map((item) => t(item)).join(', ') : t('nobody');
   const identities = (draft.genderIdentities.length ? draft.genderIdentities : [draft.gender]).map((item) => t(item)).join(', ');
   const interestSummary =
-    draft.interests.length > 0 ? draft.interests.map((item) => formatInterest(item)).join(', ') : 'adicione interesses';
+    draft.interests.length > 0 ? draft.interests.map((item) => t(item)).join(', ') : t('addInterests');
   const goalSummary =
     draft.relationshipGoals.length > 0
-      ? draft.relationshipGoals.map((item) => formatRelationshipGoal(item)).join(', ')
-      : 'sem objetivo definido';
+      ? draft.relationshipGoals.map((item) => t(item)).join(', ')
+      : t('noGoalDefined');
 
   return (
     <div className="mb-4 grid min-w-0 gap-2 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
       <div className="flex min-w-0 flex-wrap gap-2">
-        <SummaryPill label="Eu sou" value={identities || formatGender(draft.gender)} />
-        <SummaryPill label="Quero ver" value={visibleTo} />
-        <SummaryPill label="Interesses" value={interestSummary} />
-        <SummaryPill label="Objetivo" value={goalSummary} />
+        <SummaryPill label={t('iAm')} value={identities || t(draft.gender)} />
+        <SummaryPill label={t('wantToSee')} value={visibleTo} />
+        <SummaryPill label={t('interestsLabel')} value={interestSummary} />
+        <SummaryPill label={t('goalLabel')} value={goalSummary} />
       </div>
       <p className="text-xs leading-relaxed text-slate-300">
-        Você aparecerá para pessoas interessadas em {identities || 'seu perfil'}.
+        {t('appearForInterested', { identity: identities || t('yourProfile') })}
       </p>
     </div>
   );
@@ -1733,7 +1731,10 @@ function PrivacyToggle({
 }
 
 function TermsAndPrivacyContent() {
-  const sections = [
+  const { language } = useI18n();
+  const sections = legalSections[language];
+  /*
+  const legacySections = [
     {
       title: '1. Uso do Raddo',
       text:
@@ -1800,6 +1801,7 @@ function TermsAndPrivacyContent() {
         'Para dúvidas, denúncias, privacidade ou exclusão de dados, entre em contato pelo canal de suporte informado na página do app ou nos materiais oficiais do Raddo.',
     },
   ];
+  */
 
   return (
     <div className="mt-4 max-h-96 space-y-4 overflow-auto rounded-lg border border-white/10 bg-slate-950/50 p-4 text-sm text-slate-300">
@@ -1960,7 +1962,7 @@ function OptionGrid<T extends string>({ title, values, selected, onChange, onCle
         <div>
           <span className="font-semibold text-slate-100">{title}</span>
           <p className="mt-0.5 text-xs text-slate-400">
-            {selectedCount === 0 ? 'Nenhuma opção selecionada' : `${selectedCount} selecionada${selectedCount > 1 ? 's' : ''}`}
+            {selectedCount === 0 ? t('noOptionSelected') : t('selectedOptions', { count: selectedCount })}
           </p>
         </div>
         <div className="flex shrink-0 gap-2">

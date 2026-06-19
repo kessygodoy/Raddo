@@ -60,6 +60,7 @@ type EventStoryRow = {
 
 export type MapEventNotification = {
   count?: number;
+  eventId?: string;
   groupKey?: string;
   id: string;
   text: string;
@@ -380,6 +381,7 @@ export function useMapEventNotifications(uid: string | undefined) {
         const title = eventTitles.get(eventId) ?? 'Chat do mapa';
         return {
           count: sortedRows.length,
+          eventId,
           groupKey: `map-message:${eventId}`,
           id: `map-message:${eventId}:${latest.id}`,
           text: sortedRows.length === 1 ? `${latest.sender_name}: ${latest.text || 'Nova mensagem'}` : `${title} tem ${sortedRows.length} mensagens novas`,

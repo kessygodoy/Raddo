@@ -18,6 +18,7 @@ type Props = {
 
 type NotificationItem = {
   count?: number;
+  eventId?: string;
   groupKey: string;
   id: string;
   matchId?: string;
@@ -104,6 +105,7 @@ export default function NotificationsPanel({
         .filter((notification) => (notification.tone === 'message' ? safePreferences.connectionMessages : true))
         .map<NotificationItem>((notification) => ({
           count: notification.count,
+          eventId: notification.eventId,
           groupKey: notification.groupKey || String(notification.id || ''),
           id: String(notification.id || ''),
           target: 'map',
@@ -184,7 +186,7 @@ export default function NotificationsPanel({
               key={notification.id}
               onClick={() => {
                 if (notification.target === 'map') {
-                  onOpenMapNotification(notification.id);
+                  onOpenMapNotification(notification.eventId || notification.id);
                   return;
                 }
                 if (notification.matchId) onOpenNotification(notification.id, notification.matchId);

@@ -1,0 +1,5 @@
+Localizacao atualiza mais rapido no mapa.
+Tema verde aplicado nos botoes principais.
+Notificacoes de grupos abrem o chat correto.
+Foto principal aparece primeiro nos perfis.
+Melhorias no painel de moderacao e estabilidade.

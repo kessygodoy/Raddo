@@ -21,6 +21,7 @@ import { prepareChatImageFile, uploadChatMedia } from '../chatImages';
 import PendingChatImageModal from './PendingChatImageModal';
 import MessageActionsMenu from './MessageActionsMenu';
 import CachedMediaImage from './CachedMediaImage';
+import { useI18n } from '../i18n';
 
 function isVideoMedia(url: string, text?: string) {
   return text === 'Vídeo' || /\.(mp4|mov|m4v|webm|ogg)(\?|#|$)/i.test(url);
@@ -61,6 +62,7 @@ type Props = {
 };
 
 export default function ChatPanel({ currentProfile, currentUid, matches, onOpenMatch, onShowList, openMatchId }: Props) {
+  const { language, t } = useI18n();
   const sortedMatches = useSortedMatches(matches);
   const profilesByUid = useMatchProfiles(sortedMatches, currentUid);
   const [cachedConversations, setCachedConversations] = useState<Record<string, CachedConversation>>(() => readConversationCache(currentUid));
@@ -86,7 +88,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
   const activeOtherUid = activeMatch?.users.find((uid) => uid !== currentUid) ?? activeMatch?.users[0] ?? '';
   const activeCachedConversation = activeMatch ? cachedConversations[activeMatch.id] : undefined;
   const activeProfile = profilesByUid[activeOtherUid];
-  const activeDisplayName = activeProfile?.displayName ?? activeCachedConversation?.displayName ?? 'Perfil salvo';
+  const activeDisplayName = activeProfile?.displayName ?? activeCachedConversation?.displayName ?? t('savedProfile');
   const activePhotoURL = activeProfile?.photos?.[0] || activeProfile?.photoURL || activeCachedConversation?.photoURL || '';
   const visibleMessages = useMemo(
     () => {
@@ -122,7 +124,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
         next[match.id] = {
           createdAt: match.createdAt,
           displayName: displayName === 'Carregando perfil' ? '' : displayName,
-          lastMessage: match.lastMessage || previous?.lastMessage || 'Conversa iniciada',
+          lastMessage: match.lastMessage || previous?.lastMessage || t('conversationStarted'),
           lastMessageAt: match.lastMessageAt ?? previous?.lastMessageAt ?? null,
           matchId: match.id,
           otherUid,
@@ -138,7 +140,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
       window.localStorage.setItem(conversationCacheKey(currentUid), JSON.stringify(next));
       return next;
     });
-  }, [currentUid, profilesByUid, sortedMatches]);
+  }, [currentUid, profilesByUid, sortedMatches, t]);
   useEffect(() => {
     if (openMatchId && handledOpenMatchIdRef.current !== openMatchId && sortedMatches.some((match) => match.id === openMatchId)) {
       handledOpenMatchIdRef.current = openMatchId;
@@ -251,7 +253,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     } catch (error) {
       setOptimisticMessages((current) => current.filter((message) => message.id !== nextMessage.id));
       setText(cleanText);
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a mensagem.');
+      setActionMessage(error instanceof Error ? error.message : t('messageSendError'));
     } finally {
       setSendingText(false);
     }
@@ -267,88 +269,88 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
   async function handleUnmatch() {
     if (!activeMatch || !activeOtherUid) return;
     setMatchMenuOpen(false);
-    const confirmed = window.confirm('Desfazer este match? A conversa será removida.');
+    const confirmed = window.confirm(t('unmatchConfirm'));
     if (!confirmed) return;
 
     try {
       await unmatchProfile(currentUid, activeOtherUid, activeMatch.id);
-      setActionMessage('Match desfeito.');
+      setActionMessage(t('matchUndone'));
       setActiveMatchId('');
       setChatView('list');
       onShowList?.();
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui desfazer o match.');
+      setActionMessage(error instanceof Error ? error.message : t('unmatchError'));
     }
   }
 
   async function handleBlock() {
     if (!activeMatch || !activeOtherUid) return;
     setMatchMenuOpen(false);
-    const confirmed = window.confirm('Bloquear esta pessoa? Ela também vai sumir do mapa para você.');
+    const confirmed = window.confirm(t('blockConfirm'));
     if (!confirmed) return;
 
     try {
       await blockProfile(currentUid, activeOtherUid, activeMatch.id);
-      setActionMessage('Pessoa bloqueada.');
+      setActionMessage(t('blockedSuccess'));
       setActiveMatchId('');
       setChatView('list');
       onShowList?.();
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui bloquear essa pessoa.');
+      setActionMessage(error instanceof Error ? error.message : t('blockError'));
     }
   }
 
   async function handleReport() {
     if (!activeOtherUid) return;
     setMatchMenuOpen(false);
-    const confirmed = window.confirm('Denunciar esta conversa para análise?');
+    const confirmed = window.confirm(t('reportConversationConfirm'));
     if (!confirmed) return;
 
     try {
       await reportProfile(currentUid, activeOtherUid, 'chat_conversation');
-      setActionMessage('Denuncia enviada.');
+      setActionMessage(t('reportSent'));
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar a denúncia.');
+      setActionMessage(error instanceof Error ? error.message : t('reportSendError'));
     }
   }
 
   async function handlePreviewLike(profile: UserProfile) {
     const result = await trySendLike(currentProfile, profile.uid);
-    setActionMessage(result.ok ? (result.matched ? `Deu match com ${profile.displayName}.` : `Você curtiu ${profile.displayName}.`) : result.message);
+    setActionMessage(result.ok ? (result.matched ? t('matchedWith', { name: profile.displayName }) : t('likedPerson', { name: profile.displayName })) : result.message);
     if (result.ok) setPreviewProfile(null);
   }
 
   async function handlePreviewDislike(profile: UserProfile) {
     try {
       await sendDislike(currentUid, profile.uid);
-      setActionMessage(`Você recusou ${profile.displayName}.`);
+      setActionMessage(t('declinedPerson', { name: profile.displayName }));
       setPreviewProfile(null);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui registrar o dislike.');
+      setActionMessage(error instanceof Error ? error.message : t('dislikeError'));
     }
   }
 
   async function handleEditMessage(message: Message) {
     setOpenMessageMenuId('');
-    const nextText = window.prompt('Editar mensagem', message.text);
+    const nextText = window.prompt(t('editMessage'), message.text);
     if (!nextText || nextText.trim() === message.text.trim()) return;
 
     try {
       await editMessage(message, currentUid, nextText);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui editar a mensagem.');
+      setActionMessage(error instanceof Error ? error.message : t('editMessageError'));
     }
   }
 
   async function handleDeleteMessage(message: Message) {
     setOpenMessageMenuId('');
-    const confirmed = window.confirm('Excluir esta mensagem?');
+    const confirmed = window.confirm(t('deleteMessageConfirm'));
     if (!confirmed) return;
 
     try {
       await deleteMessage(message, currentUid);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : 'Não consegui excluir a mensagem.');
+      setActionMessage(error instanceof Error ? error.message : t('deleteMessageError'));
     }
   }
 
@@ -367,14 +369,14 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
         <div className="fixed inset-0 z-[1600] grid place-items-end bg-black/65 p-4 pb-[calc(var(--raddo-bottom-safe)+16px)] pt-[calc(env(safe-area-inset-top)+16px)] backdrop-blur-sm sm:place-items-center">
           <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h2 className="text-base font-semibold">Quem viu a imagem</h2>
+              <h2 className="text-base font-semibold">{t('whoViewedImage')}</h2>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setViewOnceViewerIds(null)} type="button">
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="grid max-h-[55dvh] gap-2 overflow-auto scrollbar-hidden">
               {viewOnceViewerIds.length === 0 ? (
-                <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">Ninguém viu ainda.</p>
+                <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">{t('nobodyViewed')}</p>
               ) : (
                 viewOnceViewerIds.map((uid) => {
                   const profile = uid === currentUid ? currentProfile : profilesByUid[uid];
@@ -390,8 +392,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                       }}
                       type="button"
                     >
-                      <span className="min-w-0 truncate font-semibold">{profile?.displayName ?? 'Pessoa do Raddo'}</span>
-                      {profile && <span className="text-xs text-slate-400">Ver bio</span>}
+                      <span className="min-w-0 truncate font-semibold">{profile?.displayName ?? t('raddoPerson')}</span>
+                      {profile && <span className="text-xs text-slate-400">{t('viewBio')}</span>}
                     </button>
                   );
                 })
@@ -403,7 +405,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
       {chatView === 'list' && (
       <aside className="flex min-h-0 flex-1 flex-col bg-[#0f1f2d]">
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-          <h1 className="text-lg font-semibold">Conversas</h1>
+          <h1 className="text-lg font-semibold">{t('conversations')}</h1>
           <MessageCircle className="h-5 w-5 text-teal-300" />
         </div>
 
@@ -412,7 +414,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
             <Search className="h-4 w-4" />
             <input
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-500"
-              placeholder="Pesquisar conversa"
+              placeholder={t('searchConversation')}
               type="search"
             />
           </label>
@@ -426,8 +428,8 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                   <MessageCircle className="h-5 w-5" />
                 </span>
                 <div>
-                  <p className="text-sm font-semibold">Nenhum match ainda.</p>
-                  <p className="mt-1 text-xs text-slate-400">Quando uma conversa começar, ela fica salva aqui.</p>
+                  <p className="text-sm font-semibold">{t('noMatchesYet')}</p>
+                  <p className="mt-1 text-xs text-slate-400">{t('conversationStartHint')}</p>
                 </div>
               </div>
             </div>
@@ -437,9 +439,9 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
             const profile = profilesByUid[otherUid];
             const cached = cachedConversations[match.id];
             const isActive = activeMatchId === match.id;
-            const displayName = profile?.displayName ?? cached?.displayName ?? 'Perfil salvo';
+            const displayName = profile?.displayName ?? cached?.displayName ?? t('savedProfile');
             const photoURL = profile?.photos?.[0] || profile?.photoURL || cached?.photoURL || '';
-            const lastMessage = match.lastMessage || cached?.lastMessage || 'Conversa iniciada';
+            const lastMessage = match.lastMessage || cached?.lastMessage || t('conversationStarted');
             const lastMessageAt = match.lastMessageAt ?? cached?.lastMessageAt ?? null;
 
             return (
@@ -495,7 +497,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                 </button>
                 {lastMessageAt && (
                   <span className={`ml-auto shrink-0 text-[11px] ${isActive ? 'text-slate-800' : 'text-slate-400'}`}>
-                    {new Date(lastMessageAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(lastMessageAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 )}
               </article>
@@ -511,7 +513,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
           <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-[#0f1f2d] px-3 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <button
-                aria-label="Voltar para conversas"
+                aria-label={t('backToConversations')}
                 className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-100 transition hover:bg-white/8"
                 onClick={() => {
                   setChatView('list');
@@ -525,7 +527,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
               </button>
               <div className="flex min-w-0 items-center gap-2 text-left">
                 <button
-                  aria-label="Abrir perfil"
+                  aria-label={t('openProfile')}
                   className="shrink-0"
                   disabled={!activeProfile}
                   onClick={() => {
@@ -551,7 +553,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
             </div>
             <div className="relative shrink-0">
               <button
-                aria-label="Opções da conversa"
+                aria-label={t('conversationOptions')}
                 className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-100 transition hover:bg-white/12"
                 onClick={() => setMatchMenuOpen((current) => !current)}
                 type="button"
@@ -566,7 +568,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                     type="button"
                   >
                     <Flag className="h-4 w-4" />
-                    Denunciar
+                    {t('report')}
                   </button>
                   <button
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-100 transition hover:bg-white/8"
@@ -574,7 +576,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                     type="button"
                   >
                     <UserX className="h-4 w-4" />
-                    Desfazer match
+                    {t('undoMatch')}
                   </button>
                   <button
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-100 transition hover:bg-rose-400/15"
@@ -582,7 +584,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                     type="button"
                   >
                     <ShieldOff className="h-4 w-4" />
-                    Bloquear pessoa
+                    {t('blockPerson')}
                   </button>
                 </div>
               )}
@@ -595,7 +597,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
           onScroll={handleMessageAreaScroll}
           ref={messageAreaRef}
         >
-          {!activeMatch && <p className="text-sm text-slate-300">Escolha uma conversa para começar.</p>}
+          {!activeMatch && <p className="text-sm text-slate-300">{t('chooseConversation')}</p>}
           {visibleMessages.map((message) => {
             const mine = message.senderUid === currentUid;
             const canEditMessage = mine && message.messageType === 'text';
@@ -622,7 +624,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                     canDelete={canDeleteMessage}
                     canDownload={canDownloadMessage}
                     canEdit={canEditMessage}
-                    copyLabel={isImageMessage ? 'Copiar link' : 'Copiar'}
+                    copyLabel={isImageMessage ? t('copyLink') : t('copy')}
                     copyValue={copyValue}
                     downloadFilename={downloadFilename}
                     downloadUrl={message.imageURL}
@@ -657,14 +659,14 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                         viewOnce={message.viewOnce}
                       />
                     ) : message.messageType === 'image' ? (
-                      <p className="text-xs text-slate-300">Imagem indisponível.</p>
+                      <p className="text-xs text-slate-300">{t('imageUnavailable')}</p>
                     ) : (
                       message.text
                     )}
-                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">Enviando...</p>}
+                    {message.id.startsWith('local-image-') && <p className="mt-1 text-[10px] font-semibold text-slate-400">{t('sendingNow')}</p>}
                   </div>
                   <span className={`ml-2 align-baseline text-[10px] ${mine ? 'text-slate-600' : 'text-slate-400'}`}>
-                    {new Date(message.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(message.createdAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' })}
                   </span>
                 </div>
               </div>
@@ -683,11 +685,11 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
           <input
             className="min-w-0 flex-1 rounded-full border border-white/10 bg-[#07111f] px-4 text-sm outline-none placeholder:text-slate-500"
             onChange={(event) => setText(event.target.value)}
-            placeholder="Mensagem"
+            placeholder={t('message')}
             value={text}
           />
           <button
-            aria-label="Enviar"
+            aria-label={t('send')}
             className="grid h-11 w-11 place-items-center rounded-full bg-teal-300 text-slate-950 disabled:cursor-wait disabled:opacity-60"
             disabled={sendingText || !text.trim()}
             type="submit"

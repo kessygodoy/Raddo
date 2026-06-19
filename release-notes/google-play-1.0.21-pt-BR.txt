@@ -1,0 +1,4 @@
+Novos idiomas: Chinês simplificado e Hindi.
+Mais telas e mensagens traduzidas em todos os idiomas.
+Enviar capa de chat agora abre corretamente a galeria.
+Melhorias de estabilidade em chats, stories e perfis.
