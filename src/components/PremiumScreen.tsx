@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { BadgeCheck, Eye, Heart, MessageCircle, RefreshCcw, ShoppingBag, VideoOff } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { UserProfile } from '../types';
-import { buyPremiumSubscription, restorePremiumSubscription } from '../premiumBilling';
+import { buyPremiumSubscription, premiumBillingAvailable, restorePremiumSubscription } from '../premiumBilling';
 
 type Props = {
   onPremiumActivated?: () => void;
@@ -17,15 +17,25 @@ const perks = [
   { icon: MessageCircle, title: 'premiumPerkMapChatsTitle', text: 'premiumPerkMapChatsText' },
 ];
 
-const PREMIUM_SIGNUP_AVAILABLE = false;
 const WEB_PREMIUM_CHECKOUT_URL = import.meta.env.VITE_WEB_PREMIUM_CHECKOUT_URL as string | undefined;
 
 export default function PremiumScreen({ onPremiumActivated, profile }: Props) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [premiumSignupAvailable, setPremiumSignupAvailable] = useState(false);
   const isNativeApp = Capacitor.isNativePlatform();
   const canUseWebCheckout = !isNativeApp && Boolean(WEB_PREMIUM_CHECKOUT_URL);
+
+  useEffect(() => {
+    let active = true;
+    void premiumBillingAvailable().then((available) => {
+      if (active) setPremiumSignupAvailable(available);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleBuyPremium() {
     setBusy(true);
@@ -97,9 +107,9 @@ export default function PremiumScreen({ onPremiumActivated, profile }: Props) {
                 ? 'Assinatura mensal de R$4,99 processada pela Google Play. Cancele quando quiser pela Play Store.'
                 : 'Assinatura mensal de R$4,99 para a versão web. Após o pagamento, o Premium é liberado na sua conta Raddo.'}
             </p>
-            {!profile.isPremium && isNativeApp && !PREMIUM_SIGNUP_AVAILABLE && (
+            {!profile.isPremium && isNativeApp && !premiumSignupAvailable && (
               <div className="mt-4 rounded-lg border border-amber-300/30 bg-amber-300/10 p-3 text-sm text-amber-50">
-                Ainda não é possível assinar o Premium. A assinatura será liberada assim que a Google Play permitir ativar o produto mensal do Raddo.
+                A assinatura Premium está sendo configurada na Google Play e será liberada aqui automaticamente quando estiver pronta.
               </div>
             )}
             {!profile.isPremium && canUseWebCheckout && (
@@ -120,7 +130,7 @@ export default function PremiumScreen({ onPremiumActivated, profile }: Props) {
                 Checkout web ainda não configurado.
               </div>
             )}
-            {!profile.isPremium && isNativeApp && PREMIUM_SIGNUP_AVAILABLE && (
+            {!profile.isPremium && isNativeApp && premiumSignupAvailable && (
               <div className="mt-4 grid gap-2 sm:grid-cols-2">
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-60"

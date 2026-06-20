@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Browser } from '@capacitor/browser';
+import { Capacitor } from '@capacitor/core';
 import { Chrome, Mail, MapPin, Radar, ShieldCheck, Sparkles } from 'lucide-react';
 import { getAuthRedirectUrl } from '../authCallback';
 import { useI18n } from '../i18n';
@@ -19,25 +21,55 @@ export default function AuthOverlay({ theme }: Props) {
   const [password, setPassword] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
 
+  useEffect(() => {
+    const completeLogin = () => setBusy(false);
+    const failLogin = (event: Event) => {
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message;
+      setError(message || t('oauthCallbackError'));
+      setBusy(false);
+    };
+
+    window.addEventListener('raddo:auth-callback-complete', completeLogin);
+    window.addEventListener('raddo:auth-callback-error', failLogin);
+
+    const browserFinished = Capacitor.isNativePlatform()
+      ? Browser.addListener('browserFinished', () => setBusy(false))
+      : null;
+
+    return () => {
+      window.removeEventListener('raddo:auth-callback-complete', completeLogin);
+      window.removeEventListener('raddo:auth-callback-error', failLogin);
+      void browserFinished?.then((listener) => listener.remove());
+    };
+  }, [t]);
+
   async function handleGoogleLogin() {
     setBusy(true);
     setError('');
     clearRaddoDisposableLocalCaches();
     clearRaddoAuthBlockingLocalCaches();
 
-    const { error: googleError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: getAuthRedirectUrl(),
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'select_account',
+    try {
+      const isNative = Capacitor.isNativePlatform();
+      const { data, error: googleError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: getAuthRedirectUrl(),
+          skipBrowserRedirect: isNative,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'select_account',
+          },
         },
-      },
-    });
+      });
 
-    if (googleError) {
-      setError(googleError.message);
+      if (googleError) throw googleError;
+      if (isNative) {
+        if (!data.url) throw new Error(t('oauthCallbackError'));
+        await Browser.open({ url: data.url });
+      }
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : t('oauthCallbackError'));
       setBusy(false);
     }
   }

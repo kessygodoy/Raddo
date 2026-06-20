@@ -42,6 +42,8 @@ import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
 import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } from '../storageImages';
 import { useI18n } from '../i18n';
+import { Capacitor } from '@capacitor/core';
+import { pickNativeImage, type ImagePickerSource } from '../nativeImagePicker';
 
 type Props = {
   matches: Match[];
@@ -1074,6 +1076,10 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const storyRecordingBytesRef = useRef(0);
   const storyRecordingDiscardRef = useRef(false);
   const storyRecordingPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const createCoverCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const createCoverGalleryInputRef = useRef<HTMLInputElement | null>(null);
+  const editCoverCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const editCoverGalleryInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setLocalEvents(readLocalMapEvents(me.uid));
@@ -1822,13 +1828,11 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     return () => window.clearTimeout(timer);
   }, [selectedStory?.id, storyProgressKey, storyViewerOpen, storyViewerStories]);
 
-  async function uploadEventCover(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+  async function uploadEventCoverFile(file: File) {
     if (!file) return;
 
     if (!me.isPremium) {
       setEventError('Apenas usuários Premium podem adicionar capa ao chat.');
-      event.target.value = '';
       return;
     }
 
@@ -1839,7 +1843,6 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
 
     if (isDemoMode) {
       setUploadingCover(false);
-      event.target.value = '';
       return;
     }
 
@@ -1855,12 +1858,34 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     }
 
     setUploadingCover(false);
-    event.target.value = '';
   }
 
-  async function uploadEditingEventCover(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadEventCover(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
+    if (file) await uploadEventCoverFile(file);
+  }
+
+  async function chooseEventCover(source: ImagePickerSource, editing = false) {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const file = await pickNativeImage(source);
+        if (editing) await uploadEditingEventCoverFile(file);
+        else await uploadEventCoverFile(file);
+      } catch (pickerError) {
+        const message = pickerError instanceof Error ? pickerError.message : '';
+        if (!/cancel|cancelad|canceled/i.test(message)) setEventError(message || t('photoUploadError'));
+      }
+      return;
+    }
+
+    const input = editing
+      ? source === 'camera' ? editCoverCameraInputRef.current : editCoverGalleryInputRef.current
+      : source === 'camera' ? createCoverCameraInputRef.current : createCoverGalleryInputRef.current;
+    input?.click();
+  }
+
+  async function uploadEditingEventCoverFile(file: File) {
     if (!file || !editingEvent) return;
 
     const previousCoverURL = editingCoverURL;
@@ -1887,6 +1912,12 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     } finally {
       setUploadingEditingCover(false);
     }
+  }
+
+  async function uploadEditingEventCover(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) await uploadEditingEventCoverFile(file);
   }
 
   async function handleCreateEvent(submitEvent: FormEvent) {
@@ -2973,16 +3004,26 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 {t('chatCover')}
                 {me.isPremium ? (
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
+                    <button
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm"
+                      disabled={creatingEvent || uploadingCover}
+                      onClick={() => void chooseEventCover('camera')}
+                      type="button"
+                    >
                       <Camera className="h-4 w-4 text-teal-300" />
                       {uploadingCover ? t('uploadingCover') : t('openCamera')}
-                      <input accept="image/*" capture="environment" className="hidden" disabled={creatingEvent} onChange={uploadEventCover} type="file" />
-                    </span>
-                    <span className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm">
+                    </button>
+                    <button
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm"
+                      disabled={creatingEvent || uploadingCover}
+                      onClick={() => void chooseEventCover('gallery')}
+                      type="button"
+                    >
                       <ImagePlus className="h-4 w-4 text-teal-300" />
                       {uploadingCover ? t('uploadingCover') : eventCoverURL ? t('changeCover') : t('sendCover')}
-                      <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" disabled={creatingEvent} onChange={uploadEventCover} type="file" />
-                    </span>
+                    </button>
+                    <input accept="image/*" capture="environment" className="hidden" onChange={uploadEventCover} ref={createCoverCameraInputRef} type="file" />
+                    <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" onChange={uploadEventCover} ref={createCoverGalleryInputRef} type="file" />
                   </div>
                 ) : (
                   <span className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-center text-sm text-slate-300">
@@ -3127,36 +3168,25 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 {t('chatCover')}
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    className="relative h-11 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
+                    className="h-11 rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
                     disabled={uploadingEditingCover}
+                    onClick={() => void chooseEventCover('camera', true)}
                     type="button"
                   >
                     <Camera className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
                     {t('openCamera')}
-                    <input
-                      accept={GALLERY_IMAGE_ACCEPT}
-                      capture="environment"
-                      className="absolute inset-0 cursor-pointer opacity-0"
-                      disabled={uploadingEditingCover}
-                      onChange={uploadEditingEventCover}
-                      type="file"
-                    />
                   </button>
                   <button
-                    className="relative h-11 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
+                    className="h-11 rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
                     disabled={uploadingEditingCover}
+                    onClick={() => void chooseEventCover('gallery', true)}
                     type="button"
                   >
                     <ImagePlus className="mr-2 inline h-4 w-4 text-[#ff3f68]" />
                     {t('sendCover')}
-                    <input
-                      accept="image/*"
-                      className="absolute inset-0 cursor-pointer opacity-0"
-                      disabled={uploadingEditingCover}
-                      onChange={uploadEditingEventCover}
-                      type="file"
-                    />
                   </button>
+                  <input accept="image/*" capture="environment" className="hidden" onChange={uploadEditingEventCover} ref={editCoverCameraInputRef} type="file" />
+                  <input accept={GALLERY_IMAGE_ACCEPT} className="hidden" onChange={uploadEditingEventCover} ref={editCoverGalleryInputRef} type="file" />
                 </div>
                 {editingCoverURL && (
                   <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">

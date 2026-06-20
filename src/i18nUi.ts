@@ -26,6 +26,7 @@ export const uiDictionaries: Record<AppLanguage, Dictionary> = {
     photoUploadError: 'Não consegui enviar a foto.', premiumSubscribeError: 'Não consegui iniciar a assinatura.', premiumRestoreError: 'Não consegui restaurar sua assinatura.',
     interactionsAdHelp: 'Assista ao vídeo para ver suas interações por 5 minutos.', viewInteractions: 'Ver interações', whoToFind: 'Quem encontrar', searchOptions: 'Pesquisar opções', whoWantFind: 'Quem você quer encontrar?', findGroupsHelp: 'Você verá pessoas que combinam com estes grupos.', conversationInterests: 'Interesses para conversar', interestsHelp: 'Escolha entre 3 e 8 para melhorar o matching.', goalHelp: 'Ajuda a encontrar pessoas com a mesma intenção.', reportedMessagesSaved: '{count} mensagens salvas',
     rejectPerson: 'Recusar {name}', reportPerson: 'Denunciar {name}', interactionInfo: 'Pessoas que você curtiu ou recusou não aparecem novamente em Pessoas próximas nem no Descobrir. Desfaça para liberar o perfil outra vez.', discoverVisibilityOff: 'Quando desligado, seu perfil não aparece no Descobrir nem em Pessoas próximas.',
+    oauthCallbackError: 'Não foi possível concluir o login com Google. Tente novamente.',
   },
   'en-US': {
     cancel: 'Cancel', save: 'Save', delete: 'Delete', edit: 'Edit', report: 'Report', send: 'Send', camera: 'Camera', gallery: 'Gallery', message: 'Message', conversations: 'Conversations',
@@ -50,6 +51,7 @@ export const uiDictionaries: Record<AppLanguage, Dictionary> = {
     photoUploadError: 'Could not upload the photo.', premiumSubscribeError: 'Could not start the subscription.', premiumRestoreError: 'Could not restore your subscription.',
     interactionsAdHelp: 'Watch the video to view your interactions for 5 minutes.', viewInteractions: 'View interactions', whoToFind: 'Who to find', searchOptions: 'Search options', whoWantFind: 'Who do you want to meet?', findGroupsHelp: 'You will see people who match these groups.', conversationInterests: 'Conversation interests', interestsHelp: 'Choose 3 to 8 to improve matching.', goalHelp: 'Helps find people with the same intention.', reportedMessagesSaved: '{count} messages saved',
     rejectPerson: 'Pass on {name}', reportPerson: 'Report {name}', interactionInfo: 'People you liked or passed on will not appear again in Nearby people or Discover. Undo the interaction to make the profile available again.', discoverVisibilityOff: 'When disabled, your profile does not appear in Discover or Nearby people.',
+    oauthCallbackError: 'Could not complete Google sign-in. Try again.',
   },
   es: {
     cancel: 'Cancelar', save: 'Guardar', delete: 'Eliminar', edit: 'Editar', report: 'Denunciar', send: 'Enviar', camera: 'Cámara', gallery: 'Galería', message: 'Mensaje', conversations: 'Conversaciones',
@@ -74,6 +76,7 @@ export const uiDictionaries: Record<AppLanguage, Dictionary> = {
     photoUploadError: 'No pude subir la foto.', premiumSubscribeError: 'No pude iniciar la suscripción.', premiumRestoreError: 'No pude restaurar tu suscripción.',
     interactionsAdHelp: 'Mira el video para ver tus interacciones durante 5 minutos.', viewInteractions: 'Ver interacciones', whoToFind: 'A quién encontrar', searchOptions: 'Buscar opciones', whoWantFind: '¿A quién quieres encontrar?', findGroupsHelp: 'Verás personas que coincidan con estos grupos.', conversationInterests: 'Intereses para conversar', interestsHelp: 'Elige entre 3 y 8 para mejorar el matching.', goalHelp: 'Ayuda a encontrar personas con la misma intención.', reportedMessagesSaved: '{count} mensajes guardados',
     rejectPerson: 'Rechazar a {name}', reportPerson: 'Denunciar a {name}', interactionInfo: 'Las personas que aceptaste o rechazaste no vuelven a aparecer en Personas cercanas ni en Descubrir. Deshaz la interacción para liberar el perfil.', discoverVisibilityOff: 'Cuando está desactivado, tu perfil no aparece en Descubrir ni en Personas cercanas.',
+    oauthCallbackError: 'No se pudo completar el inicio de sesión con Google. Inténtalo de nuevo.',
   },
   'zh-CN': {
     cancel: '取消', save: '保存', delete: '删除', edit: '编辑', report: '举报', send: '发送', camera: '相机', gallery: '图库', message: '消息', conversations: '对话',
@@ -98,6 +101,7 @@ export const uiDictionaries: Record<AppLanguage, Dictionary> = {
     photoUploadError: '无法上传照片。', premiumSubscribeError: '无法开始订阅。', premiumRestoreError: '无法恢复订阅。',
     interactionsAdHelp: '观看视频后可查看互动 5 分钟。', viewInteractions: '查看互动', whoToFind: '寻找对象', searchOptions: '搜索选项', whoWantFind: '你想认识谁？', findGroupsHelp: '你会看到符合这些群体的人。', conversationInterests: '聊天兴趣', interestsHelp: '选择 3 到 8 项以改善匹配。', goalHelp: '帮助找到意向相同的人。', reportedMessagesSaved: '已保存 {count} 条消息',
     rejectPerson: '略过 {name}', reportPerson: '举报 {name}', interactionInfo: '你喜欢或略过的人不会再次显示在附近的人或发现中。撤销互动即可重新显示该资料。', discoverVisibilityOff: '关闭后，你的资料不会显示在发现或附近的人中。',
+    oauthCallbackError: '无法完成 Google 登录，请重试。',
   },
   'hi-IN': {
     cancel: 'रद्द करें', save: 'सहेजें', delete: 'हटाएँ', edit: 'संपादित करें', report: 'रिपोर्ट करें', send: 'भेजें', camera: 'कैमरा', gallery: 'गैलरी', message: 'संदेश', conversations: 'बातचीत',
@@ -122,5 +126,6 @@ export const uiDictionaries: Record<AppLanguage, Dictionary> = {
     photoUploadError: 'फ़ोटो अपलोड नहीं की जा सकी।', premiumSubscribeError: 'सदस्यता शुरू नहीं की जा सकी।', premiumRestoreError: 'आपकी सदस्यता बहाल नहीं की जा सकी।',
     interactionsAdHelp: 'अपनी इंटरैक्शन 5 मिनट देखने के लिए वीडियो देखें।', viewInteractions: 'इंटरैक्शन देखें', whoToFind: 'किसे खोजना है', searchOptions: 'विकल्प खोजें', whoWantFind: 'आप किससे मिलना चाहते हैं?', findGroupsHelp: 'इन समूहों से मेल खाने वाले लोग आपको दिखेंगे।', conversationInterests: 'बातचीत की रुचियाँ', interestsHelp: 'बेहतर मैचिंग के लिए 3 से 8 चुनें।', goalHelp: 'समान इरादे वाले लोगों को खोजने में मदद करता है।', reportedMessagesSaved: '{count} संदेश सहेजे गए',
     rejectPerson: '{name} को अस्वीकार करें', reportPerson: '{name} को रिपोर्ट करें', interactionInfo: 'जिन लोगों को आपने पसंद या अस्वीकार किया है वे आस-पास या खोज में फिर नहीं दिखेंगे। प्रोफ़ाइल फिर उपलब्ध करने के लिए इंटरैक्शन वापस लें।', discoverVisibilityOff: 'बंद होने पर आपकी प्रोफ़ाइल खोज या आस-पास के लोगों में नहीं दिखती।',
+    oauthCallbackError: 'Google साइन-इन पूरा नहीं हो सका। फिर प्रयास करें।',
   },
 };

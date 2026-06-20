@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.105.3';
 
 type VerifyPremiumRequest = {
+  action?: 'status' | 'verify';
   packageName?: string;
   productId?: string;
   purchaseToken?: string;
@@ -14,7 +15,6 @@ const corsHeaders = {
 const ACTIVE_STATES = new Set([
   'SUBSCRIPTION_STATE_ACTIVE',
   'SUBSCRIPTION_STATE_IN_GRACE_PERIOD',
-  'SUBSCRIPTION_STATE_ON_HOLD',
 ]);
 
 function jsonResponse(body: unknown, status = 200) {
@@ -133,6 +133,11 @@ function latestExpiry(subscription: Record<string, unknown>) {
   return new Date(Math.max(...expiries)).toISOString();
 }
 
+async function expectedAccountId(uid: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(uid));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return jsonResponse({ error: 'Method not allowed' }, 405);
@@ -143,6 +148,7 @@ Deno.serve(async (req) => {
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     const expectedPackageName = Deno.env.get('GOOGLE_PLAY_PACKAGE_NAME') || 'com.raddo.app';
     const expectedProductId = Deno.env.get('GOOGLE_PLAY_PREMIUM_PRODUCT_ID') || 'raddo_premium_monthly';
+    const googlePlayConfigured = Boolean(Deno.env.get('GOOGLE_PLAY_CLIENT_EMAIL') && Deno.env.get('GOOGLE_PLAY_PRIVATE_KEY'));
 
     if (!supabaseUrl || !anonKey || !serviceRoleKey) throw new Error('Missing Supabase env vars');
 
@@ -154,6 +160,8 @@ Deno.serve(async (req) => {
     if (userError || !userData.user) return jsonResponse({ error: 'Não autenticado.' }, 401);
 
     const body = await req.json() as VerifyPremiumRequest;
+    if (body.action === 'status') return jsonResponse({ configured: googlePlayConfigured, ok: true });
+    if (!googlePlayConfigured) return jsonResponse({ error: 'A validação da Google Play ainda não foi configurada.' }, 503);
     const packageName = body.packageName || expectedPackageName;
     const productId = body.productId || expectedProductId;
     const purchaseToken = body.purchaseToken?.trim();
@@ -164,6 +172,27 @@ Deno.serve(async (req) => {
 
     const accessToken = await createGoogleAccessToken();
     const subscription = await getGoogleSubscription({ accessToken, packageName, purchaseToken });
+    const lineItems = Array.isArray(subscription.lineItems) ? subscription.lineItems as Array<Record<string, unknown>> : [];
+    if (!lineItems.some((item) => item.productId === expectedProductId)) {
+      return jsonResponse({ error: 'A compra não corresponde ao Premium do Raddo.' }, 400);
+    }
+    const externalIdentifiers = subscription.externalAccountIdentifiers as Record<string, unknown> | undefined;
+    const purchaseAccountId = typeof externalIdentifiers?.obfuscatedExternalAccountId === 'string'
+      ? externalIdentifiers.obfuscatedExternalAccountId
+      : '';
+    if (purchaseAccountId && purchaseAccountId !== await expectedAccountId(userData.user.id)) {
+      return jsonResponse({ error: 'Esta assinatura pertence a outra conta do Raddo.' }, 403);
+    }
+
+    const { data: existingPurchase } = await serviceClient
+      .from('premium_subscriptions')
+      .select('user_uid')
+      .eq('purchase_token', purchaseToken)
+      .maybeSingle();
+    if (existingPurchase?.user_uid && existingPurchase.user_uid !== userData.user.id) {
+      return jsonResponse({ error: 'Esta assinatura já está vinculada a outra conta do Raddo.' }, 409);
+    }
+
     const subscriptionState = typeof subscription.subscriptionState === 'string' ? subscription.subscriptionState : 'UNKNOWN';
     const expiresAt = latestExpiry(subscription);
     const isPremium = ACTIVE_STATES.has(subscriptionState) && (!expiresAt || Date.parse(expiresAt) > Date.now());

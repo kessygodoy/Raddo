@@ -41,8 +41,9 @@ public class RaddoBillingPlugin extends Plugin implements PurchasesUpdatedListen
   @PluginMethod
   public void purchasePremium(PluginCall call) {
     String productId = call.getString("productId", DEFAULT_PREMIUM_PRODUCT_ID);
+    String obfuscatedAccountId = call.getString("obfuscatedAccountId", "");
 
-    ensureConnected(call, () -> queryPremiumProduct(productId, call));
+    ensureConnected(call, () -> queryPremiumProduct(productId, obfuscatedAccountId, call));
   }
 
   @PluginMethod
@@ -65,7 +66,7 @@ public class RaddoBillingPlugin extends Plugin implements PurchasesUpdatedListen
     });
   }
 
-  private void queryPremiumProduct(String productId, PluginCall call) {
+  private void queryPremiumProduct(String productId, String obfuscatedAccountId, PluginCall call) {
     QueryProductDetailsParams.Product product = QueryProductDetailsParams.Product.newBuilder()
       .setProductId(productId)
       .setProductType(BillingClient.ProductType.SUBS)
@@ -99,9 +100,12 @@ public class RaddoBillingPlugin extends Plugin implements PurchasesUpdatedListen
         .setOfferToken(offers.get(0).getOfferToken())
         .build();
 
-      BillingFlowParams flowParams = BillingFlowParams.newBuilder()
-        .setProductDetailsParamsList(Collections.singletonList(productDetailsParams))
-        .build();
+      BillingFlowParams.Builder flowParamsBuilder = BillingFlowParams.newBuilder()
+        .setProductDetailsParamsList(Collections.singletonList(productDetailsParams));
+      if (!obfuscatedAccountId.isEmpty()) {
+        flowParamsBuilder.setObfuscatedAccountId(obfuscatedAccountId);
+      }
+      BillingFlowParams flowParams = flowParamsBuilder.build();
 
       purchaseCall = call;
       BillingResult launchResult = billingClient.launchBillingFlow(getActivity(), flowParams);

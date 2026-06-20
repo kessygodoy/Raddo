@@ -842,6 +842,54 @@ export function useSeenProfileIds(uid?: string) {
   return seenIds;
 }
 
+export function useProfileInteractionStatus(fromUid?: string, toUid?: string) {
+  const [hasInteraction, setHasInteraction] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (isDemoMode) {
+      setHasInteraction(false);
+      return undefined;
+    }
+
+    if (!fromUid || !toUid || fromUid === toUid) {
+      setHasInteraction(false);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadInteraction() {
+      const [likesResult, passesResult] = await Promise.all([
+        supabase.from('likes').select('to_uid').eq('from_uid', fromUid).eq('to_uid', toUid).limit(1),
+        supabase.from('passes').select('to_uid').eq('from_uid', fromUid).eq('to_uid', toUid).limit(1),
+      ]);
+
+      if (!active) return;
+      if (likesResult.error && passesResult.error) {
+        setHasInteraction(null);
+        return;
+      }
+      setHasInteraction(Boolean(likesResult.data?.length || passesResult.data?.length));
+    }
+
+    setHasInteraction(null);
+    void loadInteraction();
+
+    const channel = supabase
+      .channel(`profile-interaction-status:${fromUid}:${toUid}:${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${fromUid}` }, loadInteraction)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${fromUid}` }, loadInteraction)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [fromUid, toUid]);
+
+  return hasInteraction;
+}
+
 export function useProfileInteractions(uid?: string) {
   const [interactions, setInteractions] = useState<ProfileInteraction[]>([]);
 

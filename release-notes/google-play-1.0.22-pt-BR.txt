@@ -1,0 +1,5 @@
+• Assinatura Raddo Premium integrada à Google Play.
+• Login com Google corrigido no Android.
+• Câmera e galeria agora abrem corretamente ao escolher capas de chats.
+• Melhorias no carregamento de fotos, substituindo imagens quebradas por uma animação.
+• Ajustes de estabilidade e segurança.

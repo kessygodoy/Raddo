@@ -13,11 +13,27 @@ type BillingPurchase = {
 };
 
 type RaddoBillingPlugin = {
-  purchasePremium(options: { productId: string }): Promise<BillingPurchase>;
+  purchasePremium(options: { obfuscatedAccountId: string; productId: string }): Promise<BillingPurchase>;
   restorePremium(options: { productId: string }): Promise<{ purchases?: BillingPurchase[] }>;
 };
 
 const RaddoBilling = registerPlugin<RaddoBillingPlugin>('RaddoBilling');
+
+export async function premiumBillingAvailable() {
+  if (!Capacitor.isNativePlatform()) return false;
+  const { data, error } = await supabase.functions.invoke<{ configured?: boolean; ok?: boolean }>('verify-premium-purchase', {
+    body: { action: 'status' },
+  });
+  return !error && Boolean(data?.ok && data.configured);
+}
+
+async function obfuscatedAccountId() {
+  const { data } = await supabase.auth.getUser();
+  if (!data.user) throw new Error('Entre na sua conta antes de assinar o Premium.');
+  const bytes = new TextEncoder().encode(data.user.id);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 async function verifyPremiumPurchase(purchase: BillingPurchase) {
   if (!purchase.purchaseToken) throw new Error('A Play Store não retornou o token da assinatura.');
@@ -41,7 +57,10 @@ export async function buyPremiumSubscription() {
     throw new Error('A assinatura Premium só pode ser comprada pelo app Android instalado pela Play Store.');
   }
 
-  const purchase = await RaddoBilling.purchasePremium({ productId: PREMIUM_PRODUCT_ID });
+  const purchase = await RaddoBilling.purchasePremium({
+    obfuscatedAccountId: await obfuscatedAccountId(),
+    productId: PREMIUM_PRODUCT_ID,
+  });
   return verifyPremiumPurchase(purchase);
 }
 

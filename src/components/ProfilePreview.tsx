@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Flag, Heart, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
-import { reportProfile } from '../hooks/useMatches';
+import { reportProfile, useProfileInteractionStatus } from '../hooks/useMatches';
 import { reportReasons, type ReportReason } from '../reportOptions';
 import CachedMediaImage from './CachedMediaImage';
 
@@ -28,6 +28,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const photo = photos[photoIndex] ?? profile.photoURL;
+  const hasInteraction = useProfileInteractionStatus(me.uid, profile.uid);
 
   useEffect(() => {
     setPhotoIndex(0);
@@ -154,7 +155,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
               )}
             </div>
           )}
-          {(onLike || onDislike) && (
+          {hasInteraction === false && (onLike || onDislike) && (
             <div className="grid grid-cols-2 gap-3 pt-2">
               {onDislike && (
                 <button

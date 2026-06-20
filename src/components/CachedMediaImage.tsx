@@ -1,4 +1,5 @@
 import { SyntheticEvent, useEffect, useState } from 'react';
+import { ImageIcon } from 'lucide-react';
 import { profilePhotoPathFromValue, signedProfilePhotoThumbnailUrl, signedProfilePhotoUrl } from '../storageImages';
 import { encryptedCachedObjectUrlOnly } from '../encryptedMediaCache';
 
@@ -79,8 +80,9 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
     const path = profilePhotoPathFromValue(src);
     return lastGoodSources.get(stableMediaKey(src)) || readSnapshot(src) || (path ? '' : src);
   });
-  const [loaded, setLoaded] = useState(Boolean(displaySrc));
-  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const [renderKey, setRenderKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -89,8 +91,9 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
     const snapshot = readSnapshot(src);
     const lastGood = lastGoodSources.get(mediaKey);
     const immediateSrc = lastGood || snapshot || (path ? '' : src);
-    setLoaded(Boolean(immediateSrc));
-    setFailed(false);
+    setLoaded(false);
+    setRetryCount(0);
+    setRenderKey((current) => current + 1);
     setDisplaySrc(immediateSrc);
 
     async function resolveCachedSource() {
@@ -105,7 +108,6 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
         const cached = await encryptedCachedObjectUrlOnly(path, '').catch(() => '');
         if (active && cached) {
           setDisplaySrc(cached);
-          setLoaded(true);
           lastGoodSources.set(mediaKey, cached);
           return;
         }
@@ -128,33 +130,47 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
   }, [src, thumbnailOnly]);
 
   async function handleError() {
-    if (failed) return;
-    setFailed(true);
+    setLoaded(false);
+    setDisplaySrc('');
     const mediaKey = stableMediaKey(src);
+    lastGoodSources.delete(mediaKey);
+    if (retryCount >= 1) {
+      setRetryCount(2);
+      return;
+    }
+
+    setRetryCount(1);
     const renewed = await (thumbnailOnly
       ? signedProfilePhotoThumbnailUrl(src)
       : signedProfilePhotoUrl(src, { encryptedCache: true })
     ).catch(() => '');
-    if (renewed && renewed !== displaySrc) {
-      setFailed(false);
+    if (renewed) {
       setDisplaySrc(renewed);
+      setRenderKey((current) => current + 1);
       lastGoodSources.set(mediaKey, renewed);
+    } else {
+      setRetryCount(2);
     }
   }
 
   function handleLoad(event: SyntheticEvent<HTMLImageElement>) {
     setLoaded(true);
-    setFailed(false);
+    setRetryCount(0);
     writeSnapshot(src, event.currentTarget);
     lastGoodSources.set(stableMediaKey(src), event.currentTarget.currentSrc || displaySrc);
     onLoaded?.();
   }
 
   return (
-    <span className={`relative block overflow-hidden ${fallbackClassName}`}>
-      {!loaded && (
-        <span className="raddo-media-skeleton grid place-items-center">
+    <span aria-busy={!loaded} className={`relative block overflow-hidden ${fallbackClassName}`}>
+      {!loaded && retryCount < 2 && (
+        <span className="raddo-media-skeleton absolute inset-0 z-[1] grid place-items-center">
           <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/15 border-t-[#ff3f68]" />
+        </span>
+      )}
+      {!loaded && retryCount >= 2 && (
+        <span className="absolute inset-0 z-[1] grid place-items-center bg-slate-900/70 text-slate-500">
+          <ImageIcon className="h-5 w-5" aria-hidden="true" />
         </span>
       )}
       {displaySrc && (
@@ -162,8 +178,9 @@ export default function CachedMediaImage({ alt = '', className = '', fallbackCla
           alt={alt}
           className={`${className} ${loaded ? 'opacity-100' : 'opacity-0'} transition-opacity duration-150`}
           draggable={false}
+          key={`${renderKey}:${displaySrc}`}
           onError={handleError}
-        onLoad={handleLoad}
+          onLoad={handleLoad}
           src={displaySrc}
         />
       )}
