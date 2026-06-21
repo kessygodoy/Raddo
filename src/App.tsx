@@ -6,7 +6,7 @@ import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
 import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
-import { sendFriendRequest, useFriendshipPrompts, useMatchProfiles, useMatches } from './hooks/useMatches';
+import { sendFriendRequest, useFriendshipPrompts, useIncomingMatchUpgradeRequests, useMatchProfiles, useMatches } from './hooks/useMatches';
 import { useMapEventNotifications } from './hooks/useMapEvents';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
 import type { AppLanguage, AppTheme, AppView, ResolvedAppTheme } from './types';
@@ -130,6 +130,7 @@ export default function App() {
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
   const friendshipPrompts = useFriendshipPrompts(user?.id);
+  const incomingMatchUpgradeRequests = useIncomingMatchUpgradeRequests(user?.id);
   const friendshipPromptId = (prompt: (typeof friendshipPrompts)[number]) => `${prompt.profile.uid}:${prompt.createdAt}`;
   const friendshipPromptDismissedKey = (prompt: (typeof friendshipPrompts)[number]) =>
     `raddo-friendship-prompt-dismissed:${user?.id ?? ''}:${friendshipPromptId(prompt)}`;
@@ -651,6 +652,40 @@ export default function App() {
   }, [friendshipPrompts, notificationPreferences, profile]);
 
   useEffect(() => {
+    if (!profile) return;
+
+    const storageKey = `raddo-device-match-upgrade-requests:${profile.uid}`;
+    const currentIds = incomingMatchUpgradeRequests.map((request) => `${request.matchId}:${request.createdAt}`);
+    const saved = safeGetLocalStorage(storageKey);
+    if (!saved) {
+      writeDeviceNotificationIds(storageKey, currentIds);
+      return;
+    }
+
+    let savedIds: string[] = [];
+    try {
+      savedIds = JSON.parse(saved) as string[];
+    } catch {
+      savedIds = [];
+    }
+
+    const notifiedIds = new Set(savedIds);
+    for (const request of incomingMatchUpgradeRequests) {
+      const notificationId = `${request.matchId}:${request.createdAt}`;
+      if (notifiedIds.has(notificationId)) continue;
+      if (!notificationPreferences.enabled || !notificationPreferences.connections) continue;
+      const senderName = matchProfilesByUid[request.requesterUid]?.displayName ?? 'Uma pessoa';
+      void showAppNotification('Pedido de match', `${senderName} quer evoluir a amizade para match.`, {
+        matchId: request.matchId,
+        notificationId,
+        view: 'chat',
+      });
+    }
+
+    writeDeviceNotificationIds(storageKey, [...new Set([...savedIds, ...currentIds])]);
+  }, [incomingMatchUpgradeRequests, matchProfilesByUid, notificationPreferences, profile]);
+
+  useEffect(() => {
     let removeListener: (() => void) | undefined;
 
     onAppNotificationTap((data) => {
@@ -709,7 +744,8 @@ export default function App() {
       return notificationTimeValue(match.lastMessageAt ?? match.createdAt) > notificationsClearedAt;
     }) ||
     mapEventNotifications.some((notification) => notificationTimeValue(notification.timeValue) > notificationsClearedAt) ||
-    friendshipPrompts.some((prompt) => notificationTimeValue(prompt.createdAt) > notificationsClearedAt);
+    friendshipPrompts.some((prompt) => notificationTimeValue(prompt.createdAt) > notificationsClearedAt) ||
+    incomingMatchUpgradeRequests.some((request) => notificationTimeValue(request.createdAt) > notificationsClearedAt);
 
   function openNotification(_notificationId: string, matchId: string) {
     setOpenMatchId(matchId);
@@ -1013,6 +1049,7 @@ export default function App() {
               <NotificationsPanel
                 currentUid={profile.uid}
                 friendshipPrompts={friendshipPrompts}
+                matchUpgradeRequests={incomingMatchUpgradeRequests}
                 mapNotifications={mapEventNotifications}
                 matchProfilesByUid={matchProfilesByUid}
                 matches={matches}

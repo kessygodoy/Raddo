@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.105.3';
 
 type PushRequest = {
+  kind?: 'match_upgrade' | 'message';
   matchId?: string;
   messageId?: string;
   senderName?: string;
@@ -132,6 +133,7 @@ Deno.serve(async (req) => {
   if (authError || !authData.user) return jsonResponse({ error: 'Unauthorized' }, 401);
 
   const body = await req.json() as PushRequest;
+  const pushKind = body.kind === 'match_upgrade' ? 'match_upgrade' : 'match';
   if (!body.matchId || !body.senderUid || !body.text) return jsonResponse({ error: 'Invalid payload' }, 400);
   if (authData.user.id !== body.senderUid) return jsonResponse({ error: 'Sender mismatch' }, 403);
 
@@ -144,15 +146,26 @@ Deno.serve(async (req) => {
   if (matchError || !matchData) return jsonResponse({ error: 'Match not found' }, 404);
   if (!matchData.users.includes(body.senderUid)) return jsonResponse({ error: 'Sender is not in match' }, 403);
 
+  if (body.kind === 'match_upgrade') {
+    const { data: upgradeRequest } = await admin
+      .from('match_upgrade_requests')
+      .select('requester_uid,status')
+      .eq('match_id', body.matchId)
+      .eq('requester_uid', body.senderUid)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (!upgradeRequest) return jsonResponse({ error: 'Pending upgrade request not found' }, 404);
+  }
+
   const recipientIds = matchData.users.filter((uid) => uid !== body.senderUid);
   if (recipientIds.length === 0) {
-    await writePushLog(admin, { kind: 'match', senderUid: body.senderUid, status: 'no_recipients' });
+    await writePushLog(admin, { kind: pushKind, senderUid: body.senderUid, status: 'no_recipients' });
     return jsonResponse({ sent: 0 });
   }
 
   const { data: preferenceRows, error: preferenceError } = await admin
     .from('notification_preferences')
-    .select('user_uid,enabled,connection_messages')
+    .select('user_uid,enabled,connections,connection_messages')
     .in('user_uid', recipientIds);
   if (preferenceError) return jsonResponse({ error: preferenceError.message }, 500);
 
@@ -160,6 +173,7 @@ Deno.serve(async (req) => {
     (preferenceRows ?? []).map((row) => [
       row.user_uid as string,
       {
+        connections: row.connections as boolean,
         connectionMessages: row.connection_messages as boolean,
         enabled: row.enabled as boolean,
       },
@@ -167,11 +181,11 @@ Deno.serve(async (req) => {
   );
   const allowedRecipientIds = recipientIds.filter((uid) => {
     const preferences = preferencesByUid.get(uid);
-    return !preferences || (preferences.enabled && preferences.connectionMessages);
+    return !preferences || (preferences.enabled && (body.kind === 'match_upgrade' ? preferences.connections : preferences.connectionMessages));
   });
   if (allowedRecipientIds.length === 0) {
     await writePushLog(admin, {
-      kind: 'match',
+      kind: pushKind,
       recipientCount: allowedRecipientIds.length,
       senderUid: body.senderUid,
       status: 'disabled_by_preferences',
@@ -188,7 +202,7 @@ Deno.serve(async (req) => {
   const tokens = [...new Set((tokenRows ?? []).map((row) => row.token as string).filter(Boolean))];
   if (tokens.length === 0) {
     await writePushLog(admin, {
-      kind: 'match',
+      kind: pushKind,
       recipientCount: recipientIds.length,
       senderUid: body.senderUid,
       status: 'no_tokens',
@@ -227,9 +241,9 @@ Deno.serve(async (req) => {
               view: 'chat',
             },
             notification: {
-              body: `${senderName}: ${text}`,
+              body: body.kind === 'match_upgrade' ? `${senderName} quer evoluir a amizade para match.` : `${senderName}: ${text}`,
               image: senderPhotoUrl || undefined,
-              title: '\u2764\uFE0F Nova mensagem',
+              title: body.kind === 'match_upgrade' ? '\uD83D\uDC97 Pedido de match' : '\u2764\uFE0F Nova mensagem',
             },
             token,
           },
@@ -259,7 +273,7 @@ Deno.serve(async (req) => {
   await writePushLog(admin, {
     detail,
     failedCount: failed,
-    kind: 'match',
+    kind: pushKind,
     recipientCount: recipientIds.length,
     senderUid: body.senderUid,
     sentCount: sent,

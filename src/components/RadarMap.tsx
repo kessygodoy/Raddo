@@ -37,7 +37,7 @@ import { isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
 import ProfilePreview from './ProfilePreview';
 import CachedMediaImage from './CachedMediaImage';
-import { sendDislike, sendFriendRequest, sendMessage, trySendLike } from '../hooks/useMatches';
+import { sendDislike, sendFriendRequest, sendMessage, trySendLike, useSeenProfileIds } from '../hooks/useMatches';
 import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
 import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } from '../storageImages';
@@ -206,13 +206,6 @@ const personIcon = L.divIcon({
   html: '<div class="map-pin map-pin-person"></div>',
   iconAnchor: [7, 7],
   iconSize: [14, 14],
-});
-
-const personGroupIcon = L.divIcon({
-  className: '',
-  html: '<div class="map-group-marker map-people-group-marker">\u{1F465}</div>',
-  iconAnchor: [20, 20],
-  iconSize: [40, 40],
 });
 
 const eventIcon = L.divIcon({
@@ -808,6 +801,32 @@ function MapNavigationControls({ me }: { me: UserProfile }) {
   );
 }
 
+function profileClusterIcon(profiles: UserProfile[]) {
+  const visibleProfiles = profiles.slice(0, 4);
+  const hiddenCount = Math.max(0, profiles.length - visibleProfiles.length);
+  const itemCount = visibleProfiles.length + (hiddenCount > 0 ? 1 : 0);
+  const iconWidth = 30 + Math.max(0, itemCount - 1) * 15;
+  const avatars = visibleProfiles
+    .map((profile) => {
+      const name = escapeHtml(profile.displayName);
+      if (!profile.photoURL) {
+        const initial = escapeHtml(profile.displayName.trim().slice(0, 1).toUpperCase() || '?');
+        return `<span class="map-profile-cluster-avatar map-profile-cluster-fallback" title="${name}">${initial}</span>`;
+      }
+
+      return `<span class="map-profile-cluster-avatar" title="${name}"><img alt="${name}" src="${escapeHtml(profile.photoURL)}" onerror="this.parentElement.classList.add('map-profile-cluster-fallback');this.remove()" /></span>`;
+    })
+    .join('');
+  const counter = hiddenCount > 0 ? `<span class="map-profile-cluster-avatar map-profile-cluster-count">+${hiddenCount}</span>` : '';
+
+  return L.divIcon({
+    className: '',
+    html: `<div class="map-profile-cluster">${avatars}${counter}</div>`,
+    iconAnchor: [iconWidth / 2, 15],
+    iconSize: [iconWidth, 30],
+  });
+}
+
 function ClusteredProfileMarkers({ me, onOpenCluster, profiles }: { me: UserProfile; onOpenCluster: (profiles: UserProfile[]) => void; profiles: UserProfile[] }) {
   const { t } = useI18n();
   const map = useMap();
@@ -837,7 +856,7 @@ function ClusteredProfileMarkers({ me, onOpenCluster, profiles }: { me: UserProf
                   onOpenCluster(cluster.items.map((item) => item.profile));
                 },
               }}
-              icon={personGroupIcon}
+              icon={profileClusterIcon(cluster.items.map((item) => item.profile))}
               key={`people-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
               position={[cluster.position.lat, cluster.position.lng]}
               zIndexOffset={100}
@@ -1049,6 +1068,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [showNearbyChatsList, setShowNearbyChatsList] = useState(false);
   const [showPeopleList, setShowPeopleList] = useState(false);
   const [clusteredProfiles, setClusteredProfiles] = useState<UserProfile[]>([]);
+  const [pendingInteractedProfileIds, setPendingInteractedProfileIds] = useState<Set<string>>(() => new Set());
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
   const [connectionKind, setConnectionKind] = useState<'romantic' | 'friendship'>('romantic');
@@ -1112,7 +1132,14 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     }
   });
   const mapEvents = useLocalMapEvents(me);
+  const seenProfileIds = useSeenProfileIds(me.uid);
   const joinedMapEvents = useJoinedMapEvents(me.uid);
+  useEffect(() => {
+    setPendingInteractedProfileIds((current) => {
+      const next = new Set([...current].filter((uid) => !seenProfileIds.has(uid)));
+      return next.size === current.size ? current : next;
+    });
+  }, [seenProfileIds]);
   const visibleEvents = useMemo(
     () =>
       [...localEvents, ...mapEvents.filter((event) => !localEvents.some((local) => local.id === event.id))].filter(
@@ -2182,6 +2209,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     const result = await trySendLike(me, profile.uid);
     setProfileActionMessage(result.ok ? (result.matched ? `Deu match com ${profile.displayName}.` : `Você curtiu ${profile.displayName}.`) : result.message);
     if (result.ok) {
+      setPendingInteractedProfileIds((current) => new Set(current).add(profile.uid));
       setPreviewProfile(null);
       if (result.matched) {
         setConnectionKind('romantic');
@@ -2193,6 +2221,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   async function connectNearbyProfile(profile: UserProfile) {
     try {
       const connected = await sendFriendRequest(me.uid, profile.uid);
+      setPendingInteractedProfileIds((current) => new Set(current).add(profile.uid));
       setProfileActionMessage(connected ? t('friendshipCreated', { name: profile.displayName }) : t('friendRequestSent', { name: profile.displayName }));
       setPreviewProfile(null);
       if (connected) {
@@ -2207,6 +2236,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   async function dislikeNearbyProfile(profile: UserProfile) {
     try {
       await sendDislike(me.uid, profile.uid);
+      setPendingInteractedProfileIds((current) => new Set(current).add(profile.uid));
       setProfileActionMessage(`Você recusou ${profile.displayName}.`);
       setPreviewProfile(null);
     } catch (error) {
@@ -2969,7 +2999,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       )}
       {showPeopleList && (
         <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
-          <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
+          <section className="nearby-people-panel max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{t('nearbyPeople')}</h2>
@@ -2988,7 +3018,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             <div className="grid gap-3">
               {sortedProfiles.length === 0 && <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">{t('noProfilesCurrentRadius')}</p>}
               {sortedProfiles.map((profile) => (
-                <article className="rounded-lg bg-slate-950/60 p-3" key={profile.uid}>
+                <article className="nearby-person-card rounded-lg bg-slate-950/60 p-3" key={profile.uid}>
                   <div className="flex items-center gap-3">
                     <button
                       className="shrink-0"
@@ -2998,7 +3028,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                       }}
                       type="button"
                     >
-                      <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-12 w-12 rounded-lg" src={profile.photoURL} thumbnailOnly />
+                      <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-8 w-8 rounded-md" src={profile.photoURL} thumbnailOnly />
                     </button>
                     <button
                       className="min-w-0 flex-1 text-left"
@@ -3009,53 +3039,58 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                       type="button"
                     >
                       <h3 className="truncate text-sm font-semibold">{profile.displayName}</h3>
-                      <p className="text-xs text-slate-300">
+                      <p className="nearby-person-distance text-xs text-slate-300">
                         {me.location && profile.location
                           ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
                           : t('distanceUnavailable')}
                       </p>
                     </button>
-                    <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">
-                      {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
-                    </span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="nearby-visibility-badge rounded-md border px-2 py-1 text-xs font-medium">
+                        {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
+                      </span>
+                      <button
+                        aria-label={`Ver perfil de ${profile.displayName}`}
+                        className="nearby-profile-eye grid h-8 w-8 place-items-center rounded-lg border transition hover:brightness-110"
+                        onClick={() => {
+                          setShowPeopleList(false);
+                          setPreviewProfile(profile);
+                        }}
+                        type="button"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-4 gap-2">
-                    <button
-                      className="h-10 rounded-lg border border-white/10 bg-white/8 text-xs font-semibold text-slate-100"
-                      onClick={() => {
-                        setShowPeopleList(false);
-                        setPreviewProfile(profile);
-                      }}
-                      type="button"
-                    >
-                      Ver perfil
-                    </button>
-                    <button
-                      aria-label={t('rejectPerson', { name: profile.displayName })}
-                      className="grid h-10 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
-                      onClick={() => dislikeNearbyProfile(profile)}
-                      type="button"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                    <button
-                      aria-label={`${t('connectFriend')} ${profile.displayName}`}
-                      className="grid h-10 place-items-center rounded-lg bg-sky-400 text-slate-950"
-                      onClick={() => connectNearbyProfile(profile)}
-                      title={t('connectFriend')}
-                      type="button"
-                    >
-                      <Handshake className="h-4 w-4" />
-                    </button>
-                    <button
-                      aria-label={`Curtir ${profile.displayName}`}
-                      className="grid h-10 place-items-center rounded-lg bg-teal-300 text-slate-950"
-                      onClick={() => likeNearbyProfile(profile)}
-                      type="button"
-                    >
-                      <Heart className="h-4 w-4" />
-                    </button>
-                  </div>
+                  {!seenProfileIds.has(profile.uid) && !pendingInteractedProfileIds.has(profile.uid) && (
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button
+                        aria-label={t('rejectPerson', { name: profile.displayName })}
+                        className="grid h-10 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
+                        onClick={() => dislikeNearbyProfile(profile)}
+                        type="button"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                      <button
+                        aria-label={`${t('connectFriend')} ${profile.displayName}`}
+                        className="grid h-10 place-items-center rounded-lg bg-sky-400 text-slate-950"
+                        onClick={() => connectNearbyProfile(profile)}
+                        title={t('connectFriend')}
+                        type="button"
+                      >
+                        <Handshake className="h-4 w-4" />
+                      </button>
+                      <button
+                        aria-label={`Curtir ${profile.displayName}`}
+                        className="grid h-10 place-items-center rounded-lg bg-teal-300 text-slate-950"
+                        onClick={() => likeNearbyProfile(profile)}
+                        type="button"
+                      >
+                        <Heart className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
@@ -3607,7 +3642,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                       : t('distanceUnavailable')}
                   </p>
                 </button>
-                <span className="rounded-md bg-cyan-200/15 px-2 py-1 text-xs text-cyan-100">
+                <span className="nearby-visibility-badge rounded-md border px-2 py-1 text-xs font-medium">
                   {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                 </span>
               </article>

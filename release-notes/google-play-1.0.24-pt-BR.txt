@@ -1,0 +1,4 @@
+• O mapa agora mostra grupos de pessoas com fotos sobrepostas e contador, além de abrir a lista completa ao tocar.
+• Pessoas próximas ganhou visual mais compacto, melhor contraste em todos os temas e ações sincronizadas.
+• Conversas exibem entradas no chat, pedidos para evoluir amizade em match e novas animações e notificações.
+• Adicionamos envio de sugestões e relatos de bugs na área de Segurança, além de melhorias gerais de estabilidade.

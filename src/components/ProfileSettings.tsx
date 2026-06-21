@@ -1,6 +1,7 @@
 ﻿import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
   Bell,
+  Bug,
   Camera,
   Car,
   Dumbbell,
@@ -10,6 +11,7 @@ import {
   Handshake,
   Heart,
   KeyRound,
+  Lightbulb,
   MapPin,
   MessageCircle,
   MessageSquareWarning,
@@ -20,6 +22,7 @@ import {
   Play,
   RotateCcw,
   Search,
+  Send,
   Shield,
   SlidersHorizontal,
   Sparkles,
@@ -133,6 +136,10 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [moderationOpen, setModerationOpen] = useState(false);
   const [moderationTab, setModerationTab] = useState<'reports' | 'bans'>('reports');
   const [termsOpen, setTermsOpen] = useState(false);
+  const [feedbackKind, setFeedbackKind] = useState<'bug' | 'suggestion'>('suggestion');
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState('');
   const [interactionsMessage, setInteractionsMessage] = useState('');
   const [interactionsAdOpen, setInteractionsAdOpen] = useState(false);
   const [interactionsUnlockUntil, setInteractionsUnlockUntil] = useState(() => {
@@ -648,6 +655,34 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   function openAppRating() {
     const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.raddo.app';
     window.open(playStoreUrl, '_blank', 'noopener,noreferrer');
+  }
+
+  async function handleSendFeedback() {
+    const message = feedbackText.trim();
+    setFeedbackMessage('');
+    if (message.length < 10) {
+      setFeedbackMessage('Escreva pelo menos 10 caracteres para explicar melhor.');
+      return;
+    }
+
+    setFeedbackBusy(true);
+    try {
+      if (!isDemoMode) {
+        const { error } = await supabase.from('app_feedback').insert({
+          user_uid: profile.uid,
+          kind: feedbackKind,
+          message,
+          user_agent: navigator.userAgent.slice(0, 512),
+        });
+        if (error) throw error;
+      }
+      setFeedbackText('');
+      setFeedbackMessage(feedbackKind === 'bug' ? 'Bug enviado. Obrigado por avisar!' : 'Sugestão enviada. Obrigado por ajudar a melhorar o Raddo!');
+    } catch (error) {
+      setFeedbackMessage(error instanceof Error ? error.message : 'Não consegui enviar agora. Tente novamente.');
+    } finally {
+      setFeedbackBusy(false);
+    }
   }
 
   async function handleBanAppUser() {
@@ -1744,6 +1779,61 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 </p>
               )}
               {termsOpen && <TermsAndPrivacyContent />}
+            </section>
+
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                {feedbackKind === 'bug' ? <Bug className="h-4 w-4 text-rose-300" /> : <Lightbulb className="h-4 w-4 text-amber-200" />}
+                Ajude a melhorar o Raddo
+              </div>
+              <p className="text-sm text-slate-300">Envie uma sugestão de melhoria ou conte se encontrou algum problema.</p>
+              <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg bg-slate-950/50 p-1">
+                <button
+                  className={`h-10 rounded-md text-xs font-semibold transition ${
+                    feedbackKind === 'suggestion' ? 'bg-amber-300 text-slate-950' : 'text-slate-300'
+                  }`}
+                  onClick={() => {
+                    setFeedbackKind('suggestion');
+                    setFeedbackMessage('');
+                  }}
+                  type="button"
+                >
+                  Sugestão de melhoria
+                </button>
+                <button
+                  className={`h-10 rounded-md text-xs font-semibold transition ${
+                    feedbackKind === 'bug' ? 'bg-rose-400 text-white' : 'text-slate-300'
+                  }`}
+                  onClick={() => {
+                    setFeedbackKind('bug');
+                    setFeedbackMessage('');
+                  }}
+                  type="button"
+                >
+                  Reportar bug
+                </button>
+              </div>
+              <textarea
+                className="mt-3 min-h-28 w-full resize-y rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-white outline-none placeholder:text-slate-500 focus:border-teal-300/60"
+                maxLength={3000}
+                onChange={(event) => setFeedbackText(event.target.value)}
+                placeholder={feedbackKind === 'bug' ? 'O que aconteceu? Conte os passos para reproduzir o problema.' : 'O que você gostaria de ver no Raddo?'}
+                value={feedbackText}
+              />
+              <div className="mt-1 flex items-center justify-between text-[11px] text-slate-500">
+                <span>Mínimo de 10 caracteres</span>
+                <span>{feedbackText.length}/3000</span>
+              </div>
+              {feedbackMessage && <p className="mt-3 rounded-lg bg-white/8 p-3 text-xs text-slate-100">{feedbackMessage}</p>}
+              <button
+                className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={feedbackBusy || feedbackText.trim().length < 10}
+                onClick={() => void handleSendFeedback()}
+                type="button"
+              >
+                <Send className="h-4 w-4" />
+                {feedbackBusy ? 'Enviando...' : 'Enviar ao Raddo'}
+              </button>
             </section>
 
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">

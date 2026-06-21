@@ -1581,6 +1581,15 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
         >
           {allMessages.length === 0 && <p className="text-sm text-slate-300">Seja a primeira pessoa a falar neste evento.</p>}
           {allMessages.map((message) => {
+            if (message.messageType === 'system') {
+              return (
+                <div className="flex justify-center py-1" key={message.id}>
+                  <p className="rounded-full border border-white/10 bg-white/8 px-3 py-1.5 text-center text-xs font-semibold text-slate-300">
+                    {message.text}
+                  </p>
+                </div>
+              );
+            }
             const mine = message.senderUid === me.uid;
             const canEditMessage = mine && message.messageType === 'text';
             const canDeleteMessage = mine || canManage;

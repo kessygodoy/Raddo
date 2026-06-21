@@ -2,7 +2,7 @@ import { Bell, Handshake, Heart, MessageCircle, Sparkles } from 'lucide-react';
 import { useMemo } from 'react';
 import { useI18n } from '../i18n';
 import type { MapEventNotification } from '../hooks/useMapEvents';
-import type { FriendshipPrompt } from '../hooks/useMatches';
+import type { FriendshipPrompt, MatchUpgradeRequest } from '../hooks/useMatches';
 import type { NotificationPreferences } from '../notificationPreferences';
 import type { Match, UserProfile } from '../types';
 
@@ -10,6 +10,7 @@ type Props = {
   currentUid: string;
   friendshipPrompts?: FriendshipPrompt[];
   mapNotifications?: MapEventNotification[];
+  matchUpgradeRequests?: MatchUpgradeRequest[];
   matchProfilesByUid?: Record<string, UserProfile>;
   matches: Match[];
   notificationsClearedAt: number;
@@ -63,6 +64,7 @@ export default function NotificationsPanel({
   currentUid: _currentUid,
   friendshipPrompts = [],
   mapNotifications = [],
+  matchUpgradeRequests = [],
   matchProfilesByUid = {},
   matches,
   notificationsClearedAt,
@@ -75,6 +77,7 @@ export default function NotificationsPanel({
   const safeMatches = Array.isArray(matches) ? matches : [];
   const safeFriendshipPrompts = Array.isArray(friendshipPrompts) ? friendshipPrompts : [];
   const safeMapNotifications = Array.isArray(mapNotifications) ? mapNotifications : [];
+  const safeMatchUpgradeRequests = Array.isArray(matchUpgradeRequests) ? matchUpgradeRequests : [];
   const safePreferences = preferences ?? {
     connectionMessages: true,
     connections: true,
@@ -128,6 +131,22 @@ export default function NotificationsPanel({
           }))
         : [];
 
+      const matchUpgradeItems = safePreferences.connections
+        ? safeMatchUpgradeRequests.map<NotificationItem>((request) => {
+            const senderName = matchProfilesByUid[request.requesterUid]?.displayName ?? 'Uma pessoa';
+            return {
+              groupKey: `match-upgrade:${request.matchId}`,
+              id: `match-upgrade:${request.matchId}:${request.createdAt}`,
+              matchId: request.matchId,
+              target: 'chat',
+              text: `${senderName} quer evoluir a amizade para match. Toque para responder.`,
+              timeValue: request.createdAt,
+              title: 'Pedido de match',
+              tone: 'match',
+            };
+          })
+        : [];
+
       const mapItems = safeMapNotifications
         .filter((notification) => (notification.tone === 'message' ? safePreferences.connectionMessages : true))
         .map<NotificationItem>((notification) => ({
@@ -143,7 +162,7 @@ export default function NotificationsPanel({
         }));
 
       const grouped = new Map<string, NotificationItem>();
-      [...friendshipInviteItems, ...chatNotifications, ...mapItems]
+      [...matchUpgradeItems, ...friendshipInviteItems, ...chatNotifications, ...mapItems]
         .filter((notification) => notification.id && notification.title)
         .forEach((notification) => {
           const current = grouped.get(notification.groupKey);
@@ -173,7 +192,7 @@ export default function NotificationsPanel({
     } catch {
       return [];
     }
-  }, [_currentUid, matchProfilesByUid, safeFriendshipPrompts, safeMapNotifications, safeMatches, safePreferences, t]);
+  }, [_currentUid, matchProfilesByUid, safeFriendshipPrompts, safeMapNotifications, safeMatchUpgradeRequests, safeMatches, safePreferences, t]);
 
   return (
     <section className="mx-auto grid w-full max-w-lg gap-4 px-1 py-2 text-white">

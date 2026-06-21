@@ -108,7 +108,7 @@ export type MapEventMessage = {
   senderUid: string;
   senderName: string;
   text: string;
-  messageType: 'image' | 'text';
+  messageType: 'image' | 'system' | 'text';
   imageURL: string;
   imagePath: string;
   viewOnce: boolean;

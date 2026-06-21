@@ -526,6 +526,53 @@ export function useMatchUpgradeRequest(matchId?: string) {
   return request;
 }
 
+export function useIncomingMatchUpgradeRequests(uid?: string) {
+  const [requests, setRequests] = useState<MatchUpgradeRequest[]>([]);
+
+  useEffect(() => {
+    if (!uid || isDemoMode) {
+      setRequests([]);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadRequests() {
+      const { data, error } = await supabase
+        .from('match_upgrade_requests')
+        .select('match_id,requester_uid,status,created_at,responded_at')
+        .eq('status', 'pending')
+        .neq('requester_uid', uid)
+        .order('created_at', { ascending: false });
+      if (!active || error) return;
+      setRequests(
+        (data ?? []).map((row) => ({
+          matchId: row.match_id as string,
+          requesterUid: row.requester_uid as string,
+          status: row.status as MatchUpgradeRequest['status'],
+          createdAt: row.created_at as string,
+          respondedAt: (row.responded_at as string | null) ?? null,
+        })),
+      );
+    }
+
+    void loadRequests();
+    const channel = supabase
+      .channel(`incoming-match-upgrades:${uid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'match_upgrade_requests' }, loadRequests)
+      .subscribe();
+    const refreshTimer = window.setInterval(loadRequests, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [uid]);
+
+  return requests;
+}
+
 export function useMatchProfiles(matches: Match[], currentUid: string) {
   const [profilesByUid, setProfilesByUid] = useState<Record<string, UserProfile>>(() => readCachedMatchProfiles(currentUid));
 
@@ -794,10 +841,22 @@ export async function declineFriendRequest(requesterUid: string) {
   if (error) throw new Error(error.message || 'NÃ£o consegui recusar o convite de amizade.');
 }
 
-export async function requestMatchUpgrade(matchId: string) {
+export async function requestMatchUpgrade(matchId: string, senderUid: string, senderName: string) {
   if (isDemoMode) return;
   const { error } = await supabase.rpc('request_match_upgrade', { target_match_id: matchId });
   if (error) throw new Error(error.message || 'Não consegui enviar o pedido para evoluir a amizade.');
+
+  void supabase.functions.invoke('send-match-push', {
+    body: {
+      kind: 'match_upgrade',
+      matchId,
+      senderName,
+      senderUid,
+      text: 'quer evoluir a amizade para match.',
+    },
+  }).then(({ error: pushError }) => {
+    if (pushError) console.warn('Nao consegui enviar push do pedido de match', pushError);
+  });
 }
 
 export async function respondMatchUpgrade(matchId: string, accept: boolean) {

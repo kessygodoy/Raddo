@@ -80,6 +80,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
   const [matchMenuOpen, setMatchMenuOpen] = useState(false);
   const [matchUpgradeBusy, setMatchUpgradeBusy] = useState(false);
+  const [showMatchUpgradeCelebration, setShowMatchUpgradeCelebration] = useState(false);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [viewOnceViewerIds, setViewOnceViewerIds] = useState<string[] | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
@@ -126,6 +127,28 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     },
     [activeMatch?.id, messages, optimisticMessages],
   );
+  const messagesAfterMatchUpgrade = matchUpgradeRequest?.respondedAt
+    ? visibleMessages.filter((message) => Date.parse(message.createdAt) > Date.parse(matchUpgradeRequest.respondedAt ?? '')).length
+    : 0;
+  const showMatchUpgradeCard = Boolean(
+    matchUpgradeRequest?.status === 'pending' ||
+      (matchUpgradeRequest?.status === 'accepted' && messagesAfterMatchUpgrade < 3),
+  );
+
+  useEffect(() => {
+    if (matchUpgradeRequest?.status !== 'accepted' || !matchUpgradeRequest.respondedAt || !activeMatch?.id) return undefined;
+    const celebrationKey = `raddo-match-upgrade-celebrated:${currentUid}:${activeMatch.id}:${matchUpgradeRequest.respondedAt}`;
+    try {
+      if (window.localStorage.getItem(celebrationKey) === 'yes') return undefined;
+      window.localStorage.setItem(celebrationKey, 'yes');
+    } catch {
+      // The animation is best-effort when local storage is unavailable.
+    }
+
+    setShowMatchUpgradeCelebration(true);
+    const timer = window.setTimeout(() => setShowMatchUpgradeCelebration(false), 2600);
+    return () => window.clearTimeout(timer);
+  }, [activeMatch?.id, currentUid, matchUpgradeRequest?.respondedAt, matchUpgradeRequest?.status]);
 
   useEffect(() => {
     setCachedConversations(readConversationCache(currentUid));
@@ -353,7 +376,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     setMatchUpgradeBusy(true);
     setActionMessage('');
     try {
-      await requestMatchUpgrade(activeMatch.id);
+      await requestMatchUpgrade(activeMatch.id, currentUid, currentProfile.displayName);
       setActionMessage('Pedido de match enviado.');
       shouldStickToBottomRef.current = true;
     } catch (error) {
@@ -430,6 +453,17 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#0b1724] shadow-2xl">
+      {showMatchUpgradeCelebration && (
+        <div className="match-upgrade-celebration" aria-live="polite">
+          <span className="match-upgrade-main-heart">
+            <Heart className="h-16 w-16 fill-current" />
+          </span>
+          <div className="match-upgrade-floating-hearts" aria-hidden="true">
+            {Array.from({ length: 10 }, (_, index) => <span key={index}>♥</span>)}
+          </div>
+          <p>Agora é match!</p>
+        </div>
+      )}
       {previewProfile && (
         <ProfilePreview
           me={currentProfile}
@@ -663,10 +697,10 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                 <MoreVertical className="h-5 w-5" />
               </button>
               {matchMenuOpen && (
-                <div className="absolute right-0 top-11 z-20 w-48 overflow-hidden rounded-lg border border-white/10 bg-[#07111f] py-1 text-sm shadow-2xl">
+                <div className="match-options-menu absolute right-0 top-11 z-20 w-48 overflow-hidden rounded-lg border border-white/10 bg-[#07111f] py-1 text-sm shadow-2xl">
                   {activeMatch.connectionType === 'friendship' && (
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-200 transition hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="match-upgrade-menu-action flex w-full items-center gap-2 px-3 py-2 text-left text-rose-200 transition hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={matchUpgradeBusy || matchUpgradeRequest?.status === 'pending'}
                       onClick={() => void handleRequestMatchUpgrade()}
                       type="button"
@@ -692,7 +726,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                     {t('undoMatch')}
                   </button>
                   <button
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-100 transition hover:bg-rose-400/15"
+                    className="match-options-danger flex w-full items-center gap-2 px-3 py-2 text-left text-rose-100 transition hover:bg-rose-400/15"
                     onClick={handleBlock}
                     type="button"
                   >
@@ -785,7 +819,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
               </div>
             );
           })}
-          {matchUpgradeRequest && (
+          {showMatchUpgradeCard && matchUpgradeRequest && (
             <div className="flex justify-center py-2">
               <section className="w-full max-w-sm rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-400/15 to-fuchsia-400/10 p-4 text-center shadow-lg">
                 <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#ff3f68] text-white shadow-lg shadow-rose-950/30">
@@ -800,7 +834,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                         : `${activeDisplayName} quer transformar esta amizade em match.`}
                     </p>
                     {matchUpgradeRequest.requesterUid === currentUid ? (
-                      <p className="mt-3 text-xs font-semibold text-rose-200">Aguardando a resposta...</p>
+                      <p className="match-upgrade-waiting mt-3 text-xs font-semibold text-rose-200">Aguardando a resposta...</p>
                     ) : (
                       <div className="mt-4 grid grid-cols-2 gap-2">
                         <button

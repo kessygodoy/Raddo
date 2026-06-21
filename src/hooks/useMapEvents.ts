@@ -36,7 +36,7 @@ type EventMessageRow = {
   sender_uid: string;
   sender_name: string;
   text: string;
-  message_type: 'image' | 'text' | null;
+  message_type: 'image' | 'system' | 'text' | null;
   image_url: string | null;
   image_path: string | null;
   view_once: boolean | null;
@@ -342,7 +342,7 @@ export function useMapEventNotifications(uid: string | undefined) {
         eventIds.length
           ? supabase
               .from('map_event_messages')
-              .select('id,event_id,sender_uid,sender_name,text,created_at')
+              .select('id,event_id,sender_uid,sender_name,text,message_type,created_at')
               .in('event_id', eventIds)
               .order('created_at', { ascending: false })
               .limit(40)
@@ -365,10 +365,11 @@ export function useMapEventNotifications(uid: string | undefined) {
         created_at: string;
         event_id: string;
         id: string;
+        message_type: string;
         sender_name: string;
         sender_uid: string;
         text: string;
-      }>).filter((message) => message.sender_uid !== uid);
+      }>).filter((message) => message.sender_uid !== uid && message.message_type !== 'system');
       const messagesByEvent = new Map<string, typeof messageRows>();
       messageRows.forEach((message) => {
         const current = messagesByEvent.get(message.event_id) ?? [];
