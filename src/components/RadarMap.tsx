@@ -4,7 +4,7 @@ import { Component, ReactNode } from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Camera, Eye, Flag, Heart, ImagePlus, Info, LogOut, MapPin, Megaphone, MessageCircle, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
+import { ArrowRight, Camera, Eye, Flag, Handshake, Heart, ImagePlus, Info, LocateFixed, LogOut, MapPin, Megaphone, MessageCircle, Minus, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
@@ -37,7 +37,7 @@ import { isDemoMode } from '../demoData';
 import { supabase } from '../supabase';
 import ProfilePreview from './ProfilePreview';
 import CachedMediaImage from './CachedMediaImage';
-import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
+import { sendDislike, sendFriendRequest, sendMessage, trySendLike } from '../hooks/useMatches';
 import ExternalGpsModal from './ExternalGpsModal';
 import { moderateUploadedImage } from '../imageModeration';
 import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } from '../storageImages';
@@ -180,6 +180,8 @@ type MapPointSetter = (point: LatLng | null) => void;
 const MAP_MAX_ZOOM = 19;
 const MAP_SPREAD_MARKERS_ZOOM = MAP_MAX_ZOOM - 3;
 const MAP_SPREAD_OVERLAP_DISTANCE_PX = 30;
+const PROFILE_MARKER_DIAMETER_PX = 30;
+const PROFILE_CLUSTER_MIN_OVERLAP = 0.95;
 const MAX_RENDERED_PROFILE_MARKERS = 80;
 const MAX_RENDERED_EVENT_MARKERS = 120;
 const MAX_RENDERED_STORY_GROUPS = 40;
@@ -208,9 +210,9 @@ const personIcon = L.divIcon({
 
 const personGroupIcon = L.divIcon({
   className: '',
-  html: '<div class="map-group-marker">\u{1F465}</div>',
-  iconAnchor: [13, 13],
-  iconSize: [25, 25],
+  html: '<div class="map-group-marker map-people-group-marker">\u{1F465}</div>',
+  iconAnchor: [20, 20],
+  iconSize: [40, 40],
 });
 
 const eventIcon = L.divIcon({
@@ -409,8 +411,8 @@ function profilePhotoIcon(photoURL: string) {
   return L.divIcon({
     className: '',
     html: `<div class="map-profile-photo"><img alt="" src="${escapeHtml(photoURL)}" onerror="this.style.display='none'" /></div>`,
-    iconAnchor: [12, 12],
-    iconSize: [24, 24],
+    iconAnchor: [15, 15],
+    iconSize: [30, 30],
   });
 }
 
@@ -564,10 +566,7 @@ function closestToMapCenter<T extends { position: LatLng }>(items: T[], map: L.M
 function clusterDistanceForZoom(map: L.Map, kind: 'event' | 'profile') {
   const zoom = map.getZoom();
   if (kind === 'profile') {
-    if (zoom < 12) return 72;
-    if (zoom < 14) return 52;
-    if (zoom < 16) return 28;
-    return 14;
+    return PROFILE_MARKER_DIAMETER_PX * (1 - PROFILE_CLUSTER_MIN_OVERLAP);
   }
   if (zoom < 12) return 64;
   if (zoom < 14) return 42;
@@ -611,58 +610,6 @@ function edgeOverlayForPosition(map: L.Map, position: LatLng, margin = 30) {
     x: Math.min(size.x - margin, Math.max(margin, edge.x)),
     y: Math.min(safeBottom - margin, Math.max(safeTop + margin, edge.y)),
   };
-}
-
-function MyLocationArrow({ me }: { me: UserProfile }) {
-  const map = useMap();
-  const [arrow, setArrow] = useState<{ angle: number; x: number; y: number } | null>(null);
-
-  useEffect(() => {
-    if (!me.location) {
-      setArrow(null);
-      return undefined;
-    }
-
-    let frame = 0;
-
-    function updateArrow() {
-      frame = 0;
-      if (!me.location || isPositionInView(map, me.location)) {
-        setArrow(null);
-        return;
-      }
-
-      setArrow(edgeOverlayForPosition(map, me.location, 96));
-    }
-
-    function scheduleUpdate() {
-      if (frame) return;
-      frame = window.requestAnimationFrame(updateArrow);
-    }
-
-    updateArrow();
-    map.on('moveend zoomend resize', scheduleUpdate);
-
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      map.off('moveend zoomend resize', scheduleUpdate);
-    };
-  }, [map, me.location]);
-
-  if (!arrow || !me.location) return null;
-
-  return createPortal(
-    <button
-      className="map-my-location-arrow"
-      onClick={() => me.location && map.flyTo([me.location.lat, me.location.lng], Math.max(map.getZoom(), 15))}
-      style={{ left: `${arrow.x}px`, top: `${arrow.y}px` }}
-      type="button"
-    >
-      <span className="map-my-location-arrow-label">Eu</span>
-      <span className="map-my-location-arrow-chevron" style={{ transform: `rotate(${arrow.angle - 45}deg)` }} />
-    </button>,
-    map.getContainer(),
-  );
 }
 
 function AppDialogModal({ dialog, onClose }: { dialog: AppDialog; onClose: () => void }) {
@@ -808,7 +755,60 @@ function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me
   );
 }
 
-function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: UserProfile[] }) {
+function MapNavigationControls({ me }: { me: UserProfile }) {
+  const map = useMap();
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const [, setZoomVersion] = useState(0);
+
+  useLeafletMapEvents({
+    zoomend: () => setZoomVersion((version) => version + 1),
+  });
+
+  useEffect(() => {
+    if (!controlsRef.current) return;
+    L.DomEvent.disableClickPropagation(controlsRef.current);
+    L.DomEvent.disableScrollPropagation(controlsRef.current);
+  }, []);
+
+  return createPortal(
+    <div className="map-navigation-controls" ref={controlsRef}>
+      <button
+        aria-label="Focar em você"
+        className="map-navigation-button map-navigation-location"
+        disabled={!me.location}
+        onClick={() => {
+          if (me.location) map.flyTo([me.location.lat, me.location.lng], Math.max(map.getZoom(), 16), { duration: 0.65 });
+        }}
+        type="button"
+      >
+        <LocateFixed className="h-5 w-5" />
+      </button>
+      <div className="map-navigation-zoom">
+        <button
+          aria-label="Aumentar zoom"
+          className="map-navigation-button"
+          disabled={map.getZoom() >= map.getMaxZoom()}
+          onClick={() => map.zoomIn()}
+          type="button"
+        >
+          <Plus className="h-5 w-5" />
+        </button>
+        <button
+          aria-label="Diminuir zoom"
+          className="map-navigation-button"
+          disabled={map.getZoom() <= map.getMinZoom()}
+          onClick={() => map.zoomOut()}
+          type="button"
+        >
+          <Minus className="h-5 w-5" />
+        </button>
+      </div>
+    </div>,
+    map.getContainer(),
+  );
+}
+
+function ClusteredProfileMarkers({ me, onOpenCluster, profiles }: { me: UserProfile; onOpenCluster: (profiles: UserProfile[]) => void; profiles: UserProfile[] }) {
   const { t } = useI18n();
   const map = useMap();
   const [, setMapVersion] = useState(0);
@@ -817,8 +817,6 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
     zoomend: () => setMapVersion((version) => version + 1),
   });
 
-  const zoom = map.getZoom();
-  const showProfilePhotos = zoom >= 15;
   const items = closestToMapCenter(profiles
     .map((profile) => {
       const position = visibleLocation(profile);
@@ -833,10 +831,14 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
         if (cluster.items.length > 1) {
           return (
             <Marker
+              eventHandlers={{
+                click(event) {
+                  L.DomEvent.stopPropagation(event.originalEvent);
+                  onOpenCluster(cluster.items.map((item) => item.profile));
+                },
+              }}
               icon={personGroupIcon}
-              interactive={false}
               key={`people-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
-              keyboard={false}
               position={[cluster.position.lat, cluster.position.lng]}
               zIndexOffset={100}
             />
@@ -845,7 +847,7 @@ function ClusteredProfileMarkers({ me, profiles }: { me: UserProfile; profiles: 
 
         const { profile, position } = cluster.items[0];
         return (
-          <Marker icon={showProfilePhotos && profile.photoURL ? profilePhotoIcon(profile.photoURL) : profileLiteIcon} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
+          <Marker icon={profile.photoURL ? profilePhotoIcon(profile.photoURL) : profileLiteIcon} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
@@ -1046,8 +1048,10 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [showMyChatsList, setShowMyChatsList] = useState(false);
   const [showNearbyChatsList, setShowNearbyChatsList] = useState(false);
   const [showPeopleList, setShowPeopleList] = useState(false);
+  const [clusteredProfiles, setClusteredProfiles] = useState<UserProfile[]>([]);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
+  const [connectionKind, setConnectionKind] = useState<'romantic' | 'friendship'>('romantic');
   const [gpsEvent, setGpsEvent] = useState<MapEvent | null>(null);
   const [localEvents, setLocalEvents] = useState<MapEvent[]>(() => readLocalMapEvents(me.uid));
   const [focusTarget, setFocusTarget] = useState<{ event: MapEvent; nonce: number } | null>(null);
@@ -1402,6 +1406,12 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         return;
       }
 
+      if (clusteredProfiles.length > 0) {
+        event.preventDefault();
+        setClusteredProfiles([]);
+        return;
+      }
+
       if (showChatsList || showMyChatsList || showNearbyChatsList) {
         event.preventDefault();
         setShowChatsList(false);
@@ -1424,6 +1434,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   }, [
     activeEvent,
     clusteredEvents.length,
+    clusteredProfiles.length,
     createChatOpen,
     emojiPickerOpen,
     gpsEvent,
@@ -2172,7 +2183,24 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     setProfileActionMessage(result.ok ? (result.matched ? `Deu match com ${profile.displayName}.` : `Você curtiu ${profile.displayName}.`) : result.message);
     if (result.ok) {
       setPreviewProfile(null);
-      if (result.matched) setMatchProfile(profile);
+      if (result.matched) {
+        setConnectionKind('romantic');
+        setMatchProfile(profile);
+      }
+    }
+  }
+
+  async function connectNearbyProfile(profile: UserProfile) {
+    try {
+      const connected = await sendFriendRequest(me.uid, profile.uid);
+      setProfileActionMessage(connected ? t('friendshipCreated', { name: profile.displayName }) : t('friendRequestSent', { name: profile.displayName }));
+      setPreviewProfile(null);
+      if (connected) {
+        setConnectionKind('friendship');
+        setMatchProfile(profile);
+      }
+    } catch (error) {
+      setProfileActionMessage(error instanceof Error ? error.message : t('friendshipError'));
     }
   }
 
@@ -2572,18 +2600,21 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           me={me}
           onClose={() => setPreviewProfile(null)}
           onDislike={dislikeNearbyProfile}
+          onFriend={connectNearbyProfile}
           onLike={likeNearbyProfile}
           profile={previewProfile}
         />
       )}
       {matchProfile && (
         <div className="fixed inset-0 z-[1500] grid place-items-center bg-black/70 p-6 text-white backdrop-blur">
-          <section className="raddo-match-pop w-full max-w-sm rounded-lg border border-[#ff3f68]/50 bg-[#07111f] p-6 text-center shadow-2xl shadow-rose-950/50">
-            <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg bg-[#ff3f68] text-white">
-              <Sparkles className="h-8 w-8" />
+          <section className={`raddo-match-pop w-full max-w-sm rounded-lg border bg-[#07111f] p-6 text-center shadow-2xl ${connectionKind === 'friendship' ? 'border-sky-400/50 shadow-sky-950/50' : 'border-[#ff3f68]/50 shadow-rose-950/50'}`}>
+            <div className={`mx-auto grid h-16 w-16 place-items-center rounded-lg text-white ${connectionKind === 'friendship' ? 'bg-sky-400' : 'bg-[#ff3f68]'}`}>
+              {connectionKind === 'friendship' ? <Handshake className="h-8 w-8" /> : <Sparkles className="h-8 w-8" />}
             </div>
-            <h1 className="mt-4 text-3xl font-semibold">Deu match!</h1>
-            <p className="mt-2 text-sm text-slate-300">Você e {matchProfile.displayName} se curtiram.</p>
+            <h1 className="mt-4 text-3xl font-semibold">{connectionKind === 'friendship' ? t('newFriendship') : 'Deu match!'}</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              {connectionKind === 'friendship' ? t('notificationNewFriendshipText', { name: matchProfile.displayName }) : `Você e ${matchProfile.displayName} se curtiram.`}
+            </p>
             <div className="mt-5 flex justify-center -space-x-4">
               <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={me.photoURL} />
               <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={matchProfile.photoURL} />
@@ -2884,6 +2915,58 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           </section>
         </div>
       )}
+      {clusteredProfiles.length > 0 && (
+        <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
+          <section className="max-h-[calc(78dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-md overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[78dvh] sm:rounded-lg">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 text-lg font-semibold">
+                  <span aria-hidden="true">👥</span>
+                  Pessoas neste grupo
+                </h2>
+                <p className="text-sm text-slate-300">{clusteredProfiles.length} pessoas próximas neste ponto</p>
+              </div>
+              <button
+                aria-label={t('close')}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
+                onClick={() => setClusteredProfiles([])}
+                type="button"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="grid gap-2">
+              {clusteredProfiles.map((profile) => (
+                <button
+                  className="flex items-center gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-left transition active:scale-[0.995]"
+                  key={profile.uid}
+                  onClick={() => {
+                    setClusteredProfiles([]);
+                    setPreviewProfile(profile);
+                  }}
+                  type="button"
+                >
+                  <CachedMediaImage
+                    className="h-full w-full object-cover"
+                    fallbackClassName="h-12 w-12 rounded-lg"
+                    src={profile.photoURL}
+                    thumbnailOnly
+                  />
+                  <span className="min-w-0 flex-1">
+                    <strong className="block truncate text-sm text-white">{profile.displayName}</strong>
+                    <span className="mt-0.5 block text-xs text-slate-400">
+                      {me.location && profile.location
+                        ? formatPersonDistanceKm(distanceKm(me.location, profile.location))
+                        : t('distanceUnavailable')}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-sky-300">Ver perfil</span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
       {showPeopleList && (
         <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
           <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
@@ -2936,7 +3019,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                       {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
                     </span>
                   </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="mt-3 grid grid-cols-4 gap-2">
                     <button
                       className="h-10 rounded-lg border border-white/10 bg-white/8 text-xs font-semibold text-slate-100"
                       onClick={() => {
@@ -2954,6 +3037,15 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                       type="button"
                     >
                       <X className="h-4 w-4" />
+                    </button>
+                    <button
+                      aria-label={`${t('connectFriend')} ${profile.displayName}`}
+                      className="grid h-10 place-items-center rounded-lg bg-sky-400 text-slate-950"
+                      onClick={() => connectNearbyProfile(profile)}
+                      title={t('connectFriend')}
+                      type="button"
+                    >
+                      <Handshake className="h-4 w-4" />
                     </button>
                     <button
                       aria-label={`Curtir ${profile.displayName}`}
@@ -3334,6 +3426,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             url={tileLayer.url}
           />
           <MapFocusController target={focusTarget} />
+          <MapNavigationControls me={me} />
           {me.isPremium && <MapClickTarget onPick={setSelectedPoint} selectedPoint={selectedPoint} />}
 
           {me.location && (
@@ -3345,8 +3438,6 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               </Popup>
             </Marker>
           )}
-          <MyLocationArrow me={me} />
-
           {me.isPremium && selectedPoint && (
             <Marker
               eventHandlers={{
@@ -3361,7 +3452,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             </Marker>
           )}
 
-          <ClusteredProfileMarkers me={me} profiles={profiles} />
+          <ClusteredProfileMarkers me={me} onOpenCluster={setClusteredProfiles} profiles={profiles} />
           <ClusteredEventMarkers
             creatorNames={eventCreatorNames}
             eventParticipantCounts={eventParticipantCounts}

@@ -71,6 +71,7 @@ export type Match = {
   lastMessage: string;
   lastMessageAt: string | null;
   lastMessageSenderUid?: string;
+  connectionType: 'romantic' | 'friendship';
 };
 
 export type Message = {

@@ -7,7 +7,9 @@ import {
   Eye,
   FileText,
   Gamepad2,
+  Handshake,
   Heart,
+  KeyRound,
   MapPin,
   MessageCircle,
   MessageSquareWarning,
@@ -119,6 +121,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   );
   const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(() => loadNotificationPreferences(profile.uid));
   const [safetyMessage, setSafetyMessage] = useState('');
+  const [accountEmail, setAccountEmail] = useState('');
+  const [hasEmailPassword, setHasEmailPassword] = useState<boolean | null>(null);
+  const [newAccountPassword, setNewAccountPassword] = useState('');
+  const [confirmAccountPassword, setConfirmAccountPassword] = useState('');
+  const [accountPasswordBusy, setAccountPasswordBusy] = useState(false);
+  const [accountPasswordMessage, setAccountPasswordMessage] = useState('');
   const [banUserUid, setBanUserUid] = useState('');
   const [banReason, setBanReason] = useState('');
   const [selectedModerationCase, setSelectedModerationCase] = useState<ModerationCase | null>(null);
@@ -154,6 +162,24 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   useEffect(() => {
     getNotificationPermission().then(setNotificationStatus);
   }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    void supabase.auth.getUser().then(({ data }) => {
+      if (!active || !data.user) return;
+      const providers = Array.isArray(data.user.app_metadata?.providers) ? data.user.app_metadata.providers : [];
+      const identities = Array.isArray(data.user.identities) ? data.user.identities : [];
+      setAccountEmail(data.user.email ?? '');
+      setHasEmailPassword(
+        providers.includes('email') || identities.some((identity) => identity.provider === 'email'),
+      );
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [profile.uid]);
 
   useEffect(() => {
     if (hasProfileChanges || manualSaving || uploadingCarouselPhotos || uploadingProfilePhoto) return;
@@ -542,6 +568,31 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     } catch (error) {
       setSafetyMessage(error instanceof Error ? error.message : t('unblockError'));
     }
+  }
+
+  async function handleCreateAccountPassword() {
+    setAccountPasswordMessage('');
+    if (newAccountPassword.length < 6) {
+      setAccountPasswordMessage('A nova senha precisa ter pelo menos 6 caracteres.');
+      return;
+    }
+    if (newAccountPassword !== confirmAccountPassword) {
+      setAccountPasswordMessage(t('passwordMismatch'));
+      return;
+    }
+
+    setAccountPasswordBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: newAccountPassword });
+    setAccountPasswordBusy(false);
+    if (error) {
+      setAccountPasswordMessage(error.message);
+      return;
+    }
+
+    setHasEmailPassword(true);
+    setNewAccountPassword('');
+    setConfirmAccountPassword('');
+    setAccountPasswordMessage(t('passwordUpdated'));
   }
 
   async function handleUndoInteraction(uid: string) {
@@ -1159,6 +1210,11 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                                 <Heart className="h-3.5 w-3.5 text-[#ff3f68]" />
                                 Curtido
                               </>
+                            ) : interaction.type === 'friendship' ? (
+                              <>
+                                <Handshake className="h-3.5 w-3.5 text-sky-300" />
+                                Amizade
+                              </>
                             ) : (
                               <>
                                 <X className="h-3.5 w-3.5 text-rose-200" />
@@ -1197,6 +1253,60 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
 
         {activeSection === 'safety' && (
           <div className="space-y-4">
+            <section className="rounded-lg border border-white/10 bg-white/8 p-4">
+              <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
+                <KeyRound className="h-4 w-4 text-teal-300" />
+                Conta e acesso
+              </div>
+              <p className="text-xs text-slate-400">E-mail conectado</p>
+              <p className="mt-1 break-all text-sm font-semibold text-white">{accountEmail || t('email')}</p>
+
+              {accountEmail && hasEmailPassword === false && (
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <p className="text-sm font-semibold">{t('createNewPassword')}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">
+                    Voc&ecirc; entrou com o Google. Crie uma senha para tamb&eacute;m poder entrar usando este e-mail.
+                  </p>
+                  <div className="mt-3 grid gap-3">
+                    <label className="grid gap-1 text-xs text-slate-300">
+                      {t('newPassword')}
+                      <input
+                        autoComplete="new-password"
+                        className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm text-white outline-none focus:border-teal-300/60"
+                        minLength={6}
+                        onChange={(event) => setNewAccountPassword(event.target.value)}
+                        type="password"
+                        value={newAccountPassword}
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs text-slate-300">
+                      {t('confirmPassword')}
+                      <input
+                        autoComplete="new-password"
+                        className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm text-white outline-none focus:border-teal-300/60"
+                        minLength={6}
+                        onChange={(event) => setConfirmAccountPassword(event.target.value)}
+                        placeholder={t('confirmPasswordPlaceholder')}
+                        type="password"
+                        value={confirmAccountPassword}
+                      />
+                    </label>
+                    <button
+                      className="h-11 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                      disabled={accountPasswordBusy || newAccountPassword.length < 6 || confirmAccountPassword.length < 6}
+                      onClick={() => void handleCreateAccountPassword()}
+                      type="button"
+                    >
+                      {accountPasswordBusy ? t('saving') : t('savePassword')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {accountPasswordMessage && (
+                <p className="mt-3 rounded-lg bg-white/8 p-3 text-xs text-slate-100">{accountPasswordMessage}</p>
+              )}
+            </section>
+
             <section className="rounded-lg border border-white/10 bg-white/8 p-4">
               <div className="mb-4 flex items-center gap-2 text-sm font-semibold">
                 <Shield className="h-4 w-4 text-teal-300" />

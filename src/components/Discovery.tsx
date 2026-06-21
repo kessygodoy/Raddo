@@ -1,10 +1,11 @@
 ﻿import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Eye, Heart, MapPin, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Eye, Handshake, Heart, MapPin, Play, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import {
   sendDislike,
+  sendFriendRequest,
   trySendLike,
   unlockLikedBy,
   unlockLikeBonus,
@@ -32,6 +33,7 @@ export default function Discovery({ me, profiles }: Props) {
   const [message, setMessage] = useState('');
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [matchProfile, setMatchProfile] = useState<UserProfile | null>(null);
+  const [connectionKind, setConnectionKind] = useState<'romantic' | 'friendship'>('romantic');
   const [videoAdContext, setVideoAdContext] = useState<'likes' | 'likedBy' | 'resetCards' | null>(null);
   const [likedByAdUnlocked, setLikedByAdUnlocked] = useState(false);
   const [likedByModalOpen, setLikedByModalOpen] = useState(false);
@@ -210,11 +212,27 @@ export default function Discovery({ me, profiles }: Props) {
     }
     setMessage('');
     if (result.matched) {
+      setConnectionKind('romantic');
       setMatchProfile(profile);
     }
     await registerLikeForAds();
     setPreviewProfile(null);
     setSkipped((prev) => new Set(prev).add(profile.uid));
+  }
+
+  async function connectProfile(profile: UserProfile) {
+    try {
+      const connected = await sendFriendRequest(me.uid, profile.uid);
+      setMessage(connected ? t('friendshipCreated', { name: profile.displayName }) : t('friendRequestSent', { name: profile.displayName }));
+      setPreviewProfile(null);
+      setSkipped((previous) => new Set(previous).add(profile.uid));
+      if (connected) {
+        setConnectionKind('friendship');
+        setMatchProfile(profile);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('friendshipError'));
+    }
   }
 
   async function likeLikedByProfile(profile: UserProfile) {
@@ -237,12 +255,21 @@ export default function Discovery({ me, profiles }: Props) {
     setHandledLikedByIds((current) => new Set(current).add(profile.uid));
   }
 
+  async function connectLikedByProfile(profile: UserProfile) {
+    await connectProfile(profile);
+    setHandledLikedByIds((current) => new Set(current).add(profile.uid));
+  }
+
   async function likeCrossedProfile(profile: UserProfile) {
     await likeProfile(profile);
   }
 
   async function dislikeCrossedProfile(profile: UserProfile) {
     await dislikeProfile(profile);
+  }
+
+  async function connectCrossedProfile(profile: UserProfile) {
+    await connectProfile(profile);
   }
 
   async function handleLike() {
@@ -253,6 +280,11 @@ export default function Discovery({ me, profiles }: Props) {
   async function handleDislike() {
     if (!current) return;
     await dislikeProfile(current);
+  }
+
+  async function handleFriend() {
+    if (!current) return;
+    await connectProfile(current);
   }
 
   async function resetCardInteractions(force = false) {
@@ -290,6 +322,7 @@ export default function Discovery({ me, profiles }: Props) {
           me={me}
           onClose={() => setPreviewProfile(null)}
           onDislike={dislikeProfile}
+          onFriend={connectProfile}
           onLike={likeProfile}
           profile={previewProfile}
         />
@@ -344,20 +377,21 @@ export default function Discovery({ me, profiles }: Props) {
           >
             <motion.section
               animate={{ scale: 1, y: 0 }}
-              className="w-full max-w-sm rounded-lg border border-teal-300/40 bg-[#07111f] p-6 text-center shadow-2xl shadow-teal-950/50"
+              className={`w-full max-w-sm rounded-lg border bg-[#07111f] p-6 text-center shadow-2xl ${connectionKind === 'friendship' ? 'border-sky-400/40 shadow-sky-950/50' : 'border-[#ff3f68]/40 shadow-rose-950/50'}`}
               initial={{ scale: 0.86, y: 30 }}
             >
-              <div className="mx-auto grid h-16 w-16 place-items-center rounded-lg bg-teal-300 text-slate-950">
-                <Sparkles className="h-8 w-8" />
+              <div className={`mx-auto grid h-16 w-16 place-items-center rounded-lg text-white ${connectionKind === 'friendship' ? 'bg-sky-400' : 'bg-[#ff3f68]'}`}>
+                {connectionKind === 'friendship' ? <Handshake className="h-8 w-8" /> : <Sparkles className="h-8 w-8" />}
               </div>
-              <h1 className="mt-4 text-3xl font-semibold">{t('notificationNewMatch')}</h1>
-              <p className="mt-2 text-sm text-slate-300">{t('notificationNewMatchText', { name: matchProfile.displayName })}</p>
+              <h1 className="mt-4 text-3xl font-semibold">{connectionKind === 'friendship' ? t('newFriendship') : t('notificationNewMatch')}</h1>
+              {connectionKind === 'friendship' && <p className="mt-2 text-sm text-slate-300">{t('notificationNewFriendshipText', { name: matchProfile.displayName })}</p>}
+              {connectionKind !== 'friendship' && <p className="mt-2 text-sm text-slate-300">{t('notificationNewMatchText', { name: matchProfile.displayName })}</p>}
               <div className="mt-5 flex justify-center -space-x-4">
                 <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={me.photoURL} />
                 <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-20 w-20 rounded-lg border-2 border-[#07111f]" src={matchProfile.photoURL} />
               </div>
               <button
-                className="mt-6 h-11 w-full rounded-lg bg-teal-300 font-semibold text-slate-950"
+                className={`mt-6 h-11 w-full rounded-lg font-semibold text-white ${connectionKind === 'friendship' ? 'bg-sky-400' : 'bg-[#ff3f68]'}`}
                 onClick={() => setMatchProfile(null)}
                 type="button"
               >
@@ -419,6 +453,14 @@ export default function Discovery({ me, profiles }: Props) {
                           type="button"
                         >
                           <X className="h-4 w-4" />
+                        </button>
+                        <button
+                          aria-label={`${t('connectFriend')} ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-sky-400/60 bg-sky-400/10 text-sky-300"
+                          onClick={() => connectLikedByProfile(profile)}
+                          type="button"
+                        >
+                          <Handshake className="h-4 w-4" />
                         </button>
                         <button
                           aria-label={`Curtir ${profile.displayName}`}
@@ -528,6 +570,14 @@ export default function Discovery({ me, profiles }: Props) {
                           <X className="h-4 w-4" />
                         </button>
                         <button
+                          aria-label={`${t('connectFriend')} ${profile.displayName}`}
+                          className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-sky-400/60 bg-sky-400/10 text-sky-300"
+                          onClick={() => connectCrossedProfile(profile)}
+                          type="button"
+                        >
+                          <Handshake className="h-4 w-4" />
+                        </button>
+                        <button
                           aria-label={`Curtir ${profile.displayName}`}
                           className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal-300 text-slate-950"
                           onClick={() => likeCrossedProfile(profile)}
@@ -632,7 +682,7 @@ export default function Discovery({ me, profiles }: Props) {
         </AnimatePresence>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <button
           aria-label="Dislike"
           className="raddo-secondary-action grid h-14 place-items-center rounded-lg text-rose-100"
@@ -640,6 +690,15 @@ export default function Discovery({ me, profiles }: Props) {
           type="button"
         >
           <X className="h-6 w-6" />
+        </button>
+        <button
+          aria-label={t('connectFriend')}
+          className="flex h-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-sky-400/60 bg-sky-400/10 text-sky-300"
+          onClick={handleFriend}
+          type="button"
+        >
+          <Handshake className="h-6 w-6" />
+          <span className="text-[10px] font-semibold">{t('connectFriend')}</span>
         </button>
         <button
           aria-label="Like"
@@ -717,6 +776,14 @@ export default function Discovery({ me, profiles }: Props) {
                   type="button"
                 >
                   <X className="h-4 w-4" />
+                </button>
+                <button
+                  aria-label={`${t('connectFriend')} ${profile.displayName}`}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-sky-400/60 bg-sky-400/10 text-sky-300"
+                  onClick={() => connectLikedByProfile(profile)}
+                  type="button"
+                >
+                  <Handshake className="h-4 w-4" />
                 </button>
                 <button
                   aria-label={`Curtir ${profile.displayName}`}

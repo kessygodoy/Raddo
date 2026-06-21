@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Flag, Heart, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Flag, Handshake, Heart, Users, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
-import { reportProfile, useProfileInteractionStatus } from '../hooks/useMatches';
+import { reportProfile, useProfileConnectionCount, useProfileInteractionStatus } from '../hooks/useMatches';
 import { reportReasons, type ReportReason } from '../reportOptions';
 import CachedMediaImage from './CachedMediaImage';
 
@@ -12,12 +12,13 @@ type Props = {
   profile: UserProfile;
   onClose: () => void;
   onDislike?: (profile: UserProfile) => void | Promise<void>;
+  onFriend?: (profile: UserProfile) => void | Promise<void>;
   onLike?: (profile: UserProfile) => void | Promise<void>;
   showReport?: boolean;
   overlayClassName?: string;
 };
 
-export default function ProfilePreview({ me, profile, onClose, onDislike, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
+export default function ProfilePreview({ me, profile, onClose, onDislike, onFriend, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
   const { t } = useI18n();
   const photos = useMemo(() => {
     const orderedPhotos = [profile.photoURL, ...profile.photos].filter(Boolean);
@@ -29,6 +30,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
   const [reportReason, setReportReason] = useState<ReportReason>('harassment');
   const photo = photos[photoIndex] ?? profile.photoURL;
   const hasInteraction = useProfileInteractionStatus(me.uid, profile.uid);
+  const connectionCount = useProfileConnectionCount(profile.uid);
 
   useEffect(() => {
     setPhotoIndex(0);
@@ -102,6 +104,12 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
                 ? t('distanceKm', { distance: formatPersonDistanceKm(distanceKm(me.location, profile.location)).replace(' km', '') })
                 : t('distanceUnavailable')}
             </p>
+            {connectionCount !== null && (
+              <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/8 px-2.5 py-1 text-xs font-semibold text-slate-200">
+                <Users className="h-3.5 w-3.5 text-sky-300" />
+                {connectionCount} {t(connectionCount === 1 ? 'connectionSingular' : 'connectionPlural')}
+              </p>
+            )}
           </div>
           {profile.bio && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{profile.bio}</p>}
           <div className="grid gap-3 text-sm">
@@ -155,20 +163,34 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onLike
               )}
             </div>
           )}
-          {hasInteraction === false && (onLike || onDislike) && (
-            <div className="grid grid-cols-2 gap-3 pt-2">
+          {hasInteraction === false && (onLike || onDislike || onFriend) && (
+            <div
+              className="grid gap-3 pt-2"
+              style={{ gridTemplateColumns: `repeat(${[onDislike, onFriend, onLike].filter(Boolean).length}, minmax(0, 1fr))` }}
+            >
               {onDislike && (
                 <button
-                  className="grid h-12 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
+                  className="grid h-14 place-items-center rounded-lg border border-white/10 bg-white/8 text-rose-100"
                   onClick={() => onDislike(profile)}
                   type="button"
                 >
                   <X className="h-5 w-5" />
                 </button>
               )}
+              {onFriend && (
+                <button
+                  aria-label={t('connectFriend')}
+                  className="flex h-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-sky-400/60 bg-sky-400/10 text-sky-300"
+                  onClick={() => onFriend(profile)}
+                  type="button"
+                >
+                  <Handshake className="h-5 w-5" />
+                  <span className="text-[10px] font-semibold">{t('connectFriend')}</span>
+                </button>
+              )}
               {onLike && (
                 <button
-                  className="grid h-12 place-items-center rounded-lg bg-teal-300 text-slate-950"
+                  className="grid h-14 place-items-center rounded-lg bg-teal-300 text-slate-950"
                   onClick={() => onLike(profile)}
                   type="button"
                 >

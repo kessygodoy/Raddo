@@ -1,17 +1,20 @@
-import { Bell, Heart, MessageCircle, Sparkles } from 'lucide-react';
+import { Bell, Handshake, Heart, MessageCircle, Sparkles } from 'lucide-react';
 import { useMemo } from 'react';
 import { useI18n } from '../i18n';
 import type { MapEventNotification } from '../hooks/useMapEvents';
+import type { FriendshipPrompt } from '../hooks/useMatches';
 import type { NotificationPreferences } from '../notificationPreferences';
 import type { Match, UserProfile } from '../types';
 
 type Props = {
   currentUid: string;
+  friendshipPrompts?: FriendshipPrompt[];
   mapNotifications?: MapEventNotification[];
   matchProfilesByUid?: Record<string, UserProfile>;
   matches: Match[];
   notificationsClearedAt: number;
   onOpenMapNotification: (notificationId: string) => void;
+  onOpenFriendshipPrompt: (profileUid: string, createdAt: string) => void;
   onOpenNotification: (notificationId: string, matchId: string) => void;
   preferences: NotificationPreferences;
 };
@@ -22,11 +25,13 @@ type NotificationItem = {
   groupKey: string;
   id: string;
   matchId?: string;
-  target: 'chat' | 'map';
+  profileUid?: string;
+  requestCreatedAt?: string;
+  target: 'chat' | 'friendship_invite' | 'map';
   text: string;
   timeValue: string | null;
   title: string;
-  tone: 'match' | 'message' | 'story_like';
+  tone: 'friendship' | 'match' | 'message' | 'story_like';
 };
 
 function relativeTime(dateValue: string | null) {
@@ -56,16 +61,19 @@ function notificationIdForMatch(match: Match) {
 
 export default function NotificationsPanel({
   currentUid: _currentUid,
+  friendshipPrompts = [],
   mapNotifications = [],
   matchProfilesByUid = {},
   matches,
   notificationsClearedAt,
   onOpenMapNotification,
+  onOpenFriendshipPrompt,
   onOpenNotification,
   preferences,
 }: Props) {
   const { t } = useI18n();
   const safeMatches = Array.isArray(matches) ? matches : [];
+  const safeFriendshipPrompts = Array.isArray(friendshipPrompts) ? friendshipPrompts : [];
   const safeMapNotifications = Array.isArray(mapNotifications) ? mapNotifications : [];
   const safePreferences = preferences ?? {
     connectionMessages: true,
@@ -86,6 +94,7 @@ export default function NotificationsPanel({
         })
         .map<NotificationItem>((match) => {
           const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
+          const isFriendship = !hasMessage && match.connectionType === 'friendship';
           const otherUid = match.users.find((uid) => uid !== _currentUid) ?? '';
           const otherName = matchProfilesByUid[otherUid]?.displayName || 'Alguem';
           return {
@@ -94,12 +103,30 @@ export default function NotificationsPanel({
             id: notificationIdForMatch(match),
             matchId: match.id,
             target: 'chat',
-            text: hasMessage ? `${otherName} enviou uma mensagem: ${String(match.lastMessage || '')}` : t('notificationNewMatchText', { name: otherName }),
+            text: hasMessage
+              ? `${otherName} enviou uma mensagem: ${String(match.lastMessage || '')}`
+              : isFriendship
+                ? t('friendshipCreated', { name: otherName })
+                : t('notificationNewMatchText', { name: otherName }),
             timeValue: match.lastMessageAt ?? match.createdAt ?? null,
-            title: hasMessage ? otherName : t('notificationNewMatch'),
-            tone: hasMessage ? 'message' : 'match',
+            title: hasMessage ? otherName : t(isFriendship ? 'notificationNewFriendship' : 'notificationNewMatch'),
+            tone: hasMessage ? 'message' : isFriendship ? 'friendship' : 'match',
           };
         });
+
+      const friendshipInviteItems = safePreferences.connections
+        ? safeFriendshipPrompts.map<NotificationItem>((prompt) => ({
+            groupKey: `friendship-invite:${prompt.profile.uid}`,
+            id: `friendship-invite:${prompt.profile.uid}:${prompt.createdAt}`,
+            profileUid: prompt.profile.uid,
+            requestCreatedAt: prompt.createdAt,
+            target: 'friendship_invite',
+            text: `${prompt.profile.displayName} quer formar uma amizade com você. Toque para responder.`,
+            timeValue: prompt.createdAt,
+            title: 'Convite de amizade',
+            tone: 'friendship',
+          }))
+        : [];
 
       const mapItems = safeMapNotifications
         .filter((notification) => (notification.tone === 'message' ? safePreferences.connectionMessages : true))
@@ -116,7 +143,7 @@ export default function NotificationsPanel({
         }));
 
       const grouped = new Map<string, NotificationItem>();
-      [...chatNotifications, ...mapItems]
+      [...friendshipInviteItems, ...chatNotifications, ...mapItems]
         .filter((notification) => notification.id && notification.title)
         .forEach((notification) => {
           const current = grouped.get(notification.groupKey);
@@ -146,7 +173,7 @@ export default function NotificationsPanel({
     } catch {
       return [];
     }
-  }, [_currentUid, matchProfilesByUid, safeMapNotifications, safeMatches, safePreferences, t]);
+  }, [_currentUid, matchProfilesByUid, safeFriendshipPrompts, safeMapNotifications, safeMatches, safePreferences, t]);
 
   return (
     <section className="mx-auto grid w-full max-w-lg gap-4 px-1 py-2 text-white">
@@ -176,7 +203,7 @@ export default function NotificationsPanel({
           </div>
         )}
         {notifications.map((notification) => {
-          const Icon = notification.tone === 'message' ? MessageCircle : Heart;
+          const Icon = notification.tone === 'message' ? MessageCircle : notification.tone === 'friendship' ? Handshake : Heart;
           const read = (Date.parse(notification.timeValue ?? '') || 0) <= notificationsClearedAt;
           return (
             <button
@@ -185,6 +212,10 @@ export default function NotificationsPanel({
               }`}
               key={notification.id}
               onClick={() => {
+                if (notification.target === 'friendship_invite' && notification.profileUid && notification.requestCreatedAt) {
+                  onOpenFriendshipPrompt(notification.profileUid, notification.requestCreatedAt);
+                  return;
+                }
                 if (notification.target === 'map') {
                   onOpenMapNotification(notification.eventId || notification.id);
                   return;

@@ -1,0 +1,4 @@
+• Novas conexões de amizade, com convites, notificações e opção de evoluir a amizade para match com consentimento.
+• Perfis exibem o total de conexões, e contas Google podem criar uma senha na área de Segurança.
+• Mapa aprimorado com fotos nos marcadores, agrupamento de pessoas, lista por grupo e controles de zoom e localização.
+• Melhorias nas conversas, em Pessoas próximas e na estabilidade geral.

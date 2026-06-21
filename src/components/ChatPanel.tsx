@@ -1,5 +1,5 @@
 ﻿import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Camera, Flag, ImagePlus, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX, X } from 'lucide-react';
+import { ArrowLeft, Camera, Flag, Handshake, Heart, ImagePlus, MessageCircle, MoreVertical, Search, Send, ShieldOff, UserX, X } from 'lucide-react';
 import type { Match, Message, UserProfile } from '../types';
 import {
   blockProfile,
@@ -7,11 +7,15 @@ import {
   editMessage,
   markMessageImageViewed,
   reportProfile,
+  requestMatchUpgrade,
+  respondMatchUpgrade,
   sendDislike,
+  sendFriendRequest,
   sendMessage,
   trySendLike,
   unmatchProfile,
   useMatchProfiles,
+  useMatchUpgradeRequest,
   useMessages,
   useSortedMatches,
 } from '../hooks/useMatches';
@@ -71,13 +75,17 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
   const [text, setText] = useState('');
   const [sendingText, setSendingText] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
+  const [connectionFilter, setConnectionFilter] = useState<'all' | 'romantic' | 'friendship'>('all');
+  const [searchTerm, setSearchTerm] = useState('');
   const [openMessageMenuId, setOpenMessageMenuId] = useState('');
   const [matchMenuOpen, setMatchMenuOpen] = useState(false);
+  const [matchUpgradeBusy, setMatchUpgradeBusy] = useState(false);
   const [previewProfile, setPreviewProfile] = useState<UserProfile | null>(null);
   const [viewOnceViewerIds, setViewOnceViewerIds] = useState<string[] | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const matchMenuRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const handledOpenMatchIdRef = useRef('');
   const activeMatch = useMemo(
@@ -85,11 +93,24 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     [activeMatchId, sortedMatches],
   );
   const messages = useMessages(activeMatch?.id);
+  const matchUpgradeRequest = useMatchUpgradeRequest(activeMatch?.id);
   const activeOtherUid = activeMatch?.users.find((uid) => uid !== currentUid) ?? activeMatch?.users[0] ?? '';
   const activeCachedConversation = activeMatch ? cachedConversations[activeMatch.id] : undefined;
   const activeProfile = profilesByUid[activeOtherUid];
   const activeDisplayName = activeProfile?.displayName ?? activeCachedConversation?.displayName ?? t('savedProfile');
   const activePhotoURL = activeProfile?.photos?.[0] || activeProfile?.photoURL || activeCachedConversation?.photoURL || '';
+  const filteredMatches = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLocaleLowerCase(language);
+    return sortedMatches.filter((match) => {
+      if (connectionFilter !== 'all' && match.connectionType !== connectionFilter) return false;
+      if (!normalizedSearch) return true;
+      const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
+      const profile = profilesByUid[otherUid];
+      const cached = cachedConversations[match.id];
+      const displayName = profile?.displayName ?? cached?.displayName ?? '';
+      return displayName.toLocaleLowerCase(language).includes(normalizedSearch);
+    });
+  }, [cachedConversations, connectionFilter, currentUid, language, profilesByUid, searchTerm, sortedMatches]);
   const visibleMessages = useMemo(
     () => {
       const persistedKeys = new Set(
@@ -217,7 +238,19 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     if (!shouldStickToBottomRef.current) return;
 
     scrollMessagesToBottom('smooth');
-  }, [chatView, visibleMessages.length]);
+  }, [chatView, matchUpgradeRequest?.createdAt, matchUpgradeRequest?.status, visibleMessages.length]);
+
+  useEffect(() => {
+    if (!matchMenuOpen) return undefined;
+
+    function closeMenuOnOutsidePress(event: PointerEvent) {
+      if (matchMenuRef.current?.contains(event.target as Node)) return;
+      setMatchMenuOpen(false);
+    }
+
+    document.addEventListener('pointerdown', closeMenuOnOutsidePress);
+    return () => document.removeEventListener('pointerdown', closeMenuOnOutsidePress);
+  }, [matchMenuOpen]);
 
   function handleMessageAreaScroll() {
     const area = messageAreaRef.current;
@@ -314,6 +347,37 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
     }
   }
 
+  async function handleRequestMatchUpgrade() {
+    if (!activeMatch || activeMatch.connectionType !== 'friendship' || matchUpgradeBusy) return;
+    setMatchMenuOpen(false);
+    setMatchUpgradeBusy(true);
+    setActionMessage('');
+    try {
+      await requestMatchUpgrade(activeMatch.id);
+      setActionMessage('Pedido de match enviado.');
+      shouldStickToBottomRef.current = true;
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'Não consegui enviar o pedido de match.');
+    } finally {
+      setMatchUpgradeBusy(false);
+    }
+  }
+
+  async function handleRespondMatchUpgrade(accept: boolean) {
+    if (!activeMatch || !matchUpgradeRequest || matchUpgradeBusy) return;
+    setMatchUpgradeBusy(true);
+    setActionMessage('');
+    try {
+      await respondMatchUpgrade(activeMatch.id, accept);
+      setActionMessage(accept ? `Você e ${activeDisplayName} agora deram match!` : 'Pedido de match recusado.');
+      shouldStickToBottomRef.current = true;
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : 'Não consegui responder ao pedido de match.');
+    } finally {
+      setMatchUpgradeBusy(false);
+    }
+  }
+
   async function handlePreviewLike(profile: UserProfile) {
     const result = await trySendLike(currentProfile, profile.uid);
     setActionMessage(result.ok ? (result.matched ? t('matchedWith', { name: profile.displayName }) : t('likedPerson', { name: profile.displayName })) : result.message);
@@ -327,6 +391,16 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
       setPreviewProfile(null);
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : t('dislikeError'));
+    }
+  }
+
+  async function handlePreviewFriend(profile: UserProfile) {
+    try {
+      const connected = await sendFriendRequest(currentUid, profile.uid);
+      setActionMessage(connected ? t('friendshipCreated', { name: profile.displayName }) : t('friendRequestSent', { name: profile.displayName }));
+      setPreviewProfile(null);
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : t('friendshipError'));
     }
   }
 
@@ -361,6 +435,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
           me={currentProfile}
           onClose={() => setPreviewProfile(null)}
           onDislike={previewProfile.uid !== currentUid ? handlePreviewDislike : undefined}
+          onFriend={previewProfile.uid !== currentUid ? handlePreviewFriend : undefined}
           onLike={previewProfile.uid !== currentUid ? handlePreviewLike : undefined}
           profile={previewProfile}
         />
@@ -414,27 +489,47 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
             <Search className="h-4 w-4" />
             <input
               className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-500"
+              onChange={(event) => setSearchTerm(event.target.value)}
               placeholder={t('searchConversation')}
               type="search"
+              value={searchTerm}
             />
           </label>
+          <div className="mt-3 grid grid-cols-3 rounded-lg border border-white/10 bg-[#07111f] p-1 text-xs font-semibold">
+            {([
+              ['all', 'allConnections'],
+              ['romantic', 'romanticMatches'],
+              ['friendship', 'friendships'],
+            ] as const).map(([value, label]) => (
+              <button
+                className={`h-9 rounded-md transition ${connectionFilter === value ? value === 'friendship' ? 'bg-sky-400/15 text-sky-300' : 'bg-[#ff3f68] text-white' : 'text-slate-400 hover:bg-white/8'}`}
+                key={value}
+                onClick={() => setConnectionFilter(value)}
+                type="button"
+              >
+                {t(label)}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="scrollbar-hidden min-h-0 flex-1 overflow-auto p-3">
-          {sortedMatches.length === 0 && (
+          {filteredMatches.length === 0 && (
             <div className="raddo-empty-state">
               <div className="grid justify-items-center gap-3">
                 <span className="raddo-empty-icon">
                   <MessageCircle className="h-5 w-5" />
                 </span>
                 <div>
-                  <p className="text-sm font-semibold">{t('noMatchesYet')}</p>
+                  <p className="text-sm font-semibold">
+                    {connectionFilter === 'friendship' ? t('noFriendshipsYet') : connectionFilter === 'romantic' ? t('noRomanticMatchesYet') : t('noMatchesYet')}
+                  </p>
                   <p className="mt-1 text-xs text-slate-400">{t('conversationStartHint')}</p>
                 </div>
               </div>
             </div>
           )}
-          {sortedMatches.map((match) => {
+          {filteredMatches.map((match) => {
             const otherUid = match.users.find((uid) => uid !== currentUid) ?? match.users[0];
             const profile = profilesByUid[otherUid];
             const cached = cachedConversations[match.id];
@@ -461,7 +556,7 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                 tabIndex={0}
               >
                 <button
-                  className="shrink-0"
+                  className="relative shrink-0"
                   disabled={!profile}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -480,6 +575,9 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                       {displayName.slice(0, 2).toUpperCase()}
                     </div>
                   )}
+                  <span className={`absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full text-white ring-2 ring-[#0f1f2d] ${match.connectionType === 'friendship' ? 'bg-sky-400' : 'bg-[#ff3f68]'}`}>
+                    {match.connectionType === 'friendship' ? <Handshake className="h-3 w-3" /> : <Heart className="h-3 w-3 fill-current" />}
+                  </span>
                 </button>
                 <button
                   className="min-w-0 text-left"
@@ -544,14 +642,18 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
                   )}
                 </button>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">
-                    {activeDisplayName}
+                  <p className="flex items-center gap-1.5 text-sm font-semibold">
+                    <span className="truncate">{activeDisplayName}</span>
+                    <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] ${activeMatch.connectionType === 'friendship' ? 'bg-sky-400/15 text-sky-300' : 'bg-[#ff3f68]/15 text-rose-200'}`}>
+                      {activeMatch.connectionType === 'friendship' ? <Handshake className="h-2.5 w-2.5" /> : <Heart className="h-2.5 w-2.5 fill-current" />}
+                      {activeMatch.connectionType === 'friendship' ? t('friendshipBadge') : t('romanticMatches')}
+                    </span>
                   </p>
                   {actionMessage && <p className="truncate text-xs text-slate-300">{actionMessage}</p>}
                 </div>
               </div>
             </div>
-            <div className="relative shrink-0">
+            <div className="relative shrink-0" ref={matchMenuRef}>
               <button
                 aria-label={t('conversationOptions')}
                 className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-100 transition hover:bg-white/12"
@@ -562,6 +664,17 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
               </button>
               {matchMenuOpen && (
                 <div className="absolute right-0 top-11 z-20 w-48 overflow-hidden rounded-lg border border-white/10 bg-[#07111f] py-1 text-sm shadow-2xl">
+                  {activeMatch.connectionType === 'friendship' && (
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-200 transition hover:bg-rose-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={matchUpgradeBusy || matchUpgradeRequest?.status === 'pending'}
+                      onClick={() => void handleRequestMatchUpgrade()}
+                      type="button"
+                    >
+                      <Heart className="h-4 w-4" />
+                      {matchUpgradeRequest?.status === 'pending' ? 'Pedido de match pendente' : 'Evoluir para match'}
+                    </button>
+                  )}
                   <button
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-100 transition hover:bg-white/8"
                     onClick={handleReport}
@@ -672,6 +785,60 @@ export default function ChatPanel({ currentProfile, currentUid, matches, onOpenM
               </div>
             );
           })}
+          {matchUpgradeRequest && (
+            <div className="flex justify-center py-2">
+              <section className="w-full max-w-sm rounded-xl border border-rose-300/25 bg-gradient-to-br from-rose-400/15 to-fuchsia-400/10 p-4 text-center shadow-lg">
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#ff3f68] text-white shadow-lg shadow-rose-950/30">
+                  <Heart className="h-6 w-6 fill-current" />
+                </span>
+                {matchUpgradeRequest.status === 'pending' ? (
+                  <>
+                    <h2 className="mt-3 text-sm font-semibold text-white">Evoluir amizade para match?</h2>
+                    <p className="mt-1 text-xs leading-5 text-slate-300">
+                      {matchUpgradeRequest.requesterUid === currentUid
+                        ? `Você convidou ${activeDisplayName} para transformar esta amizade em match.`
+                        : `${activeDisplayName} quer transformar esta amizade em match.`}
+                    </p>
+                    {matchUpgradeRequest.requesterUid === currentUid ? (
+                      <p className="mt-3 text-xs font-semibold text-rose-200">Aguardando a resposta...</p>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+                        <button
+                          className="h-10 rounded-lg border border-white/10 bg-white/8 text-xs font-semibold text-slate-200 disabled:opacity-50"
+                          disabled={matchUpgradeBusy}
+                          onClick={() => void handleRespondMatchUpgrade(false)}
+                          type="button"
+                        >
+                          Recusar
+                        </button>
+                        <button
+                          className="h-10 rounded-lg bg-[#ff3f68] text-xs font-semibold text-white disabled:opacity-50"
+                          disabled={matchUpgradeBusy}
+                          onClick={() => void handleRespondMatchUpgrade(true)}
+                          type="button"
+                        >
+                          {matchUpgradeBusy ? 'Respondendo...' : 'Aceitar'}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : matchUpgradeRequest.status === 'accepted' ? (
+                  <>
+                    <h2 className="mt-3 text-sm font-semibold text-white">Agora é match!</h2>
+                    <p className="mt-1 text-xs text-slate-300">Vocês dois aceitaram evoluir esta conexão.</p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="mt-3 text-sm font-semibold text-white">Pedido de match recusado</h2>
+                    <p className="mt-1 text-xs text-slate-300">A amizade continua normalmente.</p>
+                  </>
+                )}
+                <p className="mt-3 text-[10px] text-slate-500">
+                  {new Date(matchUpgradeRequest.createdAt).toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </section>
+            </div>
+          )}
           <div ref={messageEndRef} />
         </div>
 

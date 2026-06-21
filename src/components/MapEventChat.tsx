@@ -26,7 +26,7 @@ import {
   useMapEventParticipants,
 } from '../hooks/useMapEvents';
 import { useAppModeratorRole } from '../moderation';
-import { sendDislike, sendMessage, trySendLike } from '../hooks/useMatches';
+import { sendDislike, sendFriendRequest, sendMessage, trySendLike } from '../hooks/useMatches';
 import type { MapEvent, MapEventStory, Match, UserProfile } from '../types';
 import ProfilePreview from './ProfilePreview';
 import { reportReasons, type ReportReason } from '../reportOptions';
@@ -832,6 +832,16 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       setPreviewProfile(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('dislikeError'));
+    }
+  }
+
+  async function handlePreviewFriend(profile: UserProfile) {
+    try {
+      const connected = await sendFriendRequest(me.uid, profile.uid);
+      setError(connected ? t('friendshipCreated', { name: profile.displayName }) : t('friendRequestSent', { name: profile.displayName }));
+      setPreviewProfile(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('friendshipError'));
     }
   }
 
@@ -1873,6 +1883,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             me={me}
             onClose={() => setPreviewProfile(null)}
             onDislike={previewProfile.uid !== me.uid ? handlePreviewDislike : undefined}
+            onFriend={previewProfile.uid !== me.uid ? handlePreviewFriend : undefined}
             onLike={previewProfile.uid !== me.uid ? handlePreviewLike : undefined}
             overlayClassName="z-[1500]"
             profile={previewProfile}

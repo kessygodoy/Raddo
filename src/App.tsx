@@ -1,12 +1,12 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
-import { Bell, Heart, LogOut, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
+import { Bell, Handshake, Heart, LogOut, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
 import { hideAdMobBanner } from './adMob';
 import { isDemoMode } from './demoData';
 import { createTranslator, I18nProvider, normalizeLanguage } from './i18n';
 import { useAuthProfile } from './hooks/useAuthProfile';
-import { useMatchProfiles, useMatches } from './hooks/useMatches';
+import { sendFriendRequest, useFriendshipPrompts, useMatchProfiles, useMatches } from './hooks/useMatches';
 import { useMapEventNotifications } from './hooks/useMapEvents';
 import { useNearbyProfiles } from './hooks/useNearbyProfiles';
 import type { AppLanguage, AppTheme, AppView, ResolvedAppTheme } from './types';
@@ -18,6 +18,7 @@ import RadarMap from './components/RadarMap';
 import Onboarding from './components/Onboarding';
 import NotificationsPanel from './components/NotificationsPanel';
 import RaddoMark from './components/RaddoMark';
+import CachedMediaImage from './components/CachedMediaImage';
 import { getNotificationPermission, onAppNotificationTap, requestNativeNotifications, showAppNotification } from './nativeNotifications';
 import { onPushNotificationTap, registerDeviceForPush } from './pushNotifications';
 import { installAndroidApkUpdate } from './androidUpdater';
@@ -108,6 +109,10 @@ export default function App() {
   const [passwordRecoveryMessage, setPasswordRecoveryMessage] = useState('');
   const [passwordRecoveryError, setPasswordRecoveryError] = useState('');
   const [passwordRecoveryUrl, setPasswordRecoveryUrl] = useState('');
+  const [dismissedFriendshipPromptIds, setDismissedFriendshipPromptIds] = useState<Set<string>>(() => new Set());
+  const [selectedFriendshipPromptId, setSelectedFriendshipPromptId] = useState('');
+  const [friendshipPromptBusy, setFriendshipPromptBusy] = useState(false);
+  const [friendshipPromptError, setFriendshipPromptError] = useState('');
   const [theme, setTheme] = useState<AppTheme>(() => {
     const savedTheme = safeGetLocalStorage('radar-match-theme');
     return savedTheme === 'light' || savedTheme === 'green' || savedTheme === 'pride' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
@@ -124,8 +129,29 @@ export default function App() {
   const { user, profile, loading, profileLoading, profileError } = useAuthProfile();
   const nearbyProfiles = useNearbyProfiles(profile, profile?.lookingFor ?? []);
   const matches = useMatches(user?.id);
+  const friendshipPrompts = useFriendshipPrompts(user?.id);
+  const friendshipPromptId = (prompt: (typeof friendshipPrompts)[number]) => `${prompt.profile.uid}:${prompt.createdAt}`;
+  const friendshipPromptDismissedKey = (prompt: (typeof friendshipPrompts)[number]) =>
+    `raddo-friendship-prompt-dismissed:${user?.id ?? ''}:${friendshipPromptId(prompt)}`;
+  const activeFriendshipPrompt =
+    friendshipPrompts.find((prompt) => friendshipPromptId(prompt) === selectedFriendshipPromptId) ??
+    friendshipPrompts.find(
+      (prompt) =>
+        !dismissedFriendshipPromptIds.has(friendshipPromptId(prompt)) &&
+        safeGetLocalStorage(friendshipPromptDismissedKey(prompt)) !== 'yes',
+    );
   const mapEventNotifications = useMapEventNotifications(profile?.uid);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
+
+  useEffect(() => {
+    const currentIds = new Set(friendshipPrompts.map(friendshipPromptId));
+    setDismissedFriendshipPromptIds((current) => {
+      const next = new Set([...current].filter((id) => currentIds.has(id)));
+      const unchanged = next.size === current.size && [...next].every((id) => current.has(id));
+      return unchanged ? current : next;
+    });
+    if (selectedFriendshipPromptId && !currentIds.has(selectedFriendshipPromptId)) setSelectedFriendshipPromptId('');
+  }, [friendshipPrompts, selectedFriendshipPromptId]);
 
   useEffect(() => {
     if (!('serviceWorker' in navigator) || !window.location.protocol.startsWith('http')) return;
@@ -149,6 +175,47 @@ export default function App() {
       setViewHistory((currentHistory) => [...currentHistory, currentView].slice(-20));
       return nextView;
     });
+  }
+
+  async function answerFriendshipPrompt(accept: boolean) {
+    if (!user || !activeFriendshipPrompt || friendshipPromptBusy) return;
+
+    const promptId = friendshipPromptId(activeFriendshipPrompt);
+    if (!accept) {
+      setFriendshipPromptError('');
+      setSelectedFriendshipPromptId('');
+      setDismissedFriendshipPromptIds((current) => new Set(current).add(promptId));
+      safeSetLocalStorage(friendshipPromptDismissedKey(activeFriendshipPrompt), 'yes');
+      return;
+    }
+
+    setFriendshipPromptBusy(true);
+    setFriendshipPromptError('');
+    try {
+      if (accept) {
+        const connected = await sendFriendRequest(user.id, activeFriendshipPrompt.profile.uid);
+        if (!connected) throw new Error('O convite não está mais disponível.');
+      }
+      setSelectedFriendshipPromptId('');
+      setDismissedFriendshipPromptIds((current) => new Set(current).add(promptId));
+      safeSetLocalStorage(friendshipPromptDismissedKey(activeFriendshipPrompt), 'yes');
+    } catch (error) {
+      setFriendshipPromptError(error instanceof Error ? error.message : 'Não consegui responder ao convite de amizade.');
+    } finally {
+      setFriendshipPromptBusy(false);
+    }
+  }
+
+  function reopenFriendshipPrompt(profileUid: string, createdAt: string) {
+    const promptId = `${profileUid}:${createdAt}`;
+    safeSetLocalStorage(`raddo-friendship-prompt-dismissed:${user?.id ?? ''}:${promptId}`, 'no');
+    setFriendshipPromptError('');
+    setDismissedFriendshipPromptIds((current) => {
+      const next = new Set(current);
+      next.delete(promptId);
+      return next;
+    });
+    setSelectedFriendshipPromptId(promptId);
   }
 
   useEffect(() => {
@@ -450,6 +517,13 @@ export default function App() {
     const otherName = matchProfilesByUid[otherUid]?.displayName ?? 'alguém';
     const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
 
+    if (!hasMessage && match.connectionType === 'friendship') {
+      return {
+        body: t('notificationNewFriendshipText', { name: otherName }),
+        title: t('notificationNewFriendship'),
+      };
+    }
+
     return {
       body: hasMessage ? `${otherName}: ${match.lastMessage}` : t('notificationNewMatchText', { name: otherName }),
       title: hasMessage ? t('notificationNewMessage') : t('notificationNewMatch'),
@@ -503,7 +577,6 @@ export default function App() {
         const notificationId = notificationIdForMatch(match);
         if (notifiedIds.has(notificationId)) continue;
         const hasMessage = Boolean(match.lastMessage && match.lastMessageAt);
-        if (!hasMessage) continue;
 
         if (hasMessage) {
           const { data } = await supabase
@@ -540,12 +613,52 @@ export default function App() {
   }, [matches, matchProfilesByUid, notificationPreferences, profile, t]);
 
   useEffect(() => {
+    if (!profile) return;
+
+    const storageKey = `raddo-device-friendship-invites:${profile.uid}`;
+    const currentIds = friendshipPrompts.map(friendshipPromptId);
+    const saved = safeGetLocalStorage(storageKey);
+    if (!saved) {
+      writeDeviceNotificationIds(storageKey, currentIds);
+      return;
+    }
+
+    let savedIds: string[] = [];
+    try {
+      savedIds = JSON.parse(saved) as string[];
+    } catch {
+      savedIds = [];
+    }
+
+    const notifiedIds = new Set(savedIds);
+    for (const prompt of friendshipPrompts) {
+      const notificationId = friendshipPromptId(prompt);
+      if (notifiedIds.has(notificationId)) continue;
+      if (!notificationPreferences.enabled || !notificationPreferences.connections) continue;
+      void showAppNotification(
+        'Convite de amizade',
+        `${prompt.profile.displayName} quer formar uma amizade com você. Toque para responder.`,
+        {
+          createdAt: prompt.createdAt,
+          notificationId,
+          profileUid: prompt.profile.uid,
+          view: 'friendship_invite',
+        },
+      );
+    }
+
+    writeDeviceNotificationIds(storageKey, [...new Set([...savedIds, ...currentIds])]);
+  }, [friendshipPrompts, notificationPreferences, profile]);
+
+  useEffect(() => {
     let removeListener: (() => void) | undefined;
 
     onAppNotificationTap((data) => {
       if (data.view === 'chat' && data.matchId) {
         setOpenMatchId(data.matchId);
         navigateTo('chat');
+      } else if (data.view === 'friendship_invite' && data.profileUid && data.createdAt) {
+        reopenFriendshipPrompt(data.profileUid, data.createdAt);
       } else if (data.view === 'radar') {
         navigateTo('radar');
       }
@@ -595,7 +708,8 @@ export default function App() {
       if (hasMessage && match.lastMessageSenderUid === profile?.uid) return false;
       return notificationTimeValue(match.lastMessageAt ?? match.createdAt) > notificationsClearedAt;
     }) ||
-    mapEventNotifications.some((notification) => notificationTimeValue(notification.timeValue) > notificationsClearedAt);
+    mapEventNotifications.some((notification) => notificationTimeValue(notification.timeValue) > notificationsClearedAt) ||
+    friendshipPrompts.some((prompt) => notificationTimeValue(prompt.createdAt) > notificationsClearedAt);
 
   function openNotification(_notificationId: string, matchId: string) {
     setOpenMatchId(matchId);
@@ -674,6 +788,48 @@ export default function App() {
       <Onboarding profile={profile} theme={resolvedTheme} onDone={() => setOnboardingDone(true)} />
     ) : (
       <main className={`app-shell theme-${resolvedTheme} h-dvh overflow-hidden text-white`}>
+        {activeFriendshipPrompt && (
+          <div className="raddo-modal-backdrop z-[1600] sm:p-6">
+            <section className="raddo-modal-card text-center">
+              <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-sky-400 text-slate-950">
+                <Handshake className="h-7 w-7" />
+              </span>
+              <h1 className="mt-4 text-lg font-semibold">Convite de amizade</h1>
+              <div className="mt-4 flex items-center gap-3 rounded-lg bg-white/8 p-3 text-left">
+                <CachedMediaImage
+                  className="h-full w-full object-cover"
+                  fallbackClassName="h-12 w-12 rounded-lg"
+                  src={activeFriendshipPrompt.profile.photoURL}
+                  thumbnailOnly
+                />
+                <p className="min-w-0 text-sm text-slate-200">
+                  <strong className="text-white">{activeFriendshipPrompt.profile.displayName}</strong> quer formar uma amizade com você. Você aceita?
+                </p>
+              </div>
+              {friendshipPromptError && (
+                <p className="mt-3 rounded-lg bg-rose-400/15 p-3 text-xs text-rose-100">{friendshipPromptError}</p>
+              )}
+              <div className="raddo-modal-actions">
+                <button
+                  className="raddo-secondary-action h-11 rounded-lg text-sm font-semibold"
+                  disabled={friendshipPromptBusy}
+                  onClick={() => void answerFriendshipPrompt(false)}
+                  type="button"
+                >
+                  Agora não
+                </button>
+                <button
+                  className="h-11 rounded-lg bg-sky-400 px-4 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                  disabled={friendshipPromptBusy}
+                  onClick={() => void answerFriendshipPrompt(true)}
+                  type="button"
+                >
+                  {friendshipPromptBusy ? 'Respondendo...' : 'Aceitar amizade'}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
         {showNotificationPrompt && (
           <div className="raddo-modal-backdrop z-[1500] sm:p-6">
             <section className="raddo-modal-card">
@@ -856,6 +1012,7 @@ export default function App() {
             {view === 'notifications' && (
               <NotificationsPanel
                 currentUid={profile.uid}
+                friendshipPrompts={friendshipPrompts}
                 mapNotifications={mapEventNotifications}
                 matchProfilesByUid={matchProfilesByUid}
                 matches={matches}
@@ -863,6 +1020,7 @@ export default function App() {
                   setOpenMapEventId(notificationId);
                   navigateTo('radar');
                 }}
+                onOpenFriendshipPrompt={reopenFriendshipPrompt}
                 onOpenNotification={openNotification}
                 notificationsClearedAt={notificationsClearedAt}
                 preferences={notificationPreferences}

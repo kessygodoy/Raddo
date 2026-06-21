@@ -12,6 +12,7 @@ type MatchRow = {
   created_at: string;
   last_message: string | null;
   last_message_at: string | null;
+  connection_type: 'romantic' | 'friendship' | null;
 };
 
 type MessageRow = {
@@ -58,8 +59,21 @@ type ProfileRow = {
 
 export type ProfileInteraction = {
   profile: UserProfile;
-  type: 'like' | 'dislike';
+  type: 'like' | 'dislike' | 'friendship';
   createdAt: string;
+};
+
+export type FriendshipPrompt = {
+  profile: UserProfile;
+  createdAt: string;
+};
+
+export type MatchUpgradeRequest = {
+  matchId: string;
+  requesterUid: string;
+  status: 'accepted' | 'declined' | 'pending';
+  createdAt: string;
+  respondedAt: string | null;
 };
 
 export type CrossedProfile = {
@@ -76,6 +90,7 @@ function rowToMatch(row: MatchRow): Match {
     createdAt: row.created_at,
     lastMessage: row.last_message ?? '',
     lastMessageAt: row.last_message_at,
+    connectionType: row.connection_type ?? 'romantic',
   };
 }
 
@@ -223,7 +238,9 @@ function readCachedMatches(uid: string) {
     const saved = window.localStorage.getItem(matchesCacheKey(uid));
     if (!saved) return [];
     const parsed = JSON.parse(saved) as Match[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.map((match) => ({ ...match, connectionType: match.connectionType ?? 'romantic' }))
+      : [];
   } catch {
     return [];
   }
@@ -237,6 +254,7 @@ function writeCachedMatches(uid: string, matches: Match[]) {
     lastMessage: match.lastMessage,
     lastMessageAt: match.lastMessageAt,
     lastMessageSenderUid: match.lastMessageSenderUid,
+    connectionType: match.connectionType,
   }));
   try {
     window.localStorage.setItem(matchesCacheKey(uid), JSON.stringify(compactMatches));
@@ -298,6 +316,7 @@ export function useMatches(uid?: string) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'matches' }, loadMatches)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `to_uid=eq.${currentUid}` }, loadMatches)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${currentUid}` }, loadMatches)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `from_uid=eq.${currentUid}` }, loadMatches)
       .subscribe();
     const refreshTimer = window.setInterval(loadMatches, 4000);
     const handleFocus = () => loadMatches();
@@ -455,6 +474,58 @@ export function useMessages(matchId?: string) {
   return messages;
 }
 
+export function useMatchUpgradeRequest(matchId?: string) {
+  const [request, setRequest] = useState<MatchUpgradeRequest | null>(null);
+
+  useEffect(() => {
+    if (!matchId || isDemoMode) {
+      setRequest(null);
+      return undefined;
+    }
+
+    let active = true;
+
+    async function loadRequest() {
+      const { data, error } = await supabase
+        .from('match_upgrade_requests')
+        .select('match_id,requester_uid,status,created_at,responded_at')
+        .eq('match_id', matchId)
+        .maybeSingle();
+      if (!active || error) return;
+      if (!data) {
+        setRequest(null);
+        return;
+      }
+      setRequest({
+        matchId: data.match_id as string,
+        requesterUid: data.requester_uid as string,
+        status: data.status as MatchUpgradeRequest['status'],
+        createdAt: data.created_at as string,
+        respondedAt: (data.responded_at as string | null) ?? null,
+      });
+    }
+
+    void loadRequest();
+    const channel = supabase
+      .channel(`match-upgrade-request:${matchId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'match_upgrade_requests', filter: `match_id=eq.${matchId}` },
+        loadRequest,
+      )
+      .subscribe();
+    const refreshTimer = window.setInterval(loadRequest, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [matchId]);
+
+  return request;
+}
+
 export function useMatchProfiles(matches: Match[], currentUid: string) {
   const [profilesByUid, setProfilesByUid] = useState<Record<string, UserProfile>>(() => readCachedMatchProfiles(currentUid));
 
@@ -511,6 +582,112 @@ export function useMatchProfiles(matches: Match[], currentUid: string) {
   }, [currentUid, otherUids]);
 
   return profilesByUid;
+}
+
+export function useProfileConnectionCount(uid?: string) {
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!uid) {
+      setCount(null);
+      return undefined;
+    }
+    if (isDemoMode) {
+      setCount(demoMatches.filter((match) => match.users.includes(uid)).length);
+      return undefined;
+    }
+
+    let active = true;
+    setCount(null);
+    void supabase.rpc('profile_connection_count', { target_uid: uid }).then(({ data, error }) => {
+      if (!active || error) return;
+      setCount(Number(data ?? 0));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [uid]);
+
+  return count;
+}
+
+export function useFriendshipPrompts(uid?: string) {
+  const [prompts, setPrompts] = useState<FriendshipPrompt[]>([]);
+
+  useEffect(() => {
+    if (isDemoMode || !uid) {
+      setPrompts([]);
+      return undefined;
+    }
+
+    let active = true;
+    const currentUid = uid;
+
+    async function loadPrompts() {
+      const { data: requests, error: requestsError } = await supabase
+        .from('friend_requests')
+        .select('from_uid,created_at')
+        .eq('to_uid', currentUid)
+        .order('created_at', { ascending: true });
+
+      if (!active || requestsError) return;
+      const requestRows = requests ?? [];
+      const requesterIds = requestRows.map((request) => request.from_uid as string);
+      if (requesterIds.length === 0) {
+        setPrompts([]);
+        return;
+      }
+
+      const { data: likes, error: likesError } = await supabase
+        .from('likes')
+        .select('to_uid')
+        .eq('from_uid', currentUid)
+        .in('to_uid', requesterIds);
+      if (!active || likesError) return;
+
+      const likedRequesterIds = new Set((likes ?? []).map((like) => like.to_uid as string));
+      const eligibleRequests = requestRows.filter((request) => likedRequesterIds.has(request.from_uid as string));
+      if (eligibleRequests.length === 0) {
+        setPrompts([]);
+        return;
+      }
+
+      const eligibleIds = eligibleRequests.map((request) => request.from_uid as string);
+      const { data: profiles, error: profilesError } = await supabase.from('profiles').select('*').in('id', eligibleIds);
+      if (!active || profilesError) return;
+
+      const signedProfiles = await Promise.all(
+        ((profiles ?? []) as ProfileRow[]).map((row) => withSignedProfilePhotos(rowToProfile(row))),
+      );
+      if (!active) return;
+      const profilesByUid = Object.fromEntries(signedProfiles.map((profile) => [profile.uid, profile]));
+      setPrompts(
+        eligibleRequests
+          .map((request) => ({
+            createdAt: request.created_at as string,
+            profile: profilesByUid[request.from_uid as string],
+          }))
+          .filter((prompt): prompt is FriendshipPrompt => Boolean(prompt.profile)),
+      );
+    }
+
+    void loadPrompts();
+    const channel = supabase
+      .channel(`friendship-prompts:${currentUid}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `to_uid=eq.${currentUid}` }, loadPrompts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${currentUid}` }, loadPrompts)
+      .subscribe();
+    const refreshTimer = window.setInterval(loadPrompts, 4000);
+
+    return () => {
+      active = false;
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [uid]);
+
+  return prompts;
 }
 
 export function useSortedMatches(matches: Match[]) {
@@ -601,6 +778,36 @@ export async function sendDislike(fromUid: string, toUid: string) {
   );
 
   if (error) throw new Error(error.message || 'Não consegui registrar o dislike.');
+}
+
+export async function sendFriendRequest(fromUid: string, toUid: string) {
+  if (isDemoMode) return toUid.endsWith('1') || toUid.endsWith('3');
+
+  const { data, error } = await supabase.rpc('connect_friend_profile', { target_uid: toUid });
+  if (error) throw new Error(error.message || 'Não consegui enviar o pedido de amizade.');
+  return Boolean(data);
+}
+
+export async function declineFriendRequest(requesterUid: string) {
+  if (isDemoMode) return;
+  const { error } = await supabase.rpc('decline_friend_request', { requester_uid: requesterUid });
+  if (error) throw new Error(error.message || 'NÃ£o consegui recusar o convite de amizade.');
+}
+
+export async function requestMatchUpgrade(matchId: string) {
+  if (isDemoMode) return;
+  const { error } = await supabase.rpc('request_match_upgrade', { target_match_id: matchId });
+  if (error) throw new Error(error.message || 'Não consegui enviar o pedido para evoluir a amizade.');
+}
+
+export async function respondMatchUpgrade(matchId: string, accept: boolean) {
+  if (isDemoMode) return accept;
+  const { data, error } = await supabase.rpc('respond_match_upgrade', {
+    accept_request: accept,
+    target_match_id: matchId,
+  });
+  if (error) throw new Error(error.message || 'Não consegui responder ao pedido de match.');
+  return Boolean(data);
 }
 
 export async function unmatchProfile(currentUid: string, otherUid: string, matchId: string) {
@@ -811,9 +1018,10 @@ export function useSeenProfileIds(uid?: string) {
     let active = true;
 
     async function loadSeen() {
-      const [{ data: likes }, { data: passes }] = await Promise.all([
+      const [{ data: likes }, { data: passes }, { data: friendships }] = await Promise.all([
         supabase.from('likes').select('to_uid').eq('from_uid', uid),
         supabase.from('passes').select('to_uid').eq('from_uid', uid),
+        supabase.from('friend_requests').select('to_uid').eq('from_uid', uid),
       ]);
 
       if (!active) return;
@@ -821,6 +1029,7 @@ export function useSeenProfileIds(uid?: string) {
         new Set([
           ...(likes ?? []).map((item) => item.to_uid as string),
           ...(passes ?? []).map((item) => item.to_uid as string),
+          ...(friendships ?? []).map((item) => item.to_uid as string),
         ]),
       );
     }
@@ -831,6 +1040,7 @@ export function useSeenProfileIds(uid?: string) {
       .channel(`seen:${uid}:${Date.now()}:${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${uid}` }, loadSeen)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${uid}` }, loadSeen)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `from_uid=eq.${uid}` }, loadSeen)
       .subscribe();
 
     return () => {
@@ -859,17 +1069,18 @@ export function useProfileInteractionStatus(fromUid?: string, toUid?: string) {
     let active = true;
 
     async function loadInteraction() {
-      const [likesResult, passesResult] = await Promise.all([
+      const [likesResult, passesResult, friendshipsResult] = await Promise.all([
         supabase.from('likes').select('to_uid').eq('from_uid', fromUid).eq('to_uid', toUid).limit(1),
         supabase.from('passes').select('to_uid').eq('from_uid', fromUid).eq('to_uid', toUid).limit(1),
+        supabase.from('friend_requests').select('to_uid').eq('from_uid', fromUid).eq('to_uid', toUid).limit(1),
       ]);
 
       if (!active) return;
-      if (likesResult.error && passesResult.error) {
+      if (likesResult.error && passesResult.error && friendshipsResult.error) {
         setHasInteraction(null);
         return;
       }
-      setHasInteraction(Boolean(likesResult.data?.length || passesResult.data?.length));
+      setHasInteraction(Boolean(likesResult.data?.length || passesResult.data?.length || friendshipsResult.data?.length));
     }
 
     setHasInteraction(null);
@@ -879,6 +1090,7 @@ export function useProfileInteractionStatus(fromUid?: string, toUid?: string) {
       .channel(`profile-interaction-status:${fromUid}:${toUid}:${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${fromUid}` }, loadInteraction)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${fromUid}` }, loadInteraction)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `from_uid=eq.${fromUid}` }, loadInteraction)
       .subscribe();
 
     return () => {
@@ -907,14 +1119,16 @@ export function useProfileInteractions(uid?: string) {
     let active = true;
 
     async function loadInteractions() {
-      const [{ data: likes }, { data: passes }] = await Promise.all([
+      const [{ data: likes }, { data: passes }, { data: friendships }] = await Promise.all([
         supabase.from('likes').select('to_uid,created_at').eq('from_uid', uid),
         supabase.from('passes').select('to_uid,created_at').eq('from_uid', uid),
+        supabase.from('friend_requests').select('to_uid,created_at').eq('from_uid', uid),
       ]);
 
       const rawInteractions = [
         ...(likes ?? []).map((item) => ({ uid: item.to_uid as string, type: 'like' as const, createdAt: item.created_at as string })),
         ...(passes ?? []).map((item) => ({ uid: item.to_uid as string, type: 'dislike' as const, createdAt: item.created_at as string })),
+        ...(friendships ?? []).map((item) => ({ uid: item.to_uid as string, type: 'friendship' as const, createdAt: item.created_at as string })),
       ];
       const ids = [...new Set(rawInteractions.map((interaction) => interaction.uid))];
 
@@ -946,6 +1160,7 @@ export function useProfileInteractions(uid?: string) {
       .channel(`profile-interactions:${uid}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'likes', filter: `from_uid=eq.${uid}` }, loadInteractions)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'passes', filter: `from_uid=eq.${uid}` }, loadInteractions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'friend_requests', filter: `from_uid=eq.${uid}` }, loadInteractions)
       .subscribe();
 
     return () => {
@@ -960,13 +1175,15 @@ export function useProfileInteractions(uid?: string) {
 export async function undoProfileInteraction(currentUid: string, targetUid: string) {
   if (isDemoMode) return;
 
-  const [{ error: likeError }, { error: passError }] = await Promise.all([
+  const [{ error: likeError }, { error: passError }, { error: friendshipError }] = await Promise.all([
     supabase.from('likes').delete().eq('from_uid', currentUid).eq('to_uid', targetUid),
     supabase.from('passes').delete().eq('from_uid', currentUid).eq('to_uid', targetUid),
+    supabase.from('friend_requests').delete().eq('from_uid', currentUid).eq('to_uid', targetUid),
   ]);
 
   if (likeError) throw new Error(likeError.message || 'Não consegui desfazer a curtida.');
   if (passError) throw new Error(passError.message || 'Não consegui desfazer a recusa.');
+  if (friendshipError) throw new Error(friendshipError.message || 'Não consegui desfazer a conexão de amizade.');
 
   const matchId = [currentUid, targetUid].sort().join('_');
   await supabase.from('matches').delete().eq('id', matchId);
@@ -1184,7 +1401,8 @@ export function useCrossedProfiles(me: UserProfile | null, nearbyProfiles: UserP
   useEffect(() => {
     if (isDemoMode || !me?.location) return;
 
-    const closeProfiles = nearbyProfiles
+    const uniqueNearbyProfiles = [...new Map(nearbyProfiles.map((profile) => [profile.uid, profile])).values()];
+    const closeProfiles = uniqueNearbyProfiles
       .filter((profile) => profile.uid !== me.uid && profile.location && eligibleCrossedIds.has(profile.uid))
       .map((profile) => ({
         profile,
@@ -1206,16 +1424,20 @@ export function useCrossedProfiles(me: UserProfile | null, nearbyProfiles: UserP
 
     supabase
       .from('profile_crossings')
-      .insert(
+      .upsert(
         unsavedCrossings.map((item) => ({
           user_uid: me.uid,
           crossed_uid: item.profile.uid,
           last_crossed_at: now,
           distance_meters: item.distanceMeters,
         })),
+        { onConflict: 'user_uid,crossed_uid' },
       )
       .then(({ error }) => {
-        if (error) console.error('Nao consegui salvar pessoas cruzadas', error);
+        if (error) {
+          unsavedCrossings.forEach((item) => savedCrossingsRef.current.delete(item.profile.uid));
+          console.error('Nao consegui salvar pessoas cruzadas', error);
+        }
       });
   }, [crossedProfiles, eligibleCrossedIds, me, nearbyProfiles]);
 

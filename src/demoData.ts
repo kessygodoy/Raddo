@@ -99,6 +99,7 @@ export const demoMatches: Match[] = demoProfiles.slice(0, 6).map((profile) => ({
   createdAt: new Date().toISOString(),
   lastMessage: 'Match demo criado',
   lastMessageAt: new Date().toISOString(),
+  connectionType: profile.uid.endsWith('1') || profile.uid.endsWith('3') ? 'friendship' : 'romantic',
 }));
 
 export const demoMapEvents: MapEvent[] = [
