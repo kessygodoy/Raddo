@@ -1,0 +1,4 @@
+• As fotos do carrossel agora aparecem lado a lado em uma faixa mais compacta.
+• Toque em uma foto para visualizá-la em tamanho maior.
+• A opção de excluir a foto agora fica abaixo da visualização ampliada.
+• Melhoramos o fechamento da foto pelo botão voltar, pelo X ou ao tocar fora da janela.

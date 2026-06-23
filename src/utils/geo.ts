@@ -53,6 +53,12 @@ export function offsetLocation(origin: LatLng, radiusKm: number, seed: string) {
 
 export function visibleLocation(profile: UserProfile) {
   if (!profile.location) return null;
+  if (profile.privacyMode === 'city') {
+    return {
+      lat: Math.round(profile.location.lat * 10) / 10,
+      lng: Math.round(profile.location.lng * 10) / 10,
+    };
+  }
   if (profile.privacyMode !== 'exact') return null;
   return profile.location;
 }

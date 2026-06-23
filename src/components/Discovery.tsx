@@ -643,7 +643,11 @@ export default function Discovery({ me, profiles }: Props) {
                       </p>
                     </div>
                     <span className="shrink-0 rounded-md bg-white/15 px-2 py-1 text-xs text-slate-100">
-                      {current.privacyMode === 'exact' ? t('visibleOnMap') : t('outsideMap')}
+                      {current.privacyMode === 'exact'
+                        ? t('visibleOnMap')
+                        : current.privacyMode === 'city'
+                          ? t('cityOnly')
+                          : t('outsideMap')}
                     </span>
                   </div>
                   {current.bio && <p className="mt-3 line-clamp-3 text-sm text-slate-200">{current.bio}</p>}

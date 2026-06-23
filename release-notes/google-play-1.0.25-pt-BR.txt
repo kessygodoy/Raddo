@@ -1,0 +1,4 @@
+• Chats do mapa agora são Convites, e Stories viraram Momentos de 2 horas com localização escolhida e novo marcador azul.
+• Novo seletor completo de emojis com busca e categorias; aglomerados exibem emojis sobrepostos e contador.
+• Perfis no mapa abrem bio, ações e conversa; adicionamos a opção de mostrar somente a cidade e navegação adaptada ao Android.
+• Melhoramos a troca de foto, a seleção de pontos no mapa e o bloqueio de palavrões e conteúdo sexual em textos públicos.

@@ -1,10 +1,11 @@
 ﻿import { ChangeEvent, Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { lazy, Suspense } from 'react';
 import { Component, ReactNode } from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Camera, Eye, Flag, Handshake, Heart, ImagePlus, Info, LocateFixed, LogOut, MapPin, Megaphone, MessageCircle, Minus, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
+import { ArrowRight, Camera, Check, ChevronDown, Eye, Flag, Handshake, Heart, ImagePlus, Info, LocateFixed, LogOut, MapPin, Megaphone, MessageCircle, Minus, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
@@ -44,10 +45,12 @@ import { prepareStorageUploadFile, signedProfilePhotoUrl, uploadProfilePhoto } f
 import { useI18n } from '../i18n';
 import { Capacitor } from '@capacitor/core';
 import { pickNativeImage, type ImagePickerSource } from '../nativeImagePicker';
+import { publicTextValidationMessage } from '../publicTextModeration';
 
 type Props = {
   matches: Match[];
   me: UserProfile;
+  onOpenConnection?: (matchId: string) => void;
   onOpenEventHandled?: (eventId: string) => void;
   openEventId?: string;
   profiles: UserProfile[];
@@ -55,6 +58,81 @@ type Props = {
 };
 
 const GALLERY_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+const NativeEmojiPicker = lazy(() => import('./NativeEmojiPicker'));
+
+type MapAccessMode = MapEvent['accessMode'];
+
+function MapAccessModeSelect({
+  onChange,
+  options,
+  value,
+}: {
+  onChange: (value: MapAccessMode) => void;
+  options: Array<{ label: string; value: MapAccessMode }>;
+  value: MapAccessMode;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectedOption = options.find((option) => option.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="map-access-select relative" ref={rootRef}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className="map-access-select-trigger flex h-11 w-full items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm outline-none"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <span>{selectedOption.label}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="map-access-select-menu absolute inset-x-0 top-full z-40 mt-1 overflow-hidden rounded-lg border p-1 shadow-2xl" role="listbox">
+          {options.map((option) => {
+            const selected = option.value === value;
+            return (
+              <button
+                aria-selected={selected}
+                className={`map-access-select-option flex min-h-10 w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm ${
+                  selected ? 'map-access-select-option-selected' : ''
+                }`}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <span>{option.label}</span>
+                {selected && <Check className="h-4 w-4 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 class MapEventChatBoundary extends Component<
   { children: ReactNode; onClose: () => void; t: (key: string) => string },
@@ -63,7 +141,7 @@ class MapEventChatBoundary extends Component<
   state = { errorMessage: '' };
 
   static getDerivedStateFromError(error: unknown) {
-    return { errorMessage: error instanceof Error ? error.message : 'Erro ao abrir o chat.' };
+    return { errorMessage: error instanceof Error ? error.message : 'Erro ao abrir o convite.' };
   }
 
   componentDidCatch(error: unknown) {
@@ -176,12 +254,17 @@ function rememberedMapEventPasswordKey(eventId: string, userUid: string) {
 }
 
 type MapPointSetter = (point: LatLng | null) => void;
+type MapClusterMarkerItem =
+  | { event: MapEvent; kind: 'event'; position: LatLng }
+  | { kind: 'moment'; position: LatLng; story: MapEventStory };
 
 const MAP_MAX_ZOOM = 19;
 const MAP_SPREAD_MARKERS_ZOOM = MAP_MAX_ZOOM - 3;
 const MAP_SPREAD_OVERLAP_DISTANCE_PX = 30;
-const PROFILE_MARKER_DIAMETER_PX = 30;
+const PROFILE_MARKER_DIAMETER_PX = 33;
 const PROFILE_CLUSTER_MIN_OVERLAP = 0.95;
+const EVENT_MARKER_DIAMETER_PX = 33;
+const EVENT_CLUSTER_MIN_OVERLAP = 0.9;
 const MAX_RENDERED_PROFILE_MARKERS = 80;
 const MAX_RENDERED_EVENT_MARKERS = 120;
 const MAX_RENDERED_STORY_GROUPS = 40;
@@ -357,14 +440,17 @@ const modernEventEmojiOptions = [
   '\u{1F3F3}\u{FE0F}\u{200D}\u{1F308}',
 ];
 
-eventEmojiOptions.splice(0, eventEmojiOptions.length, ...modernEventEmojiOptions);
-const eventEmojiQuickOptions = eventEmojiOptions.slice(0, 24);
+eventEmojiOptions.splice(0, eventEmojiOptions.length, ...new Set(modernEventEmojiOptions));
+
+function randomEventEmoji() {
+  return eventEmojiOptions[Math.floor(Math.random() * eventEmojiOptions.length)] ?? '\u{1F4AC}';
+}
 
 function eventEmojiIcon(emoji: string, highlighted = false, _active = false) {
   const emojiClassName = ['map-pin-emoji', highlighted ? 'map-pin-emoji-own' : '']
     .filter(Boolean)
     .join(' ');
-  if (!eventEmojiOptions.includes(emoji)) {
+  if (!emoji.trim()) {
     return L.divIcon({
       className: '',
       html: `<div class="${emojiClassName}">\u{1F4AC}</div>`,
@@ -373,7 +459,7 @@ function eventEmojiIcon(emoji: string, highlighted = false, _active = false) {
     });
   }
 
-  const visibleEmoji = eventEmojiOptions.includes(emoji) ? emoji : '\u{1F4AC}';
+  const visibleEmoji = emoji;
   return L.divIcon({
     className: '',
     html: `<div class="${emojiClassName}">${visibleEmoji}</div>`,
@@ -404,8 +490,8 @@ function profilePhotoIcon(photoURL: string) {
   return L.divIcon({
     className: '',
     html: `<div class="map-profile-photo"><img alt="" src="${escapeHtml(photoURL)}" onerror="this.style.display='none'" /></div>`,
-    iconAnchor: [15, 15],
-    iconSize: [30, 30],
+    iconAnchor: [16.5, 16.5],
+    iconSize: [33, 33],
   });
 }
 
@@ -423,11 +509,11 @@ const draftIcon = L.divIcon({
   iconSize: [20, 20],
 });
 
-const eventGroupIcon = L.divIcon({
+const mapMomentIcon = L.divIcon({
   className: '',
-  html: '<div class="map-group-marker">\u{1F4AC}</div>',
-  iconAnchor: [13, 13],
-  iconSize: [25, 25],
+  html: '<div class="map-moment-marker" aria-hidden="true">★</div>',
+  iconAnchor: [10, 10],
+  iconSize: [20, 20],
 });
 
 function ownerEventArrowIcon(angle: number) {
@@ -439,10 +525,10 @@ function ownerEventArrowIcon(angle: number) {
   });
 }
 
-function MapClickTarget({ onPick, selectedPoint }: { onPick: MapPointSetter; selectedPoint: LatLng | null }) {
+function MapClickTarget({ onPick }: { onPick: MapPointSetter }) {
   useLeafletMapEvents({
     click(event) {
-      onPick(selectedPoint ? null : { lat: event.latlng.lat, lng: event.latlng.lng });
+      onPick({ lat: event.latlng.lat, lng: event.latlng.lng });
     },
   });
 
@@ -556,15 +642,11 @@ function closestToMapCenter<T extends { position: LatLng }>(items: T[], map: L.M
     .slice(0, maxItems);
 }
 
-function clusterDistanceForZoom(map: L.Map, kind: 'event' | 'profile') {
-  const zoom = map.getZoom();
+function clusterDistanceForZoom(_map: L.Map, kind: 'event' | 'profile') {
   if (kind === 'profile') {
     return PROFILE_MARKER_DIAMETER_PX * (1 - PROFILE_CLUSTER_MIN_OVERLAP);
   }
-  if (zoom < 12) return 64;
-  if (zoom < 14) return 42;
-  if (zoom < 16) return 22;
-  return 8;
+  return EVENT_MARKER_DIAMETER_PX * (1 - EVENT_CLUSTER_MIN_OVERLAP);
 }
 
 function edgePointForPosition(map: L.Map, position: LatLng) {
@@ -729,7 +811,7 @@ function OwnerEventArrows({ events, me, onFocusEvent }: { events: MapEvent[]; me
     <div className="map-owner-event-arrow-layer">
       {arrows.map((arrow) => (
         <button
-          aria-label={`Focar chat ${arrow.event.title}`}
+          aria-label={`Focar convite ${arrow.event.title}`}
           className="map-owner-event-arrow"
           key={arrow.id}
           onClick={() => onFocusEvent(arrow.event)}
@@ -827,7 +909,80 @@ function profileClusterIcon(profiles: UserProfile[]) {
   });
 }
 
-function ClusteredProfileMarkers({ me, onOpenCluster, profiles }: { me: UserProfile; onOpenCluster: (profiles: UserProfile[]) => void; profiles: UserProfile[] }) {
+function eventClusterIcon(items: MapClusterMarkerItem[]) {
+  const visibleItems = items.slice(0, 5);
+  const hiddenCount = Math.max(0, items.length - visibleItems.length);
+  const itemCount = visibleItems.length + (hiddenCount > 0 ? 1 : 0);
+  const iconWidth = 30 + Math.max(0, itemCount - 1) * 15;
+  const emojis = visibleItems
+    .map((item) =>
+      item.kind === 'event'
+        ? `<span class="map-event-cluster-emoji" title="${escapeHtml(item.event.title)}">${escapeHtml(item.event.emoji || '\u{1F4AC}')}</span>`
+        : `<span class="map-event-cluster-emoji map-event-cluster-moment" title="Momento de ${escapeHtml(item.story.creatorName)}">★</span>`,
+    )
+    .join('');
+  const counter = hiddenCount > 0 ? `<span class="map-event-cluster-emoji map-event-cluster-count">+${hiddenCount}</span>` : '';
+
+  return L.divIcon({
+    className: '',
+    html: `<div class="map-event-cluster">${emojis}${counter}</div>`,
+    iconAnchor: [iconWidth / 2, 15],
+    iconSize: [iconWidth, 30],
+  });
+}
+
+function eventClusterIconWidth(eventCount: number) {
+  const visibleCount = Math.min(5, eventCount);
+  const itemCount = visibleCount + (eventCount > visibleCount ? 1 : 0);
+  return 30 + Math.max(0, itemCount - 1) * 15;
+}
+
+function mergeEventClustersCoveredByIcons<T extends { position: LatLng }>(
+  sourceClusters: Array<{ items: T[]; position: LatLng }>,
+  map: L.Map,
+) {
+  const clusters = sourceClusters.map((cluster) => ({ ...cluster, items: [...cluster.items] }));
+  const zoom = map.getZoom();
+  let merged = true;
+
+  while (merged) {
+    merged = false;
+    for (let clusterIndex = 0; clusterIndex < clusters.length; clusterIndex += 1) {
+      const cluster = clusters[clusterIndex];
+      if (cluster.items.length < 2) continue;
+
+      const clusterPoint = map.project(L.latLng(cluster.position.lat, cluster.position.lng), zoom);
+      const clusterHalfWidth = eventClusterIconWidth(cluster.items.length) / 2;
+
+      for (let candidateIndex = clusters.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+        if (candidateIndex === clusterIndex) continue;
+        const candidate = clusters[candidateIndex];
+        const candidatePoint = map.project(L.latLng(candidate.position.lat, candidate.position.lng), zoom);
+        const candidateHalfWidth = candidate.items.length > 1
+          ? eventClusterIconWidth(candidate.items.length) / 2
+          : EVENT_MARKER_DIAMETER_PX / 2;
+        const candidateHalfHeight = candidate.items.length > 1 ? 15 : EVENT_MARKER_DIAMETER_PX / 2;
+
+        if (
+          Math.abs(clusterPoint.x - candidatePoint.x) <= clusterHalfWidth + candidateHalfWidth &&
+          Math.abs(clusterPoint.y - candidatePoint.y) <= 15 + candidateHalfHeight
+        ) {
+          cluster.items.push(...candidate.items);
+          clusters.splice(candidateIndex, 1);
+          if (candidateIndex < clusterIndex) clusterIndex -= 1;
+          merged = true;
+          break;
+        }
+      }
+
+      if (merged) break;
+    }
+  }
+
+  return clusters;
+}
+
+function ClusteredProfileMarkers({ me, onOpenCluster, onOpenProfile, profiles }: { me: UserProfile; onOpenCluster: (profiles: UserProfile[]) => void; onOpenProfile: (profile: UserProfile) => void; profiles: UserProfile[] }) {
   const { t } = useI18n();
   const map = useMap();
   const [, setMapVersion] = useState(0);
@@ -866,7 +1021,18 @@ function ClusteredProfileMarkers({ me, onOpenCluster, profiles }: { me: UserProf
 
         const { profile, position } = cluster.items[0];
         return (
-          <Marker icon={profile.photoURL ? profilePhotoIcon(profile.photoURL) : profileLiteIcon} key={profile.uid} position={[position.lat, position.lng]} zIndexOffset={100}>
+          <Marker
+            eventHandlers={{
+              click(event) {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                onOpenProfile(profile);
+              },
+            }}
+            icon={profile.photoURL ? profilePhotoIcon(profile.photoURL) : profileLiteIcon}
+            key={profile.uid}
+            position={[position.lat, position.lng]}
+            zIndexOffset={100}
+          >
             <Popup>
               <strong>{profile.displayName}</strong>
               <br />
@@ -886,6 +1052,7 @@ function ClusteredEventMarkers({
   events,
   me,
   onOpenCluster,
+  onOpenMoment,
   onPreviewEvent,
 }: {
   creatorNames: Record<string, string>;
@@ -893,7 +1060,8 @@ function ClusteredEventMarkers({
   recentlyActiveEventIds: Set<string>;
   events: MapEvent[];
   me: UserProfile;
-  onOpenCluster: (events: MapEvent[]) => void;
+  onOpenCluster: (items: MapClusterMarkerItem[]) => void;
+  onOpenMoment: (storyId: string) => void;
   onPreviewEvent: (event: MapEvent) => void;
 }) {
   const { t } = useI18n();
@@ -904,25 +1072,26 @@ function ClusteredEventMarkers({
     zoomend: () => setMapVersion((version) => version + 1),
   });
 
-  const visibleInBounds = closestToMapCenter(
+  const visibleInBounds = closestToMapCenter<MapClusterMarkerItem>(
     events
-      .filter((event) => isPositionInView(map, event.location, 0.04))
-      .map((event) => ({ event, position: event.location })),
+      .map((event): MapClusterMarkerItem => ({ event, kind: 'event', position: event.location }))
+      .filter((item) => isPositionInView(map, item.position, 0.04)),
     map,
     MAX_RENDERED_EVENT_MARKERS,
-  ).map((item) => item.event);
+  );
   const shouldSpreadOverlappingMarkers = map.getZoom() >= MAP_SPREAD_MARKERS_ZOOM;
   const maxZoomClusters = clusterMapItems(
-    visibleInBounds.map((event) => ({ event, position: event.location })),
+    visibleInBounds,
     map,
     MAP_SPREAD_OVERLAP_DISTANCE_PX,
   );
-  const permanentEvents = visibleInBounds.filter((event) => event.isPermanent);
-  const expiringEvents = visibleInBounds.filter((event) => !event.isPermanent);
-  const clusters = clusterMapItems(
-    expiringEvents.map((event) => ({ event, position: event.location })),
+  const clusters = mergeEventClustersCoveredByIcons(
+    clusterMapItems(
+      visibleInBounds,
+      map,
+      clusterDistanceForZoom(map, 'event'),
+    ),
     map,
-    clusterDistanceForZoom(map, 'event'),
   );
 
   return (
@@ -930,6 +1099,17 @@ function ClusteredEventMarkers({
       {shouldSpreadOverlappingMarkers &&
         maxZoomClusters.flatMap((cluster) =>
           spreadClusterPositions(cluster, map).map(({ item, position }) => {
+            if (item.kind === 'moment') {
+              return (
+                <Marker
+                  eventHandlers={{ click: () => onOpenMoment(item.story.id) }}
+                  icon={mapMomentIcon}
+                  key={`max-moment-${item.story.id}`}
+                  position={[position.lat, position.lng]}
+                  zIndexOffset={500}
+                />
+              );
+            }
             const { event } = item;
             const activeEmoji = (eventParticipantCounts[event.id] ?? 0) > 0 && recentlyActiveEventIds.has(event.id);
             return (
@@ -943,7 +1123,7 @@ function ClusteredEventMarkers({
                 <Popup>
                   <strong>{event.title}</strong>
                   <br />
-                  Criado por {creatorNames[event.creatorUid] ?? 'criador do chat'}
+                  Criado por {creatorNames[event.creatorUid] ?? 'criador do convite'}
                   <br />
                   {eventParticipantCounts[event.id] ?? 1} pessoas
                   <br />
@@ -961,39 +1141,17 @@ function ClusteredEventMarkers({
         )}
       {!shouldSpreadOverlappingMarkers && (
         <>
-      {permanentEvents.map((event) => (
-        <Marker
-          eventHandlers={{ click: () => onPreviewEvent(event) }}
-          icon={
-            event.emoji
-              ? eventEmojiIcon(
-                  event.emoji,
-                  event.creatorUid === me.uid,
-                  (eventParticipantCounts[event.id] ?? 0) > 0 && recentlyActiveEventIds.has(event.id),
-                )
-              : eventIcon
-          }
-          key={event.id}
-          position={[event.location.lat, event.location.lng]}
-          zIndexOffset={500}
-        >
-          <Popup>
-            <strong>{event.title}</strong>
-            <br />
-            Criado por {creatorNames[event.creatorUid] ?? 'criador do chat'}
-            <br />
-            {eventParticipantCounts[event.id] ?? 1} pessoas
-            <br />
-            {me.location ? t('distanceAway', { distance: `${distanceKm(me.location, event.location).toFixed(1)} km` }) : t('distanceUnavailable')}
-          </Popup>
-        </Marker>
-      ))}
       {clusters.map((cluster) => {
         if (cluster.items.length > 1) {
           return (
             <Marker
-              eventHandlers={{ click: () => onOpenCluster(cluster.items.map((item) => item.event)) }}
-              icon={eventGroupIcon}
+              eventHandlers={{
+                click(event) {
+                  L.DomEvent.stopPropagation(event.originalEvent);
+                  onOpenCluster(cluster.items);
+                },
+              }}
+              icon={eventClusterIcon(cluster.items)}
               key={`event-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
               position={[cluster.position.lat, cluster.position.lng]}
               zIndexOffset={500}
@@ -1001,7 +1159,24 @@ function ClusteredEventMarkers({
           );
         }
 
-        const { event } = cluster.items[0];
+        const item = cluster.items[0];
+        if (item.kind === 'moment') {
+          return (
+            <Marker
+              eventHandlers={{
+                click(clickEvent) {
+                  L.DomEvent.stopPropagation(clickEvent.originalEvent);
+                  onOpenMoment(item.story.id);
+                },
+              }}
+              icon={mapMomentIcon}
+              key={`moment-${item.story.id}`}
+              position={[item.position.lat, item.position.lng]}
+              zIndexOffset={180}
+            />
+          );
+        }
+        const { event } = item;
         const activeEmoji = (eventParticipantCounts[event.id] ?? 0) > 0 && recentlyActiveEventIds.has(event.id);
         return (
           <Marker
@@ -1014,7 +1189,7 @@ function ClusteredEventMarkers({
             <Popup>
               <strong>{event.title}</strong>
               <br />
-              Criado por {creatorNames[event.creatorUid] ?? 'criador do chat'}
+              Criado por {creatorNames[event.creatorUid] ?? 'criador do convite'}
               <br />
               {eventParticipantCounts[event.id] ?? 1} pessoas
               <br />
@@ -1031,7 +1206,126 @@ function ClusteredEventMarkers({
   );
 }
 
-export default function RadarMap({ matches, me, onOpenEventHandled, openEventId = '', profiles, theme }: Props) {
+function ClusteredMomentMarkers({
+  events,
+  moments,
+  onOpenCluster,
+  onOpenMoment,
+}: {
+  events: MapEvent[];
+  moments: Array<{ position: LatLng; story: MapEventStory }>;
+  onOpenCluster: (items: MapClusterMarkerItem[]) => void;
+  onOpenMoment: (storyId: string) => void;
+}) {
+  const map = useMap();
+  const [, setMapVersion] = useState(0);
+  useLeafletMapEvents({
+    moveend: () => setMapVersion((version) => version + 1),
+    zoomend: () => setMapVersion((version) => version + 1),
+  });
+
+  const visibleMoments = closestToMapCenter<MapClusterMarkerItem>(
+    moments
+      .map(({ position, story }): MapClusterMarkerItem => ({ kind: 'moment', position, story }))
+      .filter((item) => isPositionInView(map, item.position, 0.04)),
+    map,
+    MAX_RENDERED_STORY_GROUPS,
+  );
+  const shouldSpreadOverlappingMarkers = map.getZoom() >= MAP_SPREAD_MARKERS_ZOOM;
+  const maxZoomClusters = clusterMapItems(visibleMoments, map, MAP_SPREAD_OVERLAP_DISTANCE_PX);
+  const clusters = mergeEventClustersCoveredByIcons(
+    clusterMapItems(visibleMoments, map, clusterDistanceForZoom(map, 'event')),
+    map,
+  );
+  const visibleEventItems = closestToMapCenter<MapClusterMarkerItem>(
+    events
+      .map((event): MapClusterMarkerItem => ({ event, kind: 'event', position: event.location }))
+      .filter((item) => isPositionInView(map, item.position, 0.04)),
+    map,
+    MAX_RENDERED_EVENT_MARKERS,
+  );
+  const eventClusters = mergeEventClustersCoveredByIcons(
+    clusterMapItems(visibleEventItems, map, clusterDistanceForZoom(map, 'event')),
+    map,
+  ).filter((cluster) => cluster.items.length > 1);
+
+  function stackedMomentPosition(cluster: { items: MapClusterMarkerItem[]; position: LatLng }) {
+    if (cluster.items.length < 2) return cluster.position;
+    const zoom = map.getZoom();
+    const point = map.project(L.latLng(cluster.position.lat, cluster.position.lng), zoom);
+    const overlapsEventCluster = eventClusters.some((eventCluster) => {
+      const eventPoint = map.project(L.latLng(eventCluster.position.lat, eventCluster.position.lng), zoom);
+      return point.distanceTo(eventPoint) <= EVENT_MARKER_DIAMETER_PX;
+    });
+    if (!overlapsEventCluster) return cluster.position;
+    const shifted = map.unproject(L.point(point.x, point.y + 38), zoom);
+    return { lat: shifted.lat, lng: shifted.lng };
+  }
+
+  if (shouldSpreadOverlappingMarkers) {
+    return (
+      <>
+        {maxZoomClusters.flatMap((cluster) =>
+          spreadClusterPositions(cluster, map).map(({ item, position }) => {
+            if (item.kind !== 'moment') return null;
+            return (
+              <Marker
+                eventHandlers={{ click: () => onOpenMoment(item.story.id) }}
+                icon={mapMomentIcon}
+                key={`spread-moment-${item.story.id}`}
+                position={[position.lat, position.lng]}
+                zIndexOffset={180}
+              />
+            );
+          }),
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {clusters.map((cluster) => {
+        if (cluster.items.length > 1) {
+          const displayPosition = stackedMomentPosition(cluster);
+          return (
+            <Marker
+              eventHandlers={{
+                click(event) {
+                  L.DomEvent.stopPropagation(event.originalEvent);
+                  onOpenCluster(cluster.items);
+                },
+              }}
+              icon={eventClusterIcon(cluster.items)}
+              key={`moment-group-${cluster.position.lat}-${cluster.position.lng}-${cluster.items.length}`}
+              position={[displayPosition.lat, displayPosition.lng]}
+              zIndexOffset={190}
+            />
+          );
+        }
+
+        const item = cluster.items[0];
+        if (item.kind !== 'moment') return null;
+        return (
+          <Marker
+            eventHandlers={{
+              click(event) {
+                L.DomEvent.stopPropagation(event.originalEvent);
+                onOpenMoment(item.story.id);
+              },
+            }}
+            icon={mapMomentIcon}
+            key={`moment-${item.story.id}`}
+            position={[item.position.lat, item.position.lng]}
+            zIndexOffset={180}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHandled, openEventId = '', profiles, theme }: Props) {
   const { t } = useI18n();
   const center = me.location ?? { lat: -23.5505, lng: -46.6333 };
   const appModeratorRole = useAppModeratorRole(me.uid);
@@ -1040,7 +1334,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [eventTitle, setEventTitle] = useState('');
   const [eventDescription, setEventDescription] = useState('');
   const [eventCoverURL, setEventCoverURL] = useState('');
-  const [eventEmoji, setEventEmoji] = useState(modernEventEmojiOptions[0]);
+  const [eventEmoji, setEventEmoji] = useState(() => randomEventEmoji());
   const [eventAccessMode, setEventAccessMode] = useState<MapEvent['accessMode']>('open');
   const [eventPassword, setEventPassword] = useState('');
   const [eventIsPermanent, setEventIsPermanent] = useState(false);
@@ -1048,7 +1342,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [eventRadius, setEventRadius] = useState(5);
   const [activeEvent, setActiveEvent] = useState<MapEvent | null>(null);
   const [previewEvent, setPreviewEvent] = useState<MapEvent | null>(null);
-  const [clusteredEvents, setClusteredEvents] = useState<MapEvent[]>([]);
+  const [clusteredMapItems, setClusteredMapItems] = useState<MapClusterMarkerItem[]>([]);
   const [createChatOpen, setCreateChatOpen] = useState(false);
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [editingEvent, setEditingEvent] = useState<MapEvent | null>(null);
@@ -1062,7 +1356,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [editingIsPermanent, setEditingIsPermanent] = useState(false);
   const [uploadingEditingCover, setUploadingEditingCover] = useState(false);
   const [savingEventEdit, setSavingEventEdit] = useState(false);
-  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [emojiPickerTarget, setEmojiPickerTarget] = useState<'create' | 'edit' | null>(null);
   const [showChatsList, setShowChatsList] = useState(false);
   const [showMyChatsList, setShowMyChatsList] = useState(false);
   const [showNearbyChatsList, setShowNearbyChatsList] = useState(false);
@@ -1084,6 +1378,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
   const [storySettingsOpen, setStorySettingsOpen] = useState(false);
   const [mapStorySettings, setMapStorySettings] = useState<MapStorySettings>(() => readMapStorySettings(me.uid));
   const [storyComposerEvent, setStoryComposerEvent] = useState<MapEvent | null>(null);
+  const [storyComposerLocationOverride, setStoryComposerLocationOverride] = useState<LatLng | null>(null);
   const [storyComposerOpen, setStoryComposerOpen] = useState(false);
   const [selectedStoryId, setSelectedStoryId] = useState('');
   const [storyText, setStoryText] = useState('');
@@ -1233,7 +1528,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     },
     [localPublishingStories, mapStorySettings.includeStandaloneStories, me.uid, optimisticStoryLikes, remoteMapEventStories, storySourceEvents],
   );
-  const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do chat');
+  const creatorLabel = (event: MapEvent) => eventCreatorNames[event.creatorUid] ?? (event.creatorUid === me.uid ? me.displayName : 'criador do convite');
   const previewEventIsParticipant = Boolean(
     previewEvent && (previewEvent.creatorUid === me.uid || joinedEventIds.has(previewEvent.id)),
   );
@@ -1279,8 +1574,27 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       .sort((a, b) => Date.parse(b.latestStory.createdAt) - Date.parse(a.latestStory.createdAt));
   }, [mapEventStories]);
   const visibleStoryGroups = useMemo(() => storyGroups.slice(0, MAX_RENDERED_STORY_GROUPS), [storyGroups]);
+  const momentMarkers = useMemo(
+    () =>
+      mapEventStories.filter((story) => !story.eventId).slice(0, MAX_RENDERED_STORY_GROUPS).flatMap((story) => {
+        const position = story.location;
+        return position ? [{ position, story }] : [];
+      }),
+    [mapEventStories],
+  );
+  const activeOwnMomentLocations = useMemo(
+    () =>
+      mapEventStories.flatMap((story) => {
+        if (story.creatorUid !== me.uid || Date.parse(story.expiresAt) <= Date.now()) return [];
+        const event = story.eventId ? eventContextList.find((item) => item.id === story.eventId) : null;
+        const location = story.location ?? event?.location ?? null;
+        return location ? [location] : [];
+      }),
+    [eventContextList, mapEventStories, me.uid],
+  );
   const selectedStory = mapEventStories.find((story) => story.id === selectedStoryId) ?? mapEventStories[0] ?? null;
   const selectedStoryEvent = selectedStory ? eventContextList.find((event) => event.id === selectedStory.eventId) ?? null : null;
+  const selectedStoryLocation = selectedStory?.location ?? selectedStoryEvent?.location ?? null;
   const storyPeopleProfiles = useMemo(() => {
     const byUid = new Map<string, UserProfile>();
     [me, ...profiles].forEach((profile) => byUid.set(profile.uid, profile));
@@ -1394,6 +1708,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         cancelStoryRecording();
         setStoryComposerOpen(false);
         setStoryComposerEvent(null);
+        setStoryComposerLocationOverride(null);
         return;
       }
 
@@ -1415,9 +1730,9 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         return;
       }
 
-      if (emojiPickerOpen) {
+      if (emojiPickerTarget) {
         event.preventDefault();
-        setEmojiPickerOpen(false);
+        setEmojiPickerTarget(null);
         return;
       }
 
@@ -1427,9 +1742,9 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         return;
       }
 
-      if (clusteredEvents.length > 0) {
+      if (clusteredMapItems.length > 0) {
         event.preventDefault();
-        setClusteredEvents([]);
+        setClusteredMapItems([]);
         return;
       }
 
@@ -1460,10 +1775,10 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     };
   }, [
     activeEvent,
-    clusteredEvents.length,
+    clusteredMapItems.length,
     clusteredProfiles.length,
     createChatOpen,
-    emojiPickerOpen,
+    emojiPickerTarget,
     gpsEvent,
     matchProfile,
     previewEvent,
@@ -1630,6 +1945,33 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
 
   async function publishStory() {
     setEventError('');
+    const publicTextError = publicTextValidationMessage(storyText);
+    if (publicTextError) {
+      setEventError(publicTextError);
+      return;
+    }
+    const composerEvent = storyComposerEvent;
+    const momentLocation = storyComposerLocationOverride ?? composerEvent?.location ?? selectedPoint ?? me.location;
+    if (!momentLocation) {
+      setEventError('Marque um local no mapa ou ative sua localização para publicar o Momento.');
+      return;
+    }
+    const locationAlreadyActive = activeOwnMomentLocations.some((location) => distanceKm(location, momentLocation) <= 0.03);
+    if (!locationAlreadyActive) {
+      const distinctLocations: LatLng[] = [];
+      activeOwnMomentLocations.forEach((location) => {
+        if (!distinctLocations.some((savedLocation) => distanceKm(savedLocation, location) <= 0.03)) distinctLocations.push(location);
+      });
+      const locationLimit = me.isPremium ? 10 : 1;
+      if (distinctLocations.length >= locationLimit) {
+        setEventError(
+          me.isPremium
+            ? 'Você pode manter Momentos em até 10 locais diferentes. Crie outro em um local já ativo.'
+            : 'Você pode manter Momentos em apenas 1 local. Abra seu Momento e use “Criar outro neste local”.',
+        );
+        return;
+      }
+    }
     const localStoryId = `local-story-${Date.now()}`;
     const publishingText = storyText.trim();
     const localStory: MapEventStory = {
@@ -1640,13 +1982,13 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       imageURL: storyImageURL,
       mediaType: storyMediaType,
       text: publishingText || 'Publicando...',
+      location: momentLocation,
       likedBy: [],
       viewedBy: [],
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
     };
     const uploadFile = storyUploadFile;
-    const composerEvent = storyComposerEvent;
     const textToPublish = storyText;
     const mediaTypeToPublish = storyMediaType;
     setLocalPublishingStories((current) => [localStory, ...current]);
@@ -1656,6 +1998,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     setStoryUploadFile(null);
     setStoryMediaType('image');
     setStoryComposerEvent(null);
+    setStoryComposerLocationOverride(null);
     setStoryComposerOpen(false);
     setStoryViewerOpen(true);
 
@@ -1675,6 +2018,8 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           creatorUid: me.uid,
           eventId: composerEvent?.id ?? null,
           imageURL: finalImageURL,
+          isPremium: me.isPremium,
+          location: momentLocation,
           mediaType: mediaTypeToPublish,
           text: textToPublish,
         });
@@ -1697,7 +2042,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           return;
         }
         const delayMs = Math.min(30000, 4000 * 2 ** Math.min(attempt, 3));
-        setEventError('Internet instável. Vou continuar tentando publicar o story automaticamente.');
+        setEventError('Internet instável. Vou continuar tentando publicar o Momento automaticamente.');
         window.setTimeout(() => {
           void tryPublish(attempt + 1);
         }, delayMs);
@@ -1711,7 +2056,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     const event = eventContextList.find((item) => item.id === story.eventId) ?? null;
     try {
       await reportMapEventStory(story, event, me.uid);
-      setEventError('Story denunciado para revisão.');
+      setEventError('Momento denunciado para revisão.');
     } catch (error) {
       setEventError(error instanceof Error ? error.message : t('storyReportError'));
     }
@@ -1721,7 +2066,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     setDialog({
       confirmLabel: 'Apagar',
       destructive: true,
-      message: 'Este story será removido do mapa.',
+      message: 'Este Momento será removido do mapa.',
       onConfirm: async () => {
         try {
           await deleteMapEventStory(story.id);
@@ -1734,7 +2079,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           setEventError(error instanceof Error ? error.message : t('storyDeleteError'));
         }
       },
-      title: 'Apagar story?',
+      title: 'Apagar Momento?',
       type: 'confirm',
     });
   }
@@ -1769,18 +2114,18 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       confirmLabel: 'Enviar',
       inputKind: 'textarea',
       initialValue: '',
-      message: 'Envie uma mensagem para responder ao story.',
+      message: 'Envie uma mensagem para responder ao Momento.',
       onConfirm: async (value) => {
         const text = value.trim();
         if (!text) return;
         try {
-          await sendMessage(match.id, me.uid, `Story: ${text}`, me.displayName);
+          await sendMessage(match.id, me.uid, `Momento: ${text}`, me.displayName);
           setEventError(t('messageSent'));
         } catch (error) {
           setEventError(error instanceof Error ? error.message : t('messageSendError'));
         }
       },
-      title: 'Comentar story',
+      title: 'Comentar Momento',
       type: 'prompt',
     });
   }
@@ -1963,10 +2308,10 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     if (creatingEvent) return;
     setEventError('');
     const title = eventTitle.trim();
-    const eventLocation = me.isPremium ? (selectedPoint ?? me.location) : me.location;
+    const eventLocation = selectedPoint ?? me.location;
 
     if (!title) {
-      setEventError('Escolha um título para o chat.');
+      setEventError('Escolha um título para o convite.');
       return;
     }
 
@@ -1976,12 +2321,12 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
     }
 
     if (!eventLocation) {
-      setEventError('Ative sua localização para criar um chat.');
+      setEventError('Ative sua localização ou marque um ponto para criar o convite.');
       return;
     }
 
     if (eventAccessMode === 'password' && eventPassword.trim().length < 4) {
-      setEventError('A senha do chat precisa ter pelo menos 4 caracteres.');
+      setEventError('A senha do convite precisa ter pelo menos 4 caracteres.');
       return;
     }
 
@@ -2005,7 +2350,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       setEventTitle('');
       setEventDescription('');
       setEventCoverURL('');
-      setEventEmoji(modernEventEmojiOptions[0]);
+      setEventEmoji(randomEventEmoji());
       setEventAccessMode('open');
       setEventPassword('');
       setEventIsPermanent(false);
@@ -2039,7 +2384,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
 
     const title = editingTitle.trim();
     if (!title) {
-      setEventError('Dê um nome para o chat.');
+      setEventError('Dê um nome para o convite.');
       return;
     }
     if (editingAccessMode === 'password' && !editingEvent.passwordHash && !editingPassword.trim()) {
@@ -2090,7 +2435,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
       ]);
       const canBypassRadius = Boolean(joinedEvent) || event.creatorUid === me.uid || isParticipant || isModerator;
       if (!canBypassRadius && me.location && distanceKm(me.location, event.location) > event.radiusKm) {
-        setEventError(`Você precisa estar dentro de ${formatRadius(event.radiusKm)} para entrar neste chat.`);
+        setEventError(`Você precisa estar dentro de ${formatRadius(event.radiusKm)} para entrar neste convite.`);
         return;
       }
       if (isParticipant || isModerator) {
@@ -2122,7 +2467,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         setDialog({
           confirmLabel: t('enterChat'),
           initialValue: '',
-          message: 'Digite a senha deste chat.',
+          message: 'Digite a senha deste convite.',
           onConfirm: async (password) => {
             const passwordHash = await hashMapEventPassword(password);
             if (passwordHash !== event.passwordHash) {
@@ -2270,6 +2615,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               className="raddo-story-ring raddo-story-ring-new relative mx-2 grid h-16 w-16 shrink-0 place-items-center rounded-full bg-[#ff3f68]/15 text-[10px] font-semibold text-white"
               onClick={() => {
                 setStoryComposerEvent(null);
+                setStoryComposerLocationOverride(null);
                 setStoryComposerOpen(true);
                 setStoryText('');
                 setStoryImageURL('');
@@ -2279,7 +2625,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               type="button"
             >
               <span
-                aria-label="Configurar stories do mapa"
+                aria-label="Configurar Momentos do mapa"
                 className="absolute -left-1 -top-1 z-10 grid h-6 w-6 place-items-center rounded-full border border-white/10 bg-[#07111f] text-white shadow-lg"
                 onClick={(event) => {
                   event.preventDefault();
@@ -2292,7 +2638,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 <Settings className="h-3.5 w-3.5" />
               </span>
               <Plus className="raddo-story-plus-icon h-5 w-5 text-white" />
-              Story
+              <span className="max-w-full px-0.5 text-[8px] leading-none">Momento</span>
             </button>
           )}
           {visibleStoryGroups.map((group) => {
@@ -2335,7 +2681,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           <section className="w-full max-w-sm rounded-lg border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold">Stories do mapa</h2>
+                <h2 className="text-base font-semibold">Momentos do mapa</h2>
                 <p className="text-xs text-slate-400">Escolha o que aparece para você.</p>
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStorySettingsOpen(false)} type="button">
@@ -2344,7 +2690,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             </div>
             <div className="grid gap-3">
               <label className="grid gap-2 text-xs text-slate-300">
-                Raio dos stories: {formatRadius(mapStorySettings.radiusKm)}
+                Raio dos Momentos: {formatRadius(mapStorySettings.radiusKm)}
                 <input
                   max={50}
                   min={1}
@@ -2355,7 +2701,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 p-3 text-sm">
-                <span>Mostrar stories soltos no mapa</span>
+                <span>Mostrar Momentos soltos no mapa</span>
                 <input
                   checked={mapStorySettings.includeStandaloneStories}
                   className="h-5 w-5"
@@ -2364,7 +2710,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 />
               </label>
               <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/8 p-3 text-sm">
-                <span>Mostrar stories de chats abertos</span>
+                <span>Mostrar Momentos de convites abertos</span>
                 <input
                   checked={mapStorySettings.includeOpenEventStories}
                   className="h-5 w-5"
@@ -2373,7 +2719,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 />
               </label>
               <p className="rounded-lg bg-white/8 p-3 text-xs text-slate-300">
-                Se desativar essas opções, ficam visíveis no mapa apenas stories dos chats em que você participa.
+                Se desativar essas opções, ficam visíveis no mapa apenas Momentos dos convites em que você participa.
               </p>
             </div>
           </section>
@@ -2399,8 +2745,8 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{selectedStoryEvent?.title ?? 'Story do mapa'}</p>
-                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · expira em 24h</p>
+                <p className="truncate text-sm font-semibold">{selectedStoryEvent?.title ?? 'Momento no mapa'}</p>
+                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · expira em até 2h</p>
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryViewerOpen(false)} type="button">
                 <X className="h-4 w-4" />
@@ -2434,13 +2780,13 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               </div>
             )}
             <button
-              aria-label="Story anterior"
+              aria-label="Momento anterior"
               className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent"
               onClick={showPreviousStory}
               type="button"
             />
             <button
-              aria-label="Próximo story"
+              aria-label="Próximo Momento"
               className="absolute bottom-24 right-0 top-14 z-10 w-1/2 bg-transparent"
               onClick={showNextStory}
               type="button"
@@ -2448,7 +2794,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             <div className="pointer-events-none absolute bottom-28 right-3 z-20 grid gap-2">
               {(selectedStory.creatorUid === me.uid || canManageApp) && (
                 <button
-                  aria-label="Apagar story"
+                  aria-label="Apagar Momento"
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => deleteStory(selectedStory)}
                   type="button"
@@ -2501,6 +2847,25 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 </button>
               )}
             </div>
+            {selectedStory.creatorUid === me.uid && selectedStoryLocation && (
+              <button
+                className="mx-3 mt-3 inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-sky-400 text-sm font-semibold text-slate-950"
+                onClick={() => {
+                  setStoryViewerOpen(false);
+                  setStoryComposerEvent(null);
+                  setStoryComposerLocationOverride(selectedStoryLocation);
+                  setStoryText('');
+                  setStoryImageURL('');
+                  setStoryUploadFile(null);
+                  setStoryMediaType('image');
+                  setStoryComposerOpen(true);
+                }}
+                type="button"
+              >
+                <Plus className="h-4 w-4" />
+                Criar outro neste local
+              </button>
+            )}
             <div className="grid grid-cols-2 gap-2 border-t border-white/10 p-3 pb-[calc(var(--raddo-bottom-safe)+12px)]">
               <button
                 className="h-10 rounded-lg border border-white/10 bg-white/8 text-sm font-semibold text-slate-100"
@@ -2568,6 +2933,15 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               <div>
                 <h2 className="text-lg font-semibold">{t('newStory')}</h2>
                 <p className="text-xs text-slate-400">{storyComposerEvent?.title ?? t('mapStory')}</p>
+                <p className="mt-1 text-xs font-medium text-sky-300">
+                  {storyComposerLocationOverride
+                    ? 'Será publicado no mesmo local do Momento escolhido.'
+                    : storyComposerEvent
+                    ? 'Será publicado no local deste convite.'
+                    : selectedPoint
+                      ? 'Será publicado no ponto marcado no mapa.'
+                      : 'Será publicado na sua localização atual.'}
+                </p>
               </div>
               <button
                 className="grid h-9 w-9 place-items-center rounded-lg bg-white/8"
@@ -2575,6 +2949,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                   cancelStoryRecording();
                   setStoryComposerOpen(false);
                   setStoryComposerEvent(null);
+                  setStoryComposerLocationOverride(null);
                 }}
                 type="button"
               >
@@ -2595,7 +2970,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 className="scrollbar-hidden h-10 min-h-10 w-full resize-none overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm leading-5 outline-none"
                 maxLength={160}
                 onChange={(event) => setStoryText(event.target.value)}
-                placeholder="Texto curto do story"
+                placeholder="Texto curto do Momento"
                 rows={1}
                 value={storyText}
               />
@@ -2629,6 +3004,15 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         <ProfilePreview
           me={me}
           onClose={() => setPreviewProfile(null)}
+          onConversation={(() => {
+            const connection = matches.find((match) => match.users.includes(me.uid) && match.users.includes(previewProfile.uid));
+            return connection && onOpenConnection
+              ? () => {
+                  setPreviewProfile(null);
+                  onOpenConnection(connection.id);
+                }
+              : undefined;
+          })()}
           onDislike={dislikeNearbyProfile}
           onFriend={connectNearbyProfile}
           onLike={likeNearbyProfile}
@@ -2749,18 +3133,22 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         </div>
       )}
       {gpsEvent && <ExternalGpsModal location={gpsEvent.location} onClose={() => setGpsEvent(null)} title={gpsEvent.title} />}
-      {clusteredEvents.length > 0 && (
+      {clusteredMapItems.length > 0 && (
         <div className="fixed inset-0 z-[1200] grid place-items-end bg-black/60 px-0 pb-[calc(var(--raddo-bottom-safe)+24px)] pt-0 backdrop-blur-sm sm:place-items-center sm:p-6">
           <section className="max-h-[calc(88dvh-var(--raddo-bottom-safe)-24px)] w-full max-w-lg overflow-auto rounded-t-lg border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl sm:max-h-[88dvh] sm:rounded-lg">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Chats neste ponto</h2>
-                <p className="text-sm text-slate-300">{clusteredEvents.length} chats muito próximos no mapa</p>
+                <h2 className="text-lg font-semibold">
+                  {clusteredMapItems.every((item) => item.kind === 'moment') ? 'Momentos neste ponto' : 'Convites neste ponto'}
+                </h2>
+                <p className="text-sm text-slate-300">
+                  {clusteredMapItems.length} {clusteredMapItems.every((item) => item.kind === 'moment') ? 'Momentos agrupados' : 'Convites agrupados'} no mapa
+                </p>
               </div>
               <button
                 aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
-                onClick={() => setClusteredEvents([])}
+                onClick={() => setClusteredMapItems([])}
                 type="button"
               >
                 <X className="h-5 w-5" />
@@ -2768,29 +3156,50 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             </div>
 
             <div className="grid gap-2">
-              {clusteredEvents
+              {clusteredMapItems
                 .slice()
-                .sort((a, b) => eventDistance(a) - eventDistance(b))
-                .map((event) => (
+                .sort((a, b) => (me.location ? distanceKm(me.location, a.position) - distanceKm(me.location, b.position) : 0))
+                .map((item) => item.kind === 'moment' ? (
                   <button
-                    className="w-full rounded-lg border border-white/10 bg-slate-950/60 p-3 text-left transition hover:bg-white/8"
-                    key={event.id}
+                    className="w-full rounded-lg border border-sky-400/20 bg-slate-950/60 p-3 text-left transition hover:bg-white/8"
+                    key={`cluster-moment-${item.story.id}`}
                     onClick={() => {
-                      setClusteredEvents([]);
-                      focusChatOnMap(event);
-                      setPreviewEvent(event);
+                      setClusteredMapItems([]);
+                      openStory(item.story.id);
                     }}
                     type="button"
                   >
                     <span className="flex items-start gap-3">
-                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8 text-xl">{event.emoji || '\u{1F4AC}'}</span>
+                      <span className="grid h-10 w-10 shrink-0 place-items-center text-2xl text-sky-400">★</span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-white">{event.title}</span>
-                        <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
+                        <span className="block truncate text-sm font-semibold text-white">{item.story.text || 'Momento'}</span>
+                        <span className="mt-1 block text-xs font-semibold text-sky-300">Momento de {item.story.creatorName}</span>
+                        <span className="mt-2 block text-xs text-slate-300">
+                          {me.location ? `${distanceKm(me.location, item.position).toFixed(1)} km` : t('distanceUnavailable')}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    className="w-full rounded-lg border border-white/10 bg-slate-950/60 p-3 text-left transition hover:bg-white/8"
+                    key={item.event.id}
+                    onClick={() => {
+                      setClusteredMapItems([]);
+                      focusChatOnMap(item.event);
+                      setPreviewEvent(item.event);
+                    }}
+                    type="button"
+                  >
+                    <span className="flex items-start gap-3">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center text-xl">{item.event.emoji || '\u{1F4AC}'}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-white">{item.event.title}</span>
+                        <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(item.event)}</span>
                         <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
-                          <span>{eventParticipantCounts[event.id] ?? 1} pessoas</span>
-                          <span>{me.location ? `${distanceKm(me.location, event.location).toFixed(1)} km` : t('distanceUnavailable')}</span>
-                          {formatEventTimeLeft(event) && <span>{formatEventTimeLeft(event)}</span>}
+                          <span>{eventParticipantCounts[item.event.id] ?? 1} pessoas</span>
+                          <span>{me.location ? `${distanceKm(me.location, item.event.location).toFixed(1)} km` : t('distanceUnavailable')}</span>
+                          {formatEventTimeLeft(item.event) && <span>{formatEventTimeLeft(item.event)}</span>}
                         </span>
                       </span>
                     </span>
@@ -2809,6 +3218,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             onClose={() => setActiveEvent(null)}
             onCreateStory={(storyEvent) => {
               setStoryComposerEvent(storyEvent);
+              setStoryComposerLocationOverride(null);
               setStoryComposerOpen(true);
               setStoryText('');
               setStoryImageURL('');
@@ -2830,14 +3240,14 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <h2 className="truncate text-lg font-semibold">
-                  {showMyChatsList ? 'Meus chats' : showNearbyChatsList ? 'Chats próximos' : 'Chats em que estou'}
+                  {showMyChatsList ? 'Meus convites' : showNearbyChatsList ? 'Convites próximos' : 'Convites em que estou'}
                 </h2>
                 <p className="text-sm text-slate-300">
                   {showMyChatsList
                     ? `${myEvents.length} criados por você`
                     : showNearbyChatsList
-                      ? `${nearbyReachableEvents.length} chats no seu alcance`
-                      : `${joinedOnlyEvents.length} chats participando`}
+                      ? `${nearbyReachableEvents.length} convites no seu alcance`
+                      : `${joinedOnlyEvents.length} convites participando`}
                 </p>
               </div>
               <button
@@ -2859,7 +3269,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
             <div className="grid gap-2">
               {currentChatModalEvents.length === 0 && (
                 <p className="rounded-lg bg-white/8 p-3 text-sm text-slate-300">
-                  {showMyChatsList ? 'Você ainda não criou nenhum chat.' : 'Você ainda não entrou em nenhum chat.'}
+                  {showMyChatsList ? 'Você ainda não criou nenhum convite.' : 'Você ainda não entrou em nenhum convite.'}
                 </p>
               )}
               {currentChatModalEvents.map((event) => {
@@ -2892,7 +3302,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2">
                             <span className="truncate text-sm font-semibold">{event.title}</span>
-                            {isOwner && <span className="shrink-0 rounded-full bg-sky-300 px-2 py-0.5 text-[10px] font-bold text-slate-950">Seu chat</span>}
+                            {isOwner && <span className="shrink-0 rounded-full bg-sky-300 px-2 py-0.5 text-[10px] font-bold text-slate-950">Seu convite</span>}
                           </span>
                           <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
                           {formatEventTimeLeft(event) && <span className="mt-1 block text-xs text-teal-200">{formatEventTimeLeft(event)}</span>}
@@ -3047,7 +3457,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                     </button>
                     <div className="flex shrink-0 items-center gap-1.5">
                       <span className="nearby-visibility-badge rounded-md border px-2 py-1 text-xs font-medium">
-                        {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
+                        {profile.privacyMode === 'exact' ? 'Visível no mapa' : profile.privacyMode === 'city' ? 'Somente cidade' : 'Fora do mapa'}
                       </span>
                       <button
                         aria-label={`Ver perfil de ${profile.displayName}`}
@@ -3164,42 +3574,34 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                   <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="aspect-video w-full rounded-lg" src={eventCoverURL} />
                 </div>
               )}
-              <label className="grid gap-2 text-sm">
-                {t('mapEmoji')}
-                <div className="grid grid-cols-6 gap-2">
-                  {eventEmojiQuickOptions.map((emoji) => (
-                    <button
-                      className={`grid h-10 place-items-center rounded-lg border text-lg ${
-                        eventEmoji === emoji ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60'
-                      }`}
-                      key={emoji}
-                      onClick={() => setEventEmoji(emoji)}
-                      type="button"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+              <div className="grid gap-2 text-sm">
+                <span>{t('mapEmoji')}</span>
+                <div className="flex gap-2">
+                  <span aria-label="Emoji selecionado" className="map-emoji-current grid h-11 w-11 shrink-0 place-items-center rounded-lg border text-2xl" role="img">
+                    {eventEmoji}
+                  </span>
                   <button
-                    className="grid h-10 place-items-center rounded-lg border border-white/10 bg-slate-950/60 text-sm font-semibold"
-                    onClick={() => setEmojiPickerOpen(true)}
+                    className="map-emoji-choose flex h-11 min-w-0 flex-1 items-center justify-between gap-3 rounded-lg border px-3 text-sm font-semibold"
+                    onClick={() => setEmojiPickerTarget('create')}
                     type="button"
                   >
-                    ...
+                    <span>Escolher emoji</span>
+                    <ChevronDown className="h-4 w-4 shrink-0" />
                   </button>
                 </div>
-              </label>
-              <label className="grid gap-2 text-sm">
-                {t('whoCanEnter')}
-                <select
-                  className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
-                  onChange={(event) => setEventAccessMode(event.target.value as MapEvent['accessMode'])}
+              </div>
+              <div className="grid gap-2 text-sm">
+                <span>{t('whoCanEnter')}</span>
+                <MapAccessModeSelect
+                  onChange={setEventAccessMode}
+                  options={[
+                    { label: t('openToAnyone'), value: 'open' },
+                    { label: t('approvalRequired'), value: 'approval' },
+                    { label: t('passwordRequired'), value: 'password' },
+                  ]}
                   value={eventAccessMode}
-                >
-                  <option value="open">{t('openToAnyone')}</option>
-                  <option value="approval">{t('approvalRequired')}</option>
-                  <option value="password">{t('passwordRequired')}</option>
-                </select>
-              </label>
+                />
+              </div>
               {eventAccessMode === 'approval' && (
                 <p className="rounded-lg bg-white/8 p-3 text-xs text-slate-300">
                   {t('approvalHelp')}
@@ -3229,7 +3631,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 </label>
               )}
               <label className="grid gap-2 text-xs text-slate-300">
-                Raio do chat: {formatRadius(eventRadius)}
+                Raio do convite: {formatRadius(eventRadius)}
                 <input
                   max={50}
                   min={0.1}
@@ -3240,15 +3642,17 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 />
               </label>
               <p className="text-xs text-slate-400">
-                {me.isPremium
-                  ? selectedPoint
-                    ? 'Ponto escolhido no mapa.'
-                    : 'Sem ponto escolhido: o chat será criado na sua posição atual.'
-                  : 'Seu chat será criado na sua localização atual. Apenas Premium pode criar em outro local.'}
+                {selectedPoint ? 'Ponto escolhido no mapa.' : 'Sem ponto escolhido: o convite será criado na sua posição atual.'}
               </p>
-              <p className="hidden">
-                {selectedPoint ? 'Ponto escolhido no mapa.' : 'Sem ponto escolhido: o chat será criado na sua posição atual.'}
-              </p>
+              {selectedPoint && me.location && (
+                <button
+                  className="h-9 rounded-lg border border-white/10 bg-white/8 px-3 text-xs font-semibold text-slate-100"
+                  onClick={() => setSelectedPoint(null)}
+                  type="button"
+                >
+                  Usar minha localização atual
+                </button>
+              )}
               {eventError && <p className="rounded-lg bg-rose-400/15 p-2 text-xs text-rose-100">{eventError}</p>}
               <button
                 className="h-11 rounded-lg bg-teal-300 text-sm font-semibold text-slate-950 disabled:cursor-wait disabled:opacity-70"
@@ -3330,40 +3734,39 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 )}
                 {uploadingEditingCover && <span className="text-xs text-slate-300">Enviando capa...</span>}
               </label>
-              <label className="grid gap-2 text-sm">
-                Emoji do mapa
-                <div className="grid grid-cols-6 gap-2">
-                  {eventEmojiQuickOptions.map((emoji) => (
-                    <button
-                      className={`grid h-10 place-items-center rounded-lg border text-lg ${
-                        editingEmoji === emoji ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60'
-                      }`}
-                      key={emoji}
-                      onClick={() => setEditingEmoji(emoji)}
-                      type="button"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+              <div className="grid gap-2 text-sm">
+                <span>Emoji do mapa</span>
+                <div className="flex gap-2">
+                  <span aria-label="Emoji selecionado" className="map-emoji-current grid h-11 w-11 shrink-0 place-items-center rounded-lg border text-2xl" role="img">
+                    {editingEmoji}
+                  </span>
+                  <button
+                    className="map-emoji-choose flex h-11 min-w-0 flex-1 items-center justify-between gap-3 rounded-lg border px-3 text-sm font-semibold"
+                    onClick={() => setEmojiPickerTarget('edit')}
+                    type="button"
+                  >
+                    <span>Escolher emoji</span>
+                    <ChevronDown className="h-4 w-4 shrink-0" />
+                  </button>
                 </div>
-              </label>
-              <label className="grid gap-2 text-sm">
-                {t('whoCanEnter')}
-                <select
-                  className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
-                  onChange={(event) => setEditingAccessMode(event.target.value as MapEvent['accessMode'])}
+              </div>
+              <div className="grid gap-2 text-sm">
+                <span>{t('whoCanEnter')}</span>
+                <MapAccessModeSelect
+                  onChange={setEditingAccessMode}
+                  options={[
+                    { label: t('openToAnyone'), value: 'open' },
+                    { label: t('approvalRequired'), value: 'approval' },
+                    { label: t('passwordRequired'), value: 'password' },
+                  ]}
                   value={editingAccessMode}
-                >
-                  <option value="open">Aberto para qualquer pessoa</option>
-                  <option value="approval">Precisa de autorização</option>
-                  <option value="password">Precisa de senha</option>
-                </select>
-              </label>
+                />
+              </div>
               {editingAccessMode === 'password' && (
                 <input
                   className="h-11 rounded-lg border border-white/10 bg-slate-950/60 px-3 text-sm outline-none"
                   onChange={(event) => setEditingPassword(event.target.value)}
-                  placeholder={editingEvent.passwordHash ? 'Nova senha, ou deixe em branco para manter' : 'Senha do chat'}
+                  placeholder={editingEvent.passwordHash ? 'Nova senha, ou deixe em branco para manter' : 'Senha do convite'}
                   type="password"
                   value={editingPassword}
                 />
@@ -3383,7 +3786,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                 </label>
               )}
               <label className="grid gap-2 text-xs text-slate-300">
-                Raio do chat: {formatRadius(editingRadius)}
+                Raio do convite: {formatRadius(editingRadius)}
                 <input
                   max={50}
                   min={0.1}
@@ -3405,40 +3808,33 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           </section>
         </div>
       )}
-      {emojiPickerOpen && (
+      {emojiPickerTarget && (
         <div className="fixed inset-0 z-[1300] grid place-items-center bg-black/60 p-4 backdrop-blur-sm sm:p-6">
-          <section className="max-h-[82dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-5 text-white shadow-2xl">
+          <section className="emoji-picker-modal max-h-[88dvh] w-full max-w-md overflow-auto rounded-2xl border border-white/10 bg-[#07111f] p-4 text-white shadow-2xl sm:p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">Escolher emoji</h2>
-                <p className="text-sm text-slate-300">Esse emoji aparece no mapa do chat.</p>
+                <p className="text-sm text-slate-300">Pesquise ou filtre por categoria.</p>
               </div>
               <button
                 aria-label={t('close')}
                 className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/8"
-                onClick={() => setEmojiPickerOpen(false)}
+                onClick={() => setEmojiPickerTarget(null)}
                 type="button"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="grid grid-cols-6 gap-2">
-              {eventEmojiOptions.map((emoji) => (
-                <button
-                  className={`grid h-11 place-items-center rounded-lg border text-xl ${
-                    eventEmoji === emoji ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60'
-                  }`}
-                  key={emoji}
-                  onClick={() => {
-                    setEventEmoji(emoji);
-                    setEmojiPickerOpen(false);
-                  }}
-                  type="button"
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+            <Suspense fallback={<div className="grid h-72 place-items-center text-sm text-slate-300">Carregando emojis...</div>}>
+              <NativeEmojiPicker
+                dark={theme === 'dark'}
+                onSelect={(emoji) => {
+                  if (emojiPickerTarget === 'edit') setEditingEmoji(emoji);
+                  else setEventEmoji(emoji);
+                  setEmojiPickerTarget(null);
+                }}
+              />
+            </Suspense>
           </section>
         </div>
       )}
@@ -3462,7 +3858,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           />
           <MapFocusController target={focusTarget} />
           <MapNavigationControls me={me} />
-          {me.isPremium && <MapClickTarget onPick={setSelectedPoint} selectedPoint={selectedPoint} />}
+          <MapClickTarget onPick={(point) => setSelectedPoint((current) => (current ? null : point))} />
 
           {me.location && (
             <Marker icon={meIcon} position={[me.location.lat, me.location.lng]}>
@@ -3473,7 +3869,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               </Popup>
             </Marker>
           )}
-          {me.isPremium && selectedPoint && (
+          {selectedPoint && (
             <Marker
               eventHandlers={{
                 click(event) {
@@ -3483,18 +3879,25 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
               icon={draftIcon}
               position={[selectedPoint.lat, selectedPoint.lng]}
             >
-              <Popup>Ponto escolhido para o novo chat</Popup>
+              <Popup>Ponto escolhido para o novo convite ou Momento</Popup>
             </Marker>
           )}
 
-          <ClusteredProfileMarkers me={me} onOpenCluster={setClusteredProfiles} profiles={profiles} />
+          <ClusteredProfileMarkers me={me} onOpenCluster={setClusteredProfiles} onOpenProfile={setPreviewProfile} profiles={profiles} />
+          <ClusteredMomentMarkers
+            events={visibleEvents}
+            moments={momentMarkers}
+            onOpenCluster={setClusteredMapItems}
+            onOpenMoment={openStory}
+          />
           <ClusteredEventMarkers
             creatorNames={eventCreatorNames}
             eventParticipantCounts={eventParticipantCounts}
             recentlyActiveEventIds={recentlyActiveEventIds}
             events={visibleEvents}
             me={me}
-            onOpenCluster={setClusteredEvents}
+            onOpenCluster={setClusteredMapItems}
+            onOpenMoment={openStory}
             onPreviewEvent={(event) => {
               focusChatOnMap(event);
               setPreviewEvent(event);
@@ -3511,7 +3914,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                   <br />
                   {me.location ? t('distanceAway', { distance: formatPersonDistanceKm(distanceKm(me.location, position)) }) : t('distanceUnavailable')}
                   <br />
-                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
+                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : profile.privacyMode === 'city' ? 'Somente cidade' : 'Fora do mapa'}
                 </Popup>
               </Marker>
             );
@@ -3538,11 +3941,14 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
         </MapContainer>
       </section>
 
-      {(me.isPremium ? selectedPoint || me.location : me.location) && (
+      {(selectedPoint || me.location) && (
         <button
           aria-label={t('createChat')}
           className="raddo-create-chat-cta absolute left-1/2 z-[560] grid h-14 w-14 -translate-x-1/2 place-items-center rounded-full text-white"
-          onClick={() => setCreateChatOpen(true)}
+          onClick={() => {
+            setEventEmoji(randomEventEmoji());
+            setCreateChatOpen(true);
+          }}
           type="button"
         >
           <Plus className="h-7 w-7" />
@@ -3568,7 +3974,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-semibold text-slate-100">
-              {visibleEvents.length === 1 ? '1 chat' : `${visibleEvents.length} chats`}
+              {visibleEvents.length === 1 ? '1 convite' : `${visibleEvents.length} convites`}
             </p>
             <span className="raddo-mini-arrow raddo-mini-arrow-chat">
               <ArrowRight className="h-3.5 w-3.5" />
@@ -3643,7 +4049,7 @@ export default function RadarMap({ matches, me, onOpenEventHandled, openEventId 
                   </p>
                 </button>
                 <span className="nearby-visibility-badge rounded-md border px-2 py-1 text-xs font-medium">
-                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : 'Fora do mapa'}
+                  {profile.privacyMode === 'exact' ? 'Visível no mapa' : profile.privacyMode === 'city' ? 'Somente cidade' : 'Fora do mapa'}
                 </span>
               </article>
             ))}

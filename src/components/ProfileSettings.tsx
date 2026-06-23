@@ -72,6 +72,7 @@ import {
   useModerationDashboard,
 } from '../moderation';
 import { showRewardedVideoAd } from '../adMob';
+import { publicTextValidationMessage } from '../publicTextModeration';
 
 type Props = {
   profile: UserProfile;
@@ -118,6 +119,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   const [preferenceSearch, setPreferenceSearch] = useState('');
   const [showPublicPreview, setShowPublicPreview] = useState(false);
   const [photoViewerOpen, setPhotoViewerOpen] = useState(false);
+  const [selectedCarouselPhoto, setSelectedCarouselPhoto] = useState<string | null>(null);
   const [profilePhotoPickerOpen, setProfilePhotoPickerOpen] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState(
     typeof Notification === 'undefined' ? 'indisponível' : Notification.permission,
@@ -224,6 +226,12 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
         return;
       }
 
+      if (selectedCarouselPhoto) {
+        event.preventDefault();
+        setSelectedCarouselPhoto(null);
+        return;
+      }
+
       if (profilePhotoPickerOpen) {
         event.preventDefault();
         setProfilePhotoPickerOpen(false);
@@ -253,7 +261,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
     return () => {
       window.removeEventListener('raddo:android-back', handleBack);
     };
-  }, [moderationOpen, photoViewerOpen, profilePhotoPickerOpen, selectedModerationCase, showPublicPreview, termsOpen]);
+  }, [moderationOpen, photoViewerOpen, profilePhotoPickerOpen, selectedCarouselPhoto, selectedModerationCase, showPublicPreview, termsOpen]);
 
   function updateDraft<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setDraft((prev) => {
@@ -361,6 +369,11 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
   }
 
   async function saveProfile(nextDraft: UserProfile, successKey: 'savedAutomatically' | 'savedManually' = 'savedAutomatically') {
+    const publicTextError = publicTextValidationMessage(nextDraft.displayName, nextDraft.bio);
+    if (publicTextError) {
+      setSaveStatus(publicTextError);
+      return false;
+    }
     if (isDemoMode) {
       setSaveStatus(t(successKey));
       return true;
@@ -847,6 +860,45 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
           </button>
         </div>
       )}
+      {selectedCarouselPhoto && (
+        <div
+          className="fixed inset-0 z-[1800] grid place-items-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setSelectedCarouselPhoto(null)}
+          role="presentation"
+        >
+          <section
+            aria-label="Foto do carrossel"
+            className="relative flex max-h-full w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-white/10 bg-[#07111f] p-3 text-white shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              aria-label={t('closeImage')}
+              className="absolute right-5 top-5 z-10 grid h-11 w-11 place-items-center rounded-full bg-slate-950/80 shadow-xl backdrop-blur"
+              onClick={() => setSelectedCarouselPhoto(null)}
+              type="button"
+            >
+              <X className="h-6 w-6" />
+            </button>
+            <div className="min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
+              <CachedMediaImage
+                className="h-full max-h-[70vh] w-full object-contain"
+                fallbackClassName="h-[60vh] w-full bg-black"
+                src={selectedCarouselPhoto}
+              />
+            </div>
+            <button
+              className="mt-3 h-12 shrink-0 rounded-lg bg-rose-500 px-4 font-semibold text-white transition hover:bg-rose-400 active:scale-[0.99]"
+              onClick={() => {
+                removePhoto(selectedCarouselPhoto);
+                setSelectedCarouselPhoto(null);
+              }}
+              type="button"
+            >
+              Excluir foto
+            </button>
+          </section>
+        </div>
+      )}
       <aside className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-white/8">
         <div className="relative h-72 overflow-hidden bg-slate-950/60 md:h-80">
           {draft.photoURL ? (
@@ -859,15 +911,25 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
               <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={draft.photoURL} />
             </button>
           ) : (
-            <div className="grid h-full w-full place-items-center bg-slate-950 text-sm text-slate-300">Sem foto</div>
+            <button
+              aria-label="Adicionar foto de perfil"
+              className="grid h-full w-full touch-manipulation place-items-center bg-slate-950 text-sm text-slate-300"
+              onClick={() => setProfilePhotoPickerOpen(true)}
+              type="button"
+            >
+              <span className="grid justify-items-center gap-2">
+                <Camera className="h-7 w-7 text-[#ff3f68]" />
+                Adicionar foto
+              </span>
+            </button>
           )}
           <button
             aria-label="Trocar foto de perfil"
-            className="absolute bottom-3 right-3 grid h-6 w-6 place-items-center rounded-full border border-white/15 bg-[#ff3f68] text-white shadow-lg shadow-black/30"
+            className="absolute bottom-3 right-3 z-20 grid h-11 w-11 touch-manipulation place-items-center rounded-full border border-white/20 bg-[#ff3f68] text-white shadow-lg shadow-black/40 active:scale-95"
             onClick={() => setProfilePhotoPickerOpen(true)}
             type="button"
           >
-            <Camera className="h-3 w-3" />
+            <Camera className="h-5 w-5" />
           </button>
         </div>
         <div className="grid grid-cols-4 gap-2 p-3">
@@ -950,19 +1012,22 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                   </div>
                 </div>
                 {draft.photos.length > 0 && (
-                  <div className="grid gap-2">
+                  <div className="flex max-w-full gap-2 overflow-x-auto pb-1">
                     {draft.photos.map((photo) => (
-                      <div className="flex items-center gap-2 rounded-lg bg-slate-950/60 p-2" key={photo}>
-                        <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-10 w-10 rounded-lg" src={photo} thumbnailOnly />
-                        <span className="min-w-0 flex-1 truncate text-xs text-slate-300">Foto</span>
-                        <button
-                          className="ml-auto h-9 rounded-lg border border-white/10 px-3 text-xs text-slate-200"
-                          onClick={() => removePhoto(photo)}
-                          type="button"
-                        >
-                          Remover
-                        </button>
-                      </div>
+                      <button
+                        aria-label="Ampliar foto do carrossel"
+                        className="h-20 w-20 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-slate-950/60 transition hover:border-teal-300/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-300"
+                        key={photo}
+                        onClick={() => setSelectedCarouselPhoto(photo)}
+                        type="button"
+                      >
+                        <CachedMediaImage
+                          className="h-full w-full object-cover"
+                          fallbackClassName="h-full w-full rounded-lg bg-slate-950/60"
+                          src={photo}
+                          thumbnailOnly
+                        />
+                      </button>
                     ))}
                   </div>
                 )}
@@ -1348,29 +1413,25 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 {t('mapVisibilityTitle')}
               </div>
               <p className="text-sm text-slate-300">{t('mapVisibilityHelp')}</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                <button
-                  className={`h-11 rounded-lg text-sm font-semibold ${
-                    draft.privacyMode === 'exact'
-                      ? 'bg-teal-300 text-slate-950'
-                      : 'border border-white/10 bg-slate-950/60 text-slate-200'
-                  }`}
-                  onClick={() => updateDraft('privacyMode', 'exact')}
-                  type="button"
-                >
-                  {t('yes')}
-                </button>
-                <button
-                  className={`h-11 rounded-lg text-sm font-semibold ${
-                    draft.privacyMode !== 'exact'
-                      ? 'bg-teal-300 text-slate-950'
-                      : 'border border-white/10 bg-slate-950/60 text-slate-200'
-                  }`}
-                  onClick={() => updateDraft('privacyMode', 'nearby')}
-                  type="button"
-                >
-                  {t('no')}
-                </button>
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {([
+                  { label: t('exactLocation'), value: 'exact' },
+                  { label: t('cityOnly'), value: 'city' },
+                  { label: t('hiddenOnMap'), value: 'nearby' },
+                ] as Array<{ label: string; value: UserProfile['privacyMode'] }>).map((option) => (
+                  <button
+                    className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
+                      draft.privacyMode === option.value
+                        ? 'bg-teal-300 text-slate-950'
+                        : 'border border-white/10 bg-slate-950/60 text-slate-200'
+                    }`}
+                    key={option.value}
+                    onClick={() => updateDraft('privacyMode', option.value)}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
             </section>
 
@@ -1434,7 +1495,7 @@ export default function ProfileSettings({ currentLanguage, currentTheme, profile
                 />
                 <PrivacyToggle
                   checked={notificationPreferences.mapChats}
-                  description="Avisos de mensagens nos chats do mapa em que você entrou."
+                  description="Avisos de mensagens nos convites do mapa em que você entrou."
                   label="Chats do mapa"
                   onChange={(checked) => void updateNotificationPreferences({ mapChats: checked })}
                 />

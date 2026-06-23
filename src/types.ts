@@ -1,4 +1,4 @@
-export type PrivacyMode = 'exact' | 'nearby';
+export type PrivacyMode = 'exact' | 'city' | 'nearby';
 export type AppView = 'radar' | 'discover' | 'chat' | 'profile' | 'notifications';
 export type AppTheme = 'dark' | 'light' | 'green' | 'pride' | 'system';
 export type ResolvedAppTheme = 'dark' | 'light' | 'green' | 'pride';
@@ -126,6 +126,7 @@ export type MapEventStory = {
   likedBy: string[];
   viewedBy: string[];
   text: string;
+  location: LatLng | null;
   createdAt: string;
   expiresAt: string;
 };

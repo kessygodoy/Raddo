@@ -4,10 +4,11 @@ import { genderOptions, sexualityOptions } from '../profileOptions';
 import { isDemoMode } from '../demoData';
 import { useI18n } from '../i18n';
 import { supabase } from '../supabase';
-import type { GenderIdentity, ResolvedAppTheme, Sexuality, UserProfile } from '../types';
+import type { GenderIdentity, PrivacyMode, ResolvedAppTheme, Sexuality, UserProfile } from '../types';
 import { moderateUploadedImage } from '../imageModeration';
 import { permanentProfilePhotoValue, uploadProfilePhoto as uploadProfilePhotoToStorage } from '../storageImages';
 import CachedMediaImage from './CachedMediaImage';
+import { publicTextValidationMessage } from '../publicTextModeration';
 
 type Props = {
   profile: UserProfile;
@@ -28,6 +29,7 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
   const [gender, setGender] = useState<GenderIdentity>(profile.gender);
   const [sexuality, setSexuality] = useState<Sexuality>(profile.sexualities[0] ?? 'hetero');
   const [lookingFor, setLookingFor] = useState<GenderIdentity[]>(profile.lookingFor.length ? profile.lookingFor : ['woman']);
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>(profile.privacyMode);
   const [visibilityRadius] = useState(profile.visibilityRadius || 30);
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -72,6 +74,11 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
       setError(t('chooseProfileName'));
       return;
     }
+    const publicTextError = publicTextValidationMessage(displayName, bio);
+    if (publicTextError) {
+      setError(publicTextError);
+      return;
+    }
     setStep('preferences');
   }
 
@@ -81,6 +88,13 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
 
     if (!displayName.trim()) {
       setError(t('chooseProfileName'));
+      setSaving(false);
+      return;
+    }
+
+    const publicTextError = publicTextValidationMessage(displayName, bio);
+    if (publicTextError) {
+      setError(publicTextError);
       setSaving(false);
       return;
     }
@@ -111,7 +125,7 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
           sexualities: [sexuality],
           looking_for: lookingFor,
           interested_sexualities: [sexuality],
-          privacy_mode: 'nearby',
+          privacy_mode: privacyMode,
           visibility_radius: visibilityRadius,
           last_seen: new Date().toISOString(),
         })
@@ -242,6 +256,30 @@ export default function Onboarding({ profile, theme, onDone }: Props) {
               values={genderOptions}
               onToggle={(value) => setLookingFor((current) => toggleValue(current, value))}
             />
+            <div className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-200">{t('mapVisibilityTitle')}</span>
+              <p className="text-xs leading-relaxed text-slate-300">{t('mapVisibilityHelp')}</p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {([
+                  { label: t('exactLocation'), value: 'exact' },
+                  { label: t('cityOnly'), value: 'city' },
+                  { label: t('hiddenOnMap'), value: 'nearby' },
+                ] as Array<{ label: string; value: PrivacyMode }>).map((option) => (
+                  <button
+                    className={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
+                      privacyMode === option.value
+                        ? 'bg-teal-300 text-slate-950'
+                        : 'border border-white/10 bg-slate-950/60 text-slate-200'
+                    }`}
+                    key={option.value}
+                    onClick={() => setPrivacyMode(option.value)}
+                    type="button"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </section>
         )}
 

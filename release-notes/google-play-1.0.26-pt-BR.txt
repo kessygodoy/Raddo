@@ -1,0 +1,5 @@
+• Convites e Momentos agora possuem aglomerados separados, com ícones sobrepostos, contador e listas próprias.
+• Aglomerados no mesmo ponto ficam empilhados e incluem itens que seriam cobertos no mapa.
+• Momentos de Convites aparecem apenas na faixa de Momentos para participantes ou em Convites abertos próximos.
+• Adicionamos limites por locais ativos: 1 para contas comuns e 10 para Premium, com publicações ilimitadas no mesmo local.
+• O marcador de Momento agora usa uma única estrela azul.

@@ -8,8 +8,10 @@ create table if not exists public.map_event_stories (
   liked_by uuid[] not null default '{}',
   viewed_by uuid[] not null default '{}',
   text text not null default '',
+  location_lat double precision,
+  location_lng double precision,
   created_at timestamptz not null default now(),
-  expires_at timestamptz not null default (now() + interval '24 hours'),
+  expires_at timestamptz not null default (now() + interval '2 hours'),
   constraint map_event_stories_content_check check (image_url <> '' or length(trim(text)) > 0)
 );
 
@@ -52,9 +54,9 @@ on public.map_event_stories for insert
 to authenticated
 with check (
   creator_uid = auth.uid()
-  and expires_at <= now() + interval '24 hours'
+  and expires_at <= now() + interval '2 hours'
   and (
-    event_id is null
+    (event_id is null and location_lat is not null and location_lng is not null)
     or exists (
     select 1 from public.map_event_participants
     where map_event_participants.event_id = map_event_stories.event_id

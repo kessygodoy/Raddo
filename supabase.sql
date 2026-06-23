@@ -7,7 +7,7 @@ create table if not exists public.profiles (
   photos text[] not null default '{}',
   lat double precision,
   lng double precision,
-  privacy_mode text not null default 'nearby' check (privacy_mode in ('exact', 'nearby')),
+  privacy_mode text not null default 'nearby' check (privacy_mode in ('exact', 'city', 'nearby')),
   appear_in_cards boolean not null default true,
   show_distance boolean not null default true,
   show_online_status boolean not null default true,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Flag, Handshake, Heart, Users, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Flag, Handshake, Heart, MessageCircle, Users, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
@@ -14,11 +14,12 @@ type Props = {
   onDislike?: (profile: UserProfile) => void | Promise<void>;
   onFriend?: (profile: UserProfile) => void | Promise<void>;
   onLike?: (profile: UserProfile) => void | Promise<void>;
+  onConversation?: () => void;
   showReport?: boolean;
   overlayClassName?: string;
 };
 
-export default function ProfilePreview({ me, profile, onClose, onDislike, onFriend, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
+export default function ProfilePreview({ me, profile, onClose, onConversation, onDislike, onFriend, onLike, showReport = true, overlayClassName = 'z-[1600]' }: Props) {
   const { t } = useI18n();
   const photos = useMemo(() => {
     const orderedPhotos = [profile.photoURL, ...profile.photos].filter(Boolean);
@@ -112,6 +113,16 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onFrie
             )}
           </div>
           {profile.bio && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{profile.bio}</p>}
+          {onConversation && (
+            <button
+              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-teal-300 px-4 text-sm font-semibold text-slate-950"
+              onClick={onConversation}
+              type="button"
+            >
+              <MessageCircle className="h-5 w-5" />
+              {t('chat')}
+            </button>
+          )}
           <div className="grid gap-3 text-sm">
             <div>
               <span className="text-slate-400">{t('gender')}</span>
@@ -163,7 +174,7 @@ export default function ProfilePreview({ me, profile, onClose, onDislike, onFrie
               )}
             </div>
           )}
-          {hasInteraction === false && (onLike || onDislike || onFriend) && (
+          {!onConversation && hasInteraction === false && (onLike || onDislike || onFriend) && (
             <div
               className="grid gap-3 pt-2"
               style={{ gridTemplateColumns: `repeat(${[onDislike, onFriend, onLike].filter(Boolean).length}, minmax(0, 1fr))` }}

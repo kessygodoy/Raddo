@@ -5,6 +5,7 @@ import type { LatLng, MapEvent, MapEventMessage, MapEventStory, UserProfile } fr
 import { distanceKm } from '../utils/geo';
 import { signedProfilePhotoUrl, withSignedProfilePhotos } from '../storageImages';
 import { deleteCachedChatMedia, deleteCachedChatMediaKeys } from '../chatMediaCache';
+import { assertPublicTextAllowed } from '../publicTextModeration';
 
 let demoEventsState = [...demoMapEvents];
 let demoMessagesState = [...demoMapEventMessages];
@@ -54,6 +55,8 @@ type EventStoryRow = {
   liked_by: string[] | null;
   viewed_by: string[] | null;
   text: string | null;
+  location_lat: number | null;
+  location_lng: number | null;
   created_at: string;
   expires_at: string;
 };
@@ -244,6 +247,10 @@ function rowToStory(row: EventStoryRow): MapEventStory {
     likedBy: row.liked_by ?? [],
     viewedBy: row.viewed_by ?? [],
     text: row.text ?? '',
+    location:
+      typeof row.location_lat === 'number' && typeof row.location_lng === 'number'
+        ? { lat: row.location_lat, lng: row.location_lng }
+        : null,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
@@ -379,7 +386,7 @@ export function useMapEventNotifications(uid: string | undefined) {
       const messageNotifications = [...messagesByEvent.entries()].map(([eventId, rows]) => {
         const sortedRows = rows.slice().sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
         const latest = sortedRows[0];
-        const title = eventTitles.get(eventId) ?? 'Chat do mapa';
+        const title = eventTitles.get(eventId) ?? 'Convite do mapa';
         return {
           count: sortedRows.length,
           eventId,
@@ -403,9 +410,9 @@ export function useMapEventNotifications(uid: string | undefined) {
           count: (story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length,
           groupKey: `story-like:${story.id}`,
           id: `story-like:${story.id}:${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length}`,
-          text: `${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length} curtiram seu story${story.text ? `: ${story.text}` : ''}`,
+          text: `${(story.liked_by ?? []).filter((likedUid) => likedUid !== uid).length} curtiram seu Momento${story.text ? `: ${story.text}` : ''}`,
           timeValue: story.created_at,
-          title: 'Curtida no story',
+          title: 'Curtida no Momento',
           tone: 'story_like' as const,
         }));
 
@@ -431,7 +438,7 @@ export function useMapEventNotifications(uid: string | undefined) {
 export async function deleteMapEventStory(storyId: string) {
   if (isDemoMode || storyId.startsWith('local-story-')) return;
   const { error } = await supabase.from('map_event_stories').delete().eq('id', storyId);
-  if (error) throw new Error(error.message || 'Não consegui apagar o story.');
+  if (error) throw new Error(error.message || 'Não consegui apagar o Momento.');
 }
 
 export async function createMapEventStory(input: {
@@ -439,13 +446,45 @@ export async function createMapEventStory(input: {
   creatorUid: string;
   eventId?: string | null;
   imageURL: string;
+  isPremium: boolean;
   mediaType?: 'image' | 'video';
+  location?: LatLng | null;
   text: string;
 }) {
   const cleanText = input.text.trim().slice(0, 160);
   if (!input.imageURL && !cleanText) throw new Error('Adicione uma foto, vídeo ou texto para publicar.');
+  assertPublicTextAllowed(cleanText);
 
   if (isDemoMode) return;
+
+  if (!input.location) throw new Error('Escolha um local para publicar o Momento.');
+  const { data: activeStories, error: activeStoriesError } = await supabase
+    .from('map_event_stories')
+    .select('location_lat,location_lng')
+    .eq('creator_uid', input.creatorUid)
+    .gt('expires_at', new Date().toISOString());
+  if (activeStoriesError) throw new Error(activeStoriesError.message);
+
+  const activeLocations = (activeStories ?? []).flatMap((story) =>
+    typeof story.location_lat === 'number' && typeof story.location_lng === 'number'
+      ? [{ lat: story.location_lat, lng: story.location_lng }]
+      : [],
+  );
+  const locationAlreadyActive = activeLocations.some((location) => distanceKm(location, input.location!) <= 0.03);
+  if (!locationAlreadyActive) {
+    const distinctLocations: LatLng[] = [];
+    activeLocations.forEach((location) => {
+      if (!distinctLocations.some((savedLocation) => distanceKm(savedLocation, location) <= 0.03)) distinctLocations.push(location);
+    });
+    const locationLimit = input.isPremium ? 10 : 1;
+    if (distinctLocations.length >= locationLimit) {
+      throw new Error(
+        input.isPremium
+          ? 'Você pode manter Momentos em até 10 locais diferentes. Crie outro em um local já ativo.'
+          : 'Você pode manter Momentos em apenas 1 local. Abra seu Momento e use “Criar outro neste local”.',
+      );
+    }
+  }
 
   const { error } = await supabase.from('map_event_stories').insert({
     creator_name: input.creatorName,
@@ -453,18 +492,20 @@ export async function createMapEventStory(input: {
     event_id: input.eventId ?? null,
     image_url: input.imageURL,
     media_type: input.mediaType ?? 'image',
+    location_lat: input.location?.lat ?? null,
+    location_lng: input.location?.lng ?? null,
     text: cleanText,
   });
-  if (error) throw new Error(error.message || 'Não consegui publicar o story.');
+  if (error) throw new Error(error.message || 'Não consegui publicar o Momento.');
 }
 
 export async function reportMapEventStory(story: MapEventStory, event: MapEvent | null, reporterUid: string) {
-  if (story.creatorUid === reporterUid) throw new Error('Você não pode denunciar seu próprio story.');
+  if (story.creatorUid === reporterUid) throw new Error('Você não pode denunciar seu próprio Momento.');
   if (isDemoMode) return;
 
   const { error } = await supabase.from('reports').insert({
     context_id: story.id,
-    context_title: event?.title ?? 'Story do mapa',
+    context_title: event?.title ?? 'Momento no mapa',
     context_type: 'map_story',
     reporter_uid: reporterUid,
     reported_uid: story.creatorUid,
@@ -481,7 +522,7 @@ export async function reportMapEventStory(story: MapEventStory, event: MapEvent 
       },
     ],
   });
-  if (error) throw new Error(error.message || 'Não consegui denunciar o story.');
+  if (error) throw new Error(error.message || 'Não consegui denunciar o Momento.');
 }
 
 export async function markMapEventStoryViewed(story: MapEventStory, userUid: string) {
@@ -496,7 +537,7 @@ export async function toggleMapEventStoryLike(story: MapEventStory, userUid: str
   const { error } = await supabase.rpc('toggle_map_event_story_like', {
     target_story_id: story.id,
   });
-  if (error) throw new Error(error.message || 'Não consegui curtir o story.');
+  if (error) throw new Error(error.message || 'Não consegui curtir o Momento.');
 }
 
 function rowToProfile(row: ProfileRow): UserProfile {
@@ -653,11 +694,11 @@ export function useMapEventCreatorNames(events: MapEvent[], me: UserProfile) {
       const { data } = await supabase.from('profiles').select('id,display_name').in('id', creatorIds);
       const nextNames: Record<string, string> = {};
       creatorIds.forEach((uid) => {
-        nextNames[uid] = uid === me.uid ? me.displayName : 'criador do chat';
+        nextNames[uid] = uid === me.uid ? me.displayName : 'criador do convite';
       });
       (data ?? []).forEach((row) => {
         const profile = row as { id: string; display_name: string | null };
-        nextNames[profile.id] = profile.display_name || nextNames[profile.id] || 'criador do chat';
+        nextNames[profile.id] = profile.display_name || nextNames[profile.id] || 'criador do convite';
       });
       if (active) setNames(nextNames);
     }
@@ -1222,6 +1263,7 @@ export async function createMapEvent(input: {
   isPremium: boolean;
   radiusKm: number;
 }) {
+  assertPublicTextAllowed(input.title, input.description);
   const now = new Date().toISOString();
   const activeSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const duplicateSince = new Date(Date.now() - 2 * 60 * 1000).toISOString();
@@ -1247,13 +1289,13 @@ export async function createMapEvent(input: {
     ).length;
     const limit = input.isPremium ? 5 : 1;
     if (!input.isPremium && input.coverURL) {
-      throw new Error('Apenas usuários Premium podem adicionar capa ao chat.');
+      throw new Error('Apenas usuários Premium podem adicionar capa ao convite.');
     }
     if (input.isPremium && input.isPermanent && demoEventsState.some((event) => event.creatorUid === input.creatorUid && event.isPermanent)) {
-      throw new Error('Você pode criar apenas 1 chat permanente no Premium.');
+      throw new Error('Você pode criar apenas 1 convite permanente no Premium.');
     }
     if (ownEvents >= limit) {
-      throw new Error(input.isPremium ? 'Você pode criar até 5 chats no Premium.' : 'Você pode criar apenas 1 chat. Assine o Premium para criar até 5.');
+      throw new Error(input.isPremium ? 'Você pode criar até 5 convites no Premium.' : 'Você pode criar apenas 1 convite. Assine o Premium para criar até 5.');
     }
 
     const event: MapEvent = {
@@ -1291,16 +1333,16 @@ export async function createMapEvent(input: {
 
     if (permanentCountError) throw new Error(permanentCountError.message);
     if ((permanentCount ?? 0) >= 1) {
-      throw new Error('Você pode criar apenas 1 chat permanente no Premium.');
+      throw new Error('Você pode criar apenas 1 convite permanente no Premium.');
     }
   }
 
   const limit = input.isPremium ? 5 : 1;
   if (!input.isPremium && input.coverURL) {
-    throw new Error('Apenas usuários Premium podem adicionar capa ao chat.');
+    throw new Error('Apenas usuários Premium podem adicionar capa ao convite.');
   }
   if ((count ?? 0) >= limit) {
-    throw new Error(input.isPremium ? 'Você pode criar até 5 chats no Premium.' : 'Você pode criar apenas 1 chat. Assine o Premium para criar até 5.');
+    throw new Error(input.isPremium ? 'Você pode criar até 5 convites no Premium.' : 'Você pode criar apenas 1 convite. Assine o Premium para criar até 5.');
   }
 
   const { data: existingDuplicate, error: duplicateError } = await supabase
@@ -1398,6 +1440,7 @@ type UpdateMapEventDetailsInput = {
 };
 
 export async function updateMapEventDetails(eventId: string, input: UpdateMapEventDetailsInput) {
+  assertPublicTextAllowed(input.title, input.description);
   if (isDemoMode) {
     let updated: MapEvent | null = null;
     demoEventsState = demoEventsState.map((event) => {
@@ -1405,7 +1448,7 @@ export async function updateMapEventDetails(eventId: string, input: UpdateMapEve
       updated = { ...event, ...input };
       return updated;
     });
-    if (!updated) throw new Error('Chat não encontrado.');
+    if (!updated) throw new Error('Convite não encontrado.');
     return updated;
   }
 
@@ -1498,7 +1541,7 @@ export async function reportMapEvent(event: MapEvent, reporterUid: string, reaso
 
 export async function joinMapEvent(eventId: string, userUid: string) {
   if (isDemoMode) {
-    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste chat.');
+    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste convite.');
     if (!demoParticipantsState[eventId]) demoParticipantsState[eventId] = new Set();
     if (!demoParticipantJoinedAtState[eventId]) demoParticipantJoinedAtState[eventId] = {};
     if (!demoParticipantsState[eventId].has(userUid)) demoParticipantJoinedAtState[eventId][userUid] = new Date().toISOString();
@@ -1514,7 +1557,7 @@ export async function joinMapEvent(eventId: string, userUid: string) {
     .eq('user_uid', userUid)
     .limit(1);
   if (banError && !isMissingTableError(banError)) throw new Error(banError.message);
-  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste chat.');
+  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste convite.');
 
   const { error } = await supabase.from('map_event_participants').upsert(
     {
@@ -1532,7 +1575,7 @@ export async function joinMapEvent(eventId: string, userUid: string) {
 
 export async function requestMapEventEntry(eventId: string, userUid: string) {
   if (isDemoMode) {
-    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste chat.');
+    if (demoBansState[eventId]?.has(userUid)) throw new Error('Você foi banido deste convite.');
     if (demoParticipantsState[eventId]?.has(userUid)) return { alreadyJoined: true };
     if (!demoJoinRequestsState[eventId]) demoJoinRequestsState[eventId] = new Set();
     demoJoinRequestsState[eventId].add(userUid);
@@ -1557,7 +1600,7 @@ export async function requestMapEventEntry(eventId: string, userUid: string) {
     { ignoreDuplicates: true, onConflict: 'event_id,user_uid' },
   );
   if (error) {
-    if (isPolicyBlockedError(error)) throw new Error('Você foi banido deste chat.');
+    if (isPolicyBlockedError(error)) throw new Error('Você foi banido deste convite.');
     throw new Error(isMissingTableError(error) ? schemaCacheMessage('map_event_join_requests') : error.message);
   }
   return { alreadyJoined: false };
@@ -1671,7 +1714,7 @@ export async function deleteMapEvent(eventId: string, creatorUid: string) {
   }
 
   const { error } = await supabase.from('map_events').delete().eq('id', eventId).eq('creator_uid', creatorUid);
-  if (error) throw new Error(error.message || 'Não consegui excluir o chat.');
+  if (error) throw new Error(error.message || 'Não consegui excluir o convite.');
 }
 
 export async function sendMapEventMessage(input: {
@@ -1686,7 +1729,7 @@ export async function sendMapEventMessage(input: {
   const now = new Date().toISOString();
 
   if (isDemoMode) {
-    if (demoBansState[input.eventId]?.has(input.senderUid)) throw new Error('Você foi banido deste chat.');
+    if (demoBansState[input.eventId]?.has(input.senderUid)) throw new Error('Você foi banido deste convite.');
     demoMessagesState = [
       ...demoMessagesState,
       {
@@ -1713,7 +1756,7 @@ export async function sendMapEventMessage(input: {
     .eq('user_uid', input.senderUid)
     .limit(1);
   if (banError && !isMissingTableError(banError) && !isPolicyBlockedError(banError)) throw new Error(banError.message);
-  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste chat.');
+  if ((banRows ?? []).length > 0) throw new Error('Você foi banido deste convite.');
 
   let messageId = '';
   const rpcResult = await supabase.rpc('send_map_event_message_secure', {

@@ -227,7 +227,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     () => joinRequests.filter((profile) => !handledJoinRequestIds.has(profile.uid)),
     [handledJoinRequestIds, joinRequests],
   );
-  const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do chat';
+  const creatorName = participants.find((profile) => profile.uid === event.creatorUid)?.displayName ?? 'criador do convite';
   const expiresAt = new Date(Date.parse(event.createdAt) + 24 * 60 * 60 * 1000);
   const orderedStories = useMemo(
     () =>
@@ -518,7 +518,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   async function handleReportStory(story: MapEventStory) {
     try {
       await reportMapEventStory(story, event, me.uid);
-      setError('Story denunciado para revisão.');
+      setError('Momento denunciado para revisão.');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('storyReportError'));
     }
@@ -528,7 +528,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setDialog({
       confirmLabel: 'Apagar',
       destructive: true,
-      message: 'Este story será removido do chat.',
+      message: 'Este Momento será removido do convite.',
       onConfirm: async () => {
         try {
           await deleteMapEventStory(story.id);
@@ -540,7 +540,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
           setError(err instanceof Error ? err.message : t('storyDeleteError'));
         }
       },
-      title: 'Apagar story?',
+      title: 'Apagar Momento?',
       type: 'confirm',
     });
   }
@@ -575,18 +575,18 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       confirmLabel: 'Enviar',
       inputKind: 'textarea',
       initialValue: '',
-      message: 'Envie uma mensagem para responder ao story.',
+      message: 'Envie uma mensagem para responder ao Momento.',
       onConfirm: async (value) => {
         const message = value.trim();
         if (!message) return;
         try {
-          await sendMessage(match.id, me.uid, `Story: ${message}`, me.displayName);
+          await sendMessage(match.id, me.uid, `Momento: ${message}`, me.displayName);
           setError(t('messageSent'));
         } catch (err) {
           setError(err instanceof Error ? err.message : t('messageSendError'));
         }
       },
-      title: 'Comentar story',
+      title: 'Comentar Momento',
       type: 'prompt',
     });
   }
@@ -870,7 +870,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     try {
       await approveMapEventRequest(event.id, profile.uid);
       setHandledJoinRequestIds((current) => new Set(current).add(profile.uid));
-      setError(`${profile.displayName} foi aprovado para entrar no chat.`);
+      setError(`${profile.displayName} foi aprovado para entrar no convite.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('approveError'));
     } finally {
@@ -895,8 +895,8 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setDialog({
       confirmLabel: enabled ? 'Tornar moderador' : 'Remover',
       message: enabled
-        ? `${profile.displayName} poderá aprovar pedidos e moderar pessoas neste chat.`
-        : `${profile.displayName} deixará de moderar este chat.`,
+        ? `${profile.displayName} poderá aprovar pedidos e moderar pessoas neste convite.`
+        : `${profile.displayName} deixará de moderar este convite.`,
       onConfirm: async () => {
         try {
           await setMapEventModerator(event.id, profile.uid, enabled);
@@ -914,7 +914,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setDialog({
       confirmLabel: t('ban'),
       destructive: true,
-      message: `${profile.displayName} será removido e não poderá entrar novamente neste chat.`,
+      message: `${profile.displayName} será removido e não poderá entrar novamente neste convite.`,
       onConfirm: async () => {
         try {
           await banMapEventUser(event.id, profile.uid, me.uid);
@@ -932,7 +932,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   async function handleUnban(profile: UserProfile) {
     setDialog({
       confirmLabel: t('unban'),
-      message: `${profile.displayName} poderá pedir entrada ou entrar novamente, conforme as regras do chat.`,
+      message: `${profile.displayName} poderá pedir entrada ou entrar novamente, conforme as regras do convite.`,
       onConfirm: async () => {
         try {
           await unbanMapEventUser(event.id, profile.uid);
@@ -950,12 +950,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setDialog({
       confirmLabel: t('kick'),
       destructive: true,
-      message: `${profile.displayName} será removido do chat, mas poderá entrar novamente depois.`,
+      message: `${profile.displayName} será removido do convite, mas poderá entrar novamente depois.`,
       onConfirm: async () => {
         try {
           await leaveMapEvent(event.id, profile.uid);
           setActionProfile(null);
-          setError(`${profile.displayName} foi expulso do chat.`);
+          setError(`${profile.displayName} foi removido do convite.`);
         } catch (err) {
           setError(err instanceof Error ? err.message : t('kickError'));
         }
@@ -970,12 +970,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
       confirmLabel: t('savePassword'),
       inputKind: 'password',
       initialValue: '',
-      message: 'Defina a nova senha deste chat.',
+      message: 'Defina a nova senha deste convite.',
       onConfirm: async (nextPassword) => {
         try {
           const passwordHash = await hashMapEventPassword(nextPassword);
           await updateMapEventPassword(event.id, passwordHash);
-          setError('Senha do chat atualizada.');
+          setError('Senha do convite atualizada.');
         } catch (err) {
           setError(err instanceof Error ? err.message : t('changePasswordError'));
         }
@@ -986,9 +986,9 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
   }
 
   function profileRole(profile: UserProfile) {
-    if (event.creatorUid === profile.uid) return 'Dono do chat';
+    if (event.creatorUid === profile.uid) return 'Dono do convite';
     if (moderators.includes(profile.uid)) return 'Moderador';
-    return profile.bio || 'No chat local';
+    return profile.bio || 'No convite local';
   }
 
   async function handleEditMessage(message: (typeof allMessages)[number]) {
@@ -1015,7 +1015,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
     setDialog({
       confirmLabel: t('delete'),
       destructive: true,
-      message: 'Esta mensagem será removida do chat.',
+      message: 'Esta mensagem será removida da conversa do convite.',
       onConfirm: async () => {
         try {
           await deleteMapEventMessage(message, me.uid, canManage);
@@ -1090,7 +1090,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
             <div className="flex items-center justify-between gap-3 border-b border-white/10 p-3">
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold">{event.title}</p>
-                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · {t('expiresIn24h')}</p>
+                <p className="truncate text-xs text-slate-400">{selectedStory.creatorName} · expira em até 2h</p>
               </div>
               <button className="grid h-9 w-9 place-items-center rounded-lg bg-white/8" onClick={() => setStoryViewerOpen(false)} type="button">
                 <X className="h-4 w-4" />
@@ -1123,12 +1123,12 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 Publicando...
               </div>
             )}
-            <button aria-label="Story anterior" className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent" onClick={showPreviousStory} type="button" />
-            <button aria-label="Próximo story" className="absolute bottom-24 right-0 top-14 z-10 w-1/2 bg-transparent" onClick={showNextStory} type="button" />
+            <button aria-label="Momento anterior" className="absolute bottom-24 left-0 top-14 z-10 w-1/2 bg-transparent" onClick={showPreviousStory} type="button" />
+            <button aria-label="Próximo Momento" className="absolute bottom-24 right-0 top-14 z-10 w-1/2 bg-transparent" onClick={showNextStory} type="button" />
             <div className="pointer-events-none absolute bottom-28 right-3 z-20 grid gap-2">
               {(selectedStory.creatorUid === me.uid || canManageApp) && (
                 <button
-                  aria-label="Apagar story"
+                  aria-label="Apagar Momento"
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => handleDeleteStory(selectedStory)}
                   type="button"
@@ -1138,7 +1138,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
               )}
               {selectedStory.creatorUid !== me.uid && (
                 <button
-                  aria-label="Curtir story"
+                  aria-label="Curtir Momento"
                   className="pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center rounded-full bg-black/45 px-3 text-white backdrop-blur"
                   onClick={() => handleLikeStory(selectedStory)}
                   type="button"
@@ -1469,7 +1469,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 <div>
                   <h2 className="text-lg font-semibold">{t('reportUser')}</h2>
                   <p className="mt-1 text-sm text-slate-300">
-                    Escolha o motivo para denunciar {reportProfile.displayName}. As últimas 10 mensagens dessa pessoa neste chat serão enviadas para análise.
+                    Escolha o motivo para denunciar {reportProfile.displayName}. As últimas 10 mensagens dessa pessoa neste convite serão enviadas para análise.
                   </p>
                 </div>
                 <button
@@ -1536,7 +1536,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                 type="button"
               >
                 <Plus className="raddo-story-plus-icon h-4 w-4 text-white" />
-                Story
+                Momento
               </button>
             )}
             {storyGroups.length === 0 && (
@@ -1561,7 +1561,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                     <CachedMediaImage className="h-full w-full object-cover" fallbackClassName="h-full w-full" src={story.imageURL} thumbnailOnly />
                   </span>
                 ) : (
-                  <span className="px-1 text-center text-[10px] text-slate-100">{story.text || 'Story'}</span>
+                  <span className="px-1 text-center text-[10px] text-slate-100">{story.text || 'Momento'}</span>
                 )}
                 {story.id.startsWith('local-story-') && (
                   <span className="absolute inset-x-1 bottom-1 rounded bg-[#ff3f68] px-1 py-0.5 text-[8px] font-bold text-white">
@@ -1749,7 +1749,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         <ProfileAvatar profile={profile} />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold">{profile.displayName}</p>
-                          <p className="truncate text-xs text-slate-300">Moderador do chat</p>
+                          <p className="truncate text-xs text-slate-300">Moderador do convite</p>
                         </div>
                       </div>
                       {isOwner && (
@@ -1774,7 +1774,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         <ProfileAvatar profile={profile} />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold">{profile.displayName}</p>
-                          <p className="truncate text-xs text-slate-300">Banido deste chat</p>
+                          <p className="truncate text-xs text-slate-300">Banido deste convite</p>
                         </div>
                       </div>
                       <button
@@ -1797,7 +1797,7 @@ export default function MapEventChat({ event, matches = [], me, onClose, onCreat
                         <ProfileAvatar profile={profile} />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold">{profile.displayName}</p>
-                          <p className="truncate text-xs text-slate-300">Quer entrar neste chat</p>
+                          <p className="truncate text-xs text-slate-300">Quer entrar neste convite</p>
                         </div>
                       </div>
                       <div className="mt-3 grid grid-cols-2 gap-2">

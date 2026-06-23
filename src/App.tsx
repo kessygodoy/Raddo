@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Bell, Handshake, Heart, LogOut, MoreVertical, Radar, Sparkles, UserRound } from 'lucide-react';
 import { hasSupabaseConfig, supabase } from './supabase';
@@ -90,6 +90,7 @@ export default function App() {
   const [onboardingDone, setOnboardingDone] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const [openMatchId, setOpenMatchId] = useState('');
   const [openMapEventId, setOpenMapEventId] = useState('');
   const [availableUpdate, setAvailableUpdate] = useState<{
@@ -143,6 +144,24 @@ export default function App() {
     );
   const mapEventNotifications = useMapEventNotifications(profile?.uid);
   const matchProfilesByUid = useMatchProfiles(matches, profile?.uid ?? '');
+
+  useEffect(() => {
+    if (!headerMenuOpen) return undefined;
+
+    const closeOutside = (event: PointerEvent) => {
+      if (!headerMenuRef.current?.contains(event.target as Node)) setHeaderMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setHeaderMenuOpen(false);
+    };
+
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [headerMenuOpen]);
 
   useEffect(() => {
     const currentIds = new Set(friendshipPrompts.map(friendshipPromptId));
@@ -962,7 +981,7 @@ export default function App() {
                   <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#ff3f68] ring-2 ring-[#07111f]" />
                 )}
               </button>
-              <div className="relative">
+              <div className="relative" ref={headerMenuRef}>
                 <button
                   aria-label={t('chatOptions')}
                   className="raddo-header-icon grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/8 text-slate-200"
@@ -978,7 +997,7 @@ export default function App() {
                       onClick={() => openRadarPanel('my-chats')}
                       type="button"
                     >
-                      Meus chats
+                      Meus convites
                     </button>
                     <button
                       className="w-full rounded-md px-3 py-2 text-left font-semibold text-slate-100 hover:bg-white/8"
@@ -992,7 +1011,7 @@ export default function App() {
                       onClick={() => openRadarPanel('nearby-chats')}
                       type="button"
                     >
-                      Chats próximos
+                      Convites próximos
                     </button>
                   </div>
                 )}
@@ -1026,6 +1045,10 @@ export default function App() {
               <RadarMap
                 matches={matches}
                 me={profile}
+                onOpenConnection={(matchId) => {
+                  setOpenMatchId(matchId);
+                  navigateTo('chat');
+                }}
                 onOpenEventHandled={(eventId) => {
                   setOpenMapEventId((current) => (current === eventId ? '' : current));
                 }}
@@ -1082,7 +1105,7 @@ export default function App() {
                 return (
                   <button
                     className={`grid min-h-14 place-items-center rounded-lg text-xs font-medium transition ${
-                      isActive ? 'raddo-primary-action' : 'text-slate-300 hover:bg-white/8'
+                      isActive ? 'raddo-bottom-nav-active' : 'text-slate-300'
                     }`}
                     key={item.id}
                     onClick={() => navigateTo(item.id)}
