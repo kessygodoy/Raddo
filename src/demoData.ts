@@ -44,6 +44,7 @@ export const demoProfile: UserProfile = {
   likesQuotaDate: new Date().toISOString().slice(0, 10),
   likesBonus: 0,
   likedByUnlockUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  createdAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
 };
 
 const names = [
@@ -88,6 +89,7 @@ export const demoProfiles: UserProfile[] = names.map((name, index) => {
     likesQuotaDate: null,
     likesBonus: 0,
     likedByUnlockUntil: null,
+    createdAt: new Date(Date.now() - (index + 5) * 24 * 60 * 60 * 1000).toISOString(),
   };
 });
 
@@ -110,6 +112,9 @@ export const demoMapEvents: MapEvent[] = [
     coverURL: 'https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=900&q=80',
     emoji: '🍻',
     accessMode: 'open',
+    discoveryMode: 'public',
+    affinityInterests: ['music'],
+    affinityGoals: ['chat'],
     passwordHash: '',
     isPermanent: false,
     location: { lat: baseLocation.lat + 0.01, lng: baseLocation.lng - 0.006 },
@@ -124,11 +129,31 @@ export const demoMapEvents: MapEvent[] = [
     coverURL: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80',
     emoji: '🌳',
     accessMode: 'approval',
+    discoveryMode: 'public',
+    affinityInterests: ['travel', 'gym'],
+    affinityGoals: ['friendship'],
     passwordHash: '',
     isPermanent: false,
     location: { lat: baseLocation.lat - 0.012, lng: baseLocation.lng + 0.008 },
     radiusKm: 3,
     creatorUid: 'demo-profile-8',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'demo-event-3',
+    title: 'Mesa secreta de musica',
+    description: 'Convite invisivel para quem curte musica e quer conversar sem pressa.',
+    coverURL: '',
+    emoji: '🎧',
+    accessMode: 'approval',
+    discoveryMode: 'invisible',
+    affinityInterests: ['music'],
+    affinityGoals: ['chat', 'friendship'],
+    passwordHash: '',
+    isPermanent: false,
+    location: { lat: baseLocation.lat + 0.004, lng: baseLocation.lng + 0.004 },
+    radiusKm: 4,
+    creatorUid: 'demo-profile-5',
     createdAt: new Date().toISOString(),
   },
 ];

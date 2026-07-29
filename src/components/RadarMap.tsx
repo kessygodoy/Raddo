@@ -5,7 +5,7 @@ import { Component, ReactNode } from 'react';
 import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents as useLeafletMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ArrowRight, Camera, Check, ChevronDown, Eye, Flag, Handshake, Heart, ImagePlus, Info, LocateFixed, LogOut, MapPin, Megaphone, MessageCircle, Minus, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
+import { ArrowRight, Award, Camera, Check, ChevronDown, Eye, EyeOff, Flag, Handshake, Heart, ImagePlus, Info, LocateFixed, LogOut, MapPin, Megaphone, MessageCircle, Minus, Plus, Send, Settings, Sparkles, Trash2, Users, Video, X } from 'lucide-react';
 import { formatRadius } from '../profileOptions';
 import {
   createMapEvent,
@@ -484,6 +484,29 @@ function sharedInterestCount(me: UserProfile, profile: UserProfile) {
 function sharedRelationshipGoalCount(me: UserProfile, profile: UserProfile) {
   if (me.relationshipGoals.length === 0 || profile.relationshipGoals.length === 0) return 0;
   return profile.relationshipGoals.filter((goal) => me.relationshipGoals.includes(goal)).length;
+}
+
+function sharedEventAffinityCount(me: UserProfile, event: MapEvent) {
+  const sharedInterests = event.affinityInterests.filter((interest) => me.interests.includes(interest)).length;
+  const sharedGoals = event.affinityGoals.filter((goal) => me.relationshipGoals.includes(goal)).length;
+  return sharedInterests + sharedGoals;
+}
+
+function canSeeMapEvent(me: UserProfile, event: MapEvent, joinedEventIds: Set<string>) {
+  if (event.discoveryMode !== 'invisible') return true;
+  if (event.creatorUid === me.uid || joinedEventIds.has(event.id)) return true;
+  if (!me.location || distanceKm(me.location, event.location) > event.radiusKm) return false;
+  return sharedEventAffinityCount(me, event) > 0;
+}
+
+function invisibleEventBadge(event: MapEvent) {
+  if (event.discoveryMode !== 'invisible') return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-violet-300/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-violet-100">
+      <EyeOff className="h-3 w-3" />
+      Invisivel
+    </span>
+  );
 }
 
 function profilePhotoIcon(photoURL: string) {
@@ -1122,6 +1145,12 @@ function ClusteredEventMarkers({
               >
                 <Popup>
                   <strong>{event.title}</strong>
+                  {event.discoveryMode === 'invisible' && (
+                    <>
+                      <br />
+                      Convite invisivel
+                    </>
+                  )}
                   <br />
                   Criado por {creatorNames[event.creatorUid] ?? 'criador do convite'}
                   <br />
@@ -1188,6 +1217,12 @@ function ClusteredEventMarkers({
           >
             <Popup>
               <strong>{event.title}</strong>
+              {event.discoveryMode === 'invisible' && (
+                <>
+                  <br />
+                  Convite invisivel
+                </>
+              )}
               <br />
               Criado por {creatorNames[event.creatorUid] ?? 'criador do convite'}
               <br />
@@ -1336,6 +1371,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
   const [eventCoverURL, setEventCoverURL] = useState('');
   const [eventEmoji, setEventEmoji] = useState(() => randomEventEmoji());
   const [eventAccessMode, setEventAccessMode] = useState<MapEvent['accessMode']>('open');
+  const [eventDiscoveryMode, setEventDiscoveryMode] = useState<MapEvent['discoveryMode']>('public');
   const [eventPassword, setEventPassword] = useState('');
   const [eventIsPermanent, setEventIsPermanent] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
@@ -1351,6 +1387,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
   const [editingCoverURL, setEditingCoverURL] = useState('');
   const [editingEmoji, setEditingEmoji] = useState(modernEventEmojiOptions[0]);
   const [editingAccessMode, setEditingAccessMode] = useState<MapEvent['accessMode']>('open');
+  const [editingDiscoveryMode, setEditingDiscoveryMode] = useState<MapEvent['discoveryMode']>('public');
   const [editingPassword, setEditingPassword] = useState('');
   const [editingRadius, setEditingRadius] = useState(5);
   const [editingIsPermanent, setEditingIsPermanent] = useState(false);
@@ -1429,6 +1466,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
   const mapEvents = useLocalMapEvents(me);
   const seenProfileIds = useSeenProfileIds(me.uid);
   const joinedMapEvents = useJoinedMapEvents(me.uid);
+  const joinedMapEventIds = useMemo(() => new Set(joinedMapEvents.map((event) => event.id)), [joinedMapEvents]);
   useEffect(() => {
     setPendingInteractedProfileIds((current) => {
       const next = new Set([...current].filter((uid) => !seenProfileIds.has(uid)));
@@ -1438,9 +1476,9 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
   const visibleEvents = useMemo(
     () =>
       [...localEvents, ...mapEvents.filter((event) => !localEvents.some((local) => local.id === event.id))].filter(
-        (event) => eventExpiresAt(event).getTime() > Date.now(),
+        (event) => eventExpiresAt(event).getTime() > Date.now() && canSeeMapEvent(me, event, joinedMapEventIds),
       ),
-    [localEvents, mapEvents],
+    [joinedMapEventIds, localEvents, mapEvents, me],
   );
   const eventDistance = (event: MapEvent) => (me.location ? distanceKm(me.location, event.location) : Number.MAX_SAFE_INTEGER);
   const profileDistance = (profile: UserProfile) =>
@@ -2340,6 +2378,9 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
         coverURL: me.isPremium ? safeCoverURL : '',
         emoji: eventEmoji,
         accessMode: eventAccessMode,
+        discoveryMode: eventDiscoveryMode,
+        affinityInterests: me.interests,
+        affinityGoals: me.relationshipGoals,
         passwordHash,
         isPermanent: eventIsPermanent,
         isPremium: me.isPremium,
@@ -2352,6 +2393,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
       setEventCoverURL('');
       setEventEmoji(randomEventEmoji());
       setEventAccessMode('open');
+      setEventDiscoveryMode('public');
       setEventPassword('');
       setEventIsPermanent(false);
       setSelectedPoint(null);
@@ -2373,6 +2415,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
     setEditingCoverURL(event.coverURL);
     setEditingEmoji(event.emoji);
     setEditingAccessMode(event.accessMode);
+    setEditingDiscoveryMode(event.discoveryMode);
     setEditingPassword('');
     setEditingRadius(event.radiusKm);
     setEditingIsPermanent(event.isPermanent);
@@ -2404,6 +2447,9 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
       const safeEditingCoverURL = editingCoverURL.startsWith('blob:') ? editingEvent.coverURL : editingCoverURL;
       const updated = await updateMapEventDetails(editingEvent.id, {
         accessMode: editingAccessMode,
+        discoveryMode: editingDiscoveryMode,
+        affinityInterests: me.interests,
+        affinityGoals: me.relationshipGoals,
         coverURL: safeEditingCoverURL.startsWith('blob:') ? '' : safeEditingCoverURL,
         description: editingDescription.trim(),
         emoji: editingEmoji,
@@ -3053,7 +3099,10 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
             )}
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h1 className="truncate text-xl font-semibold">{previewEvent.title}</h1>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="min-w-0 truncate text-xl font-semibold">{previewEvent.title}</h1>
+                  {invisibleEventBadge(previewEvent)}
+                </div>
                 <p className="raddo-event-creator-label mt-1 text-xs font-semibold text-teal-200">
                   Criado por {creatorLabel(previewEvent)}
                 </p>
@@ -3194,7 +3243,10 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
                     <span className="flex items-start gap-3">
                       <span className="grid h-10 w-10 shrink-0 place-items-center text-xl">{item.event.emoji || '\u{1F4AC}'}</span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-white">{item.event.title}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="block truncate text-sm font-semibold text-white">{item.event.title}</span>
+                          {invisibleEventBadge(item.event)}
+                        </span>
                         <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(item.event)}</span>
                         <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
                           <span>{eventParticipantCounts[item.event.id] ?? 1} pessoas</span>
@@ -3303,6 +3355,7 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
                           <span className="flex items-center gap-2">
                             <span className="truncate text-sm font-semibold">{event.title}</span>
                             {isOwner && <span className="shrink-0 rounded-full bg-sky-300 px-2 py-0.5 text-[10px] font-bold text-slate-950">Seu convite</span>}
+                            {invisibleEventBadge(event)}
                           </span>
                           <span className="mt-1 block text-xs font-semibold text-teal-200">Criado por {creatorLabel(event)}</span>
                           {formatEventTimeLeft(event) && <span className="mt-1 block text-xs text-teal-200">{formatEventTimeLeft(event)}</span>}
@@ -3616,6 +3669,40 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
                   value={eventPassword}
                 />
               )}
+              <div className="grid gap-2 text-sm">
+                <span>Como o convite aparece</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    className={`min-h-12 rounded-lg border px-3 text-left text-xs font-semibold ${
+                      eventDiscoveryMode === 'public' ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60 text-slate-100'
+                    }`}
+                    onClick={() => setEventDiscoveryMode('public')}
+                    type="button"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Eye className="h-4 w-4" />
+                      Radar publico
+                    </span>
+                  </button>
+                  <button
+                    className={`min-h-12 rounded-lg border px-3 text-left text-xs font-semibold ${
+                      eventDiscoveryMode === 'invisible' ? 'border-violet-300 bg-violet-300 text-slate-950' : 'border-white/10 bg-slate-950/60 text-slate-100'
+                    }`}
+                    onClick={() => setEventDiscoveryMode('invisible')}
+                    type="button"
+                  >
+                    <span className="flex items-center gap-2">
+                      <EyeOff className="h-4 w-4" />
+                      Convite invisivel
+                    </span>
+                  </button>
+                </div>
+                {eventDiscoveryMode === 'invisible' && (
+                  <p className="rounded-lg bg-violet-300/10 p-3 text-xs text-violet-100">
+                    Aparece para voce, participantes e pessoas proximas com interesses ou objetivos parecidos.
+                  </p>
+                )}
+              </div>
               {me.isPremium && (
                 <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
                   <span>
@@ -3771,6 +3858,35 @@ export default function RadarMap({ matches, me, onOpenConnection, onOpenEventHan
                   value={editingPassword}
                 />
               )}
+              <div className="grid gap-2 text-sm">
+                <span>Como o convite aparece</span>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    className={`min-h-12 rounded-lg border px-3 text-left text-xs font-semibold ${
+                      editingDiscoveryMode === 'public' ? 'border-teal-300 bg-teal-300 text-slate-950' : 'border-white/10 bg-slate-950/60 text-slate-100'
+                    }`}
+                    onClick={() => setEditingDiscoveryMode('public')}
+                    type="button"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Eye className="h-4 w-4" />
+                      Radar publico
+                    </span>
+                  </button>
+                  <button
+                    className={`min-h-12 rounded-lg border px-3 text-left text-xs font-semibold ${
+                      editingDiscoveryMode === 'invisible' ? 'border-violet-300 bg-violet-300 text-slate-950' : 'border-white/10 bg-slate-950/60 text-slate-100'
+                    }`}
+                    onClick={() => setEditingDiscoveryMode('invisible')}
+                    type="button"
+                  >
+                    <span className="flex items-center gap-2">
+                      <EyeOff className="h-4 w-4" />
+                      Convite invisivel
+                    </span>
+                  </button>
+                </div>
+              </div>
               {me.isPremium && (
                 <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm">
                   <span>

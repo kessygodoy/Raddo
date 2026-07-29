@@ -22,6 +22,9 @@ type EventRow = {
   cover_url: string | null;
   emoji: string | null;
   access_mode: MapEvent['accessMode'] | null;
+  discovery_mode: MapEvent['discoveryMode'] | null;
+  affinity_interests: UserProfile['interests'] | null;
+  affinity_goals: UserProfile['relationshipGoals'] | null;
   password_hash: string | null;
   is_permanent: boolean | null;
   lat: number;
@@ -123,6 +126,9 @@ function rowToEvent(row: EventRow): MapEvent {
     coverURL: coverURL.startsWith('blob:') ? '' : coverURL,
     emoji: row.emoji ?? 'ðŸ’¬',
     accessMode: row.access_mode ?? 'open',
+    discoveryMode: row.discovery_mode ?? 'public',
+    affinityInterests: row.affinity_interests ?? [],
+    affinityGoals: row.affinity_goals ?? [],
     passwordHash: row.password_hash ?? '',
     isPermanent: Boolean(row.is_permanent),
     location: { lat: row.lat, lng: row.lng },
@@ -1256,6 +1262,9 @@ export async function createMapEvent(input: {
   coverURL: string;
   emoji: string;
   accessMode: MapEvent['accessMode'];
+  discoveryMode: MapEvent['discoveryMode'];
+  affinityInterests: UserProfile['interests'];
+  affinityGoals: UserProfile['relationshipGoals'];
   passwordHash: string;
   isPermanent: boolean;
   location: LatLng;
@@ -1278,6 +1287,7 @@ export async function createMapEvent(input: {
         event.location.lng === input.location.lng &&
         event.radiusKm === input.radiusKm &&
         event.accessMode === input.accessMode &&
+        event.discoveryMode === input.discoveryMode &&
         Date.parse(event.createdAt) >= Date.parse(duplicateSince),
     );
     if (duplicateEvent) return duplicateEvent;
@@ -1305,6 +1315,9 @@ export async function createMapEvent(input: {
       coverURL: input.coverURL,
       emoji: input.emoji,
       accessMode: input.accessMode,
+      discoveryMode: input.discoveryMode,
+      affinityInterests: input.affinityInterests,
+      affinityGoals: input.affinityGoals,
       passwordHash: input.passwordHash,
       isPermanent: input.isPremium && input.isPermanent,
       location: input.location,
@@ -1355,6 +1368,7 @@ export async function createMapEvent(input: {
     .eq('lng', input.location.lng)
     .eq('radius_km', input.radiusKm)
     .eq('access_mode', input.accessMode)
+    .eq('discovery_mode', input.discoveryMode)
     .gte('created_at', duplicateSince)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -1375,6 +1389,9 @@ export async function createMapEvent(input: {
       cover_url: input.coverURL,
       emoji: input.emoji,
       access_mode: input.accessMode,
+      discovery_mode: input.discoveryMode,
+      affinity_interests: input.affinityInterests,
+      affinity_goals: input.affinityGoals,
       password_hash: input.passwordHash,
       is_permanent: input.isPremium && input.isPermanent,
       lat: input.location.lat,
@@ -1430,6 +1447,9 @@ export async function isMapEventModerator(eventId: string, userUid: string) {
 
 type UpdateMapEventDetailsInput = {
   accessMode: MapEvent['accessMode'];
+  discoveryMode: MapEvent['discoveryMode'];
+  affinityInterests: UserProfile['interests'];
+  affinityGoals: UserProfile['relationshipGoals'];
   coverURL: string;
   description: string;
   emoji: string;
@@ -1456,6 +1476,9 @@ export async function updateMapEventDetails(eventId: string, input: UpdateMapEve
     .from('map_events')
     .update({
       access_mode: input.accessMode,
+      discovery_mode: input.discoveryMode,
+      affinity_interests: input.affinityInterests,
+      affinity_goals: input.affinityGoals,
       cover_url: input.coverURL,
       description: input.description,
       emoji: input.emoji,

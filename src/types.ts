@@ -4,6 +4,7 @@ export type AppTheme = 'dark' | 'light' | 'green' | 'pride' | 'system';
 export type ResolvedAppTheme = 'dark' | 'light' | 'green' | 'pride';
 export type AppLanguage = 'pt-BR' | 'en-US' | 'es' | 'zh-CN' | 'hi-IN';
 export type MapEventAccessMode = 'open' | 'approval' | 'password';
+export type MapEventDiscoveryMode = 'public' | 'invisible';
 
 export type GenderIdentity = 'man' | 'woman' | 'couple' | 'nonbinary' | 'trans' | 'other' | 'prefer_not_to_say';
 export type ProfileInterest = 'games' | 'gym' | 'anime' | 'technology' | 'music' | 'travel' | 'cars' | 'pets';
@@ -94,6 +95,9 @@ export type MapEvent = {
   coverURL: string;
   emoji: string;
   accessMode: MapEventAccessMode;
+  discoveryMode: MapEventDiscoveryMode;
+  affinityInterests: ProfileInterest[];
+  affinityGoals: RelationshipGoal[];
   passwordHash: string;
   isPermanent: boolean;
   location: LatLng;

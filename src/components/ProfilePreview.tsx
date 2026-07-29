@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Flag, Handshake, Heart, MessageCircle, Users, X } from 'lucide-react';
+import { Award, BadgeCheck, Camera, ChevronLeft, ChevronRight, Flag, Handshake, Heart, MessageCircle, ShieldCheck, Users, X } from 'lucide-react';
 import type { UserProfile } from '../types';
 import { genderLabel, sexualityLabel, useI18n } from '../i18n';
 import { distanceKm, formatPersonDistanceKm } from '../utils/geo';
@@ -32,6 +32,26 @@ export default function ProfilePreview({ me, profile, onClose, onConversation, o
   const photo = photos[photoIndex] ?? profile.photoURL;
   const hasInteraction = useProfileInteractionStatus(me.uid, profile.uid);
   const connectionCount = useProfileConnectionCount(profile.uid);
+  const trustBadges = useMemo(() => {
+    const badges: Array<{ icon: 'award' | 'camera' | 'check' | 'shield' | 'users'; label: string; tone: string }> = [];
+    const accountAgeDays = profile.createdAt ? Math.floor((Date.now() - Date.parse(profile.createdAt)) / (24 * 60 * 60 * 1000)) : 0;
+    if (profile.bio.trim() && photos.length >= 2) badges.push({ icon: 'check', label: 'Perfil completo', tone: 'text-teal-200' });
+    if (photos.length >= 3) badges.push({ icon: 'camera', label: 'Galeria real', tone: 'text-sky-200' });
+    if ((connectionCount ?? 0) >= 1) badges.push({ icon: 'users', label: 'Conhecido no Raddo', tone: 'text-sky-200' });
+    if ((connectionCount ?? 0) >= 3) badges.push({ icon: 'shield', label: 'Circulo de confianca', tone: 'text-violet-200' });
+    if ((connectionCount ?? 0) >= 8) badges.push({ icon: 'award', label: 'Referencia da comunidade', tone: 'text-amber-200' });
+    if (accountAgeDays >= 30) badges.push({ icon: 'shield', label: 'Conta consistente', tone: 'text-emerald-200' });
+    return badges.slice(0, 5);
+  }, [connectionCount, photos.length, profile.bio, profile.createdAt]);
+
+  function TrustIcon({ icon }: { icon: 'award' | 'camera' | 'check' | 'shield' | 'users' }) {
+    const className = 'h-4 w-4 shrink-0';
+    if (icon === 'award') return <Award className={className} />;
+    if (icon === 'camera') return <Camera className={className} />;
+    if (icon === 'check') return <BadgeCheck className={className} />;
+    if (icon === 'shield') return <ShieldCheck className={className} />;
+    return <Users className={className} />;
+  }
 
   useEffect(() => {
     setPhotoIndex(0);
@@ -110,6 +130,22 @@ export default function ProfilePreview({ me, profile, onClose, onConversation, o
                 <Users className="h-3.5 w-3.5 text-sky-300" />
                 {connectionCount} {t(connectionCount === 1 ? 'connectionSingular' : 'connectionPlural')}
               </p>
+            )}
+            {trustBadges.length > 0 && (
+              <div className="mt-3 grid gap-2 rounded-lg border border-white/10 bg-white/8 p-3">
+                <p className="text-xs font-semibold uppercase text-slate-400">Conquistas de confianca</p>
+                <div className="flex flex-wrap gap-2">
+                  {trustBadges.map((badge) => (
+                    <span
+                      className={`inline-flex min-h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-slate-950/70 px-2.5 py-1 text-xs font-semibold ${badge.tone}`}
+                      key={badge.label}
+                    >
+                      <TrustIcon icon={badge.icon} />
+                      {badge.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
           {profile.bio && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-200">{profile.bio}</p>}

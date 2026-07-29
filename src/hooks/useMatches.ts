@@ -55,6 +55,7 @@ type ProfileRow = {
   likes_quota_date: string | null;
   likes_bonus: number | null;
   liked_by_unlock_until: string | null;
+  created_at: string | null;
 };
 
 export type ProfileInteraction = {
@@ -174,6 +175,7 @@ function rowToProfile(row: ProfileRow): UserProfile {
     likesQuotaDate: row.likes_quota_date,
     likesBonus: row.likes_bonus ?? 0,
     likedByUnlockUntil: row.liked_by_unlock_until,
+    createdAt: row.created_at,
   };
 }
 
